@@ -9,9 +9,55 @@ import { netStablefordPointsForHole } from "@/lib/stableford";
 
 import { runCompetition } from "@/lib/competitions/engine";
 import { competitionCatalog } from "@/lib/competitions/catalog";
-import type { TourCompetitionContext, TourRoundContext } from "@/lib/competitions/types";
+import type { CompetitionContext } from "@/lib/competitions/types";
 
 import { resolveEntities, type LeaderboardEntity } from "@/lib/competitions/entities/resolveEntities";
+
+/**
+ * ✅ Local tour-round context shape used by this page.
+ * We type it explicitly to avoid "unknown" leaks.
+ */
+type TourRoundContextLocal = {
+  roundId: string;
+  roundName: string;
+  holes: number[];
+  parsByHole: number[];
+  strokeIndexByHole: number[];
+  scores: Record<string, string[]>; // playerId -> 18 raw scores
+  netPointsForHole: (playerId: string, holeIndex: number) => number;
+  isComplete: (playerId: string) => boolean;
+};
+
+/**
+ * ✅ Local tour competition context shape used by this page.
+ * We do NOT rely on CompetitionContext having a tour variant,
+ * because in your current library it appears not to.
+ */
+type TourCompetitionContextLocal = {
+  scope: "tour";
+  players: Array<{
+    id: string;
+    name: string;
+    playing: boolean;
+    playing_handicap: number;
+  }>;
+  rounds: TourRoundContextLocal[];
+  entities?: Array<{ entityId: string; label: string; memberPlayerIds: string[] }>;
+  entityMembersById?: Record<string, string[]>;
+  entityLabelsById?: Record<string, string>;
+  team_best_m?: number;
+};
+
+/**
+ * ✅ UI row shape for competition results.
+ * Your engine’s exported type may not include stats, but your UI expects it.
+ */
+type UiCompRow = {
+  entryId: string;
+  label: string;
+  total: number;
+  stats?: Record<string, any>;
+};
 
 type Tour = { id: string; name: string };
 type Round = { id: string; tour_id: string; course_id: string; created_at: string | null };
@@ -323,11 +369,8 @@ export default function TourLeaderboardPage() {
     const scoreMap: Record<string, Record<string, Record<number, string>>> = {};
     for (const s of scores) {
       const isPickup = (s as any).pickup === true;
-      const raw = isPickup
-        ? "P"
-        : s.strokes === null || s.strokes === undefined
-        ? ""
-        : String(s.strokes).trim().toUpperCase();
+      const raw =
+        isPickup ? "P" : s.strokes === null || s.strokes === undefined ? "" : String(s.strokes).trim().toUpperCase();
 
       if (!scoreMap[s.round_id]) scoreMap[s.round_id] = {};
       if (!scoreMap[s.round_id][s.player_id]) scoreMap[s.round_id][s.player_id] = {};
@@ -410,7 +453,12 @@ export default function TourLeaderboardPage() {
 
     rows.sort((a, b) => (b.total !== a.total ? b.total - a.total : a.playerName.localeCompare(b.playerName)));
 
-    return { roundHeaders, leaderboardRows: rows, derived: { courseHole, rpMap, scoreMap, eligibleRounds }, roundIdsInOrder };
+    return {
+      roundHeaders,
+      leaderboardRows: rows,
+      derived: { courseHole, rpMap, scoreMap, eligibleRounds },
+      roundIdsInOrder,
+    };
   }, [rounds, players, pars, roundPlayers, scores, excludeIncomplete, useBestN, bestN, bestNMustIncludeFinal]);
 
   const selectedDef = useMemo(
@@ -530,7 +578,7 @@ export default function TourLeaderboardPage() {
 
     const { courseHole, rpMap, scoreMap, eligibleRounds } = derived;
 
-    const tourRounds: TourRoundContext[] = eligibleRounds.map((r) => {
+    const tourRounds: TourRoundContextLocal[] = eligibleRounds.map((r) => {
       const holeInfo = courseHole[r.course_id] ?? {};
       const parsByHole = Array.from({ length: 18 }, (_, i) => holeInfo[i + 1]?.par ?? 0);
       const strokeIndexByHole = Array.from({ length: 18 }, (_, i) => holeInfo[i + 1]?.si ?? 0);
@@ -579,30 +627,51 @@ export default function TourLeaderboardPage() {
       };
     });
 
-    const playedAny = (playerId: string) => tourRounds.some((tr) => (derived.rpMap[tr.roundId]?.[playerId] ?? undefined) !== undefined);
+    const playedAny = (playerId: string) =>
+      tourRounds.some((tr) => derived.rpMap[tr.roundId]?.[playerId] !== undefined);
 
-    const ctx: TourCompetitionContext = {
+    const ctx: TourCompetitionContextLocal = {
       scope: "tour",
       players: players.map((p) => ({
         id: p.id,
         name: p.name,
         playing: playedAny(p.id),
-        playing_handicap: 0, // not used for tour comps; per-round hcp is via netPointsForHole()
+        playing_handicap: 0,
       })),
       rounds: tourRounds,
+      entityMembersById,
+      entityLabelsById,
+      entities: (entities ?? []).map((e) => ({
+        entityId: e.entityId,
+        label: e.name,
+        memberPlayerIds: e.memberPlayerIds,
+      })),
+      team_best_m: Math.max(1, Math.floor(teamBestM || 1)),
     };
 
-    (ctx as any).entityMembersById = entityMembersById;
-    (ctx as any).entityLabelsById = entityLabelsById;
-    (ctx as any).entities = (entities ?? []).map((e) => ({ entityId: e.entityId, label: e.name, memberPlayerIds: e.memberPlayerIds }));
-    (ctx as any).team_best_m = Math.max(1, Math.floor(teamBestM || 1));
+    // ✅ The engine expects CompetitionContext, but this is runtime-compatible.
+    const result = runCompetition(def, ctx as unknown as CompetitionContext);
 
-    const result = runCompetition(def, ctx);
+    // ✅ TS fix: treat returned rows as UI rows that may include stats.
+    const rowsForUi = ((result as any)?.rows ?? []) as UiCompRow[];
 
     const keySet = new Set<string>();
-    for (const row of result.rows) for (const k of Object.keys(row.stats ?? {})) keySet.add(k);
+    for (const row of rowsForUi) {
+      const stats = row?.stats ?? {};
+      for (const k of Object.keys(stats)) keySet.add(k);
+    }
 
-    const preferred = ["members", "holes_played", "points_total", "avg_points", "zero_count", "zero_pct", "four_plus_count", "four_plus_pct", "eclectic_total"];
+    const preferred = [
+      "members",
+      "holes_played",
+      "points_total",
+      "avg_points",
+      "zero_count",
+      "zero_pct",
+      "four_plus_count",
+      "four_plus_pct",
+      "eclectic_total",
+    ];
     const keys = Array.from(keySet);
     keys.sort((a, b) => {
       const ia = preferred.indexOf(a);
@@ -611,7 +680,7 @@ export default function TourLeaderboardPage() {
       return a.localeCompare(b);
     });
 
-    return { compDef: def, compResult: result, compColumns: keys };
+    return { compDef: def, compResult: result as any, compColumns: keys };
   }, [tourCompetitions, selectedCompId, derived, players, entityMembersById, entityLabelsById, entities, teamBestM]);
 
   async function saveTeamBestM(next: number) {
@@ -663,7 +732,12 @@ export default function TourLeaderboardPage() {
 
       <div style={{ marginTop: 10, marginBottom: 10 }}>
         <label style={{ fontSize: 14 }}>
-          <input type="checkbox" checked={excludeIncomplete} onChange={(e) => setExcludeIncomplete(e.target.checked)} style={{ marginRight: 6 }} />
+          <input
+            type="checkbox"
+            checked={excludeIncomplete}
+            onChange={(e) => setExcludeIncomplete(e.target.checked)}
+            style={{ marginRight: 6 }}
+          />
           Exclude incomplete rounds
         </label>
       </div>
@@ -808,7 +882,7 @@ export default function TourLeaderboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {compResult.rows.map((r) => {
+                {((compResult as any)?.rows ?? []).map((r: UiCompRow) => {
                   const stats = r.stats ?? {};
                   return (
                     <tr key={r.entryId}>

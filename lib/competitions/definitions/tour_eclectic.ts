@@ -1,59 +1,59 @@
-import type { CompetitionDefinition, TourCompetitionContext } from "../types";
+// lib/competitions/definitions/tour_eclectic.ts
+import type { CompetitionDefinition, CompetitionContext } from "../types";
+
+type TourLikeCtx = {
+  players: Array<{ id: string; name: string }>;
+  rounds: Array<{
+    holes: number[];
+    netPointsForHole?: (playerId: string, holeIndex: number) => number;
+    isComplete?: (playerId: string) => boolean;
+  }>;
+};
+
+function isTourContext(ctx: CompetitionContext): ctx is CompetitionContext & TourLikeCtx {
+  const c = ctx as any;
+  // If there is an explicit scope discriminator, respect it.
+  if (typeof c?.scope === "string") return c.scope === "tour";
+  // Fallback: tour contexts have "rounds" array.
+  return Array.isArray(c?.rounds);
+}
 
 export const tourEclectic: CompetitionDefinition = {
   id: "tour_eclectic",
-  name: "The Eclectic",
-  kind: "individual",
+  name: "Eclectic (best per hole)",
   scope: "tour",
+  kind: "individual",
+  eligibility: { onlyPlaying: true, requireComplete: true },
 
-  // Eligibility intent:
-  // - onlyPlaying: must have played at least one included round (your leaderboard already sets this)
-  // - requireComplete: NOT required (eclectic can work with partial data)
-  eligibility: {
-    onlyPlaying: true,
-    requireComplete: false,
-  },
+  compute: (ctx: CompetitionContext) => {
+    if (!isTourContext(ctx)) return [];
 
-  // Main scoring
-  run: (ctx: TourCompetitionContext) => {
-    const holes = Array.from({ length: 18 }, (_, i) => i); // holeIndex 0..17
+    return ctx.players.map((p) => {
+      const bestByHole: number[] = Array(18).fill(Number.NEGATIVE_INFINITY);
+      let holesPlayed = 0;
 
-    const rows = ctx.players
-      .filter((p) => (ctx.players?.length ? p.playing : true))
-      .map((p) => {
-        // For each hole, best net points across all included rounds
-        const bestByHole: number[] = holes.map((holeIndex) => {
-          let best = 0;
+      for (const r of ctx.rounds ?? []) {
+        const holes = r.holes ?? [];
+        if (typeof r.isComplete === "function" && !r.isComplete(p.id)) continue;
 
-          for (const r of ctx.rounds) {
-            // If the player did not play the round, your tour context netPointsForHole returns 0
-            const pts = r.netPointsForHole(p.id, holeIndex);
+        for (let i = 0; i < holes.length; i++) {
+          holesPlayed += 1;
+          const pts = Number(r.netPointsForHole?.(p.id, i) ?? 0) || 0;
+          bestByHole[i] = Math.max(bestByHole[i], pts);
+        }
+      }
 
-            // guard: only consider finite values
-            if (Number.isFinite(pts)) best = Math.max(best, pts);
-          }
+      const total = bestByHole.reduce((s, v) => s + (Number.isFinite(v) ? v : 0), 0);
 
-          return best;
-        });
-
-        const total = bestByHole.reduce((sum, v) => sum + v, 0);
-
-        // Useful stats for debugging / display
-        const holesContributed = bestByHole.filter((v) => v > 0).length;
-        const bestTotal = total;
-
-        return {
-          entryId: p.id,
-          label: p.name,
-          total: bestTotal,
-          stats: {
-            holes_contributed: holesContributed,
-            eclectic_total: bestTotal,
-          },
-        };
-      })
-      .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
-
-    return { rows };
+      return {
+        entryId: p.id,
+        label: p.name,
+        total,
+        stats: {
+          holes_played: holesPlayed,
+          eclectic_total: total,
+        },
+      };
+    });
   },
 };

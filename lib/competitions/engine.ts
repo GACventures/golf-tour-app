@@ -1,117 +1,168 @@
-import type {
-  CompetitionContext,
-  CompetitionDefinition,
-  CompetitionResult,
-  LeaderboardRow,
-} from "./types";
+// lib/competitions/engine.ts
+import type { CompetitionContext, CompetitionDefinition } from "./types";
 
-function defaultSort(a: LeaderboardRow, b: LeaderboardRow) {
-  // Desc total, then back9, then front9, then label
-  if (b.total !== a.total) return b.total - a.total;
-  if ((b.back9 ?? 0) !== (a.back9 ?? 0)) return (b.back9 ?? 0) - (a.back9 ?? 0);
-  if ((b.front9 ?? 0) !== (a.front9 ?? 0)) return (b.front9 ?? 0) - (a.front9 ?? 0);
-  return a.label.localeCompare(b.label);
-}
-
-type Entity = {
-  entityId: string;
+export type CompetitionResultRow = {
+  entryId: string;
   label: string;
-  memberPlayerIds: string[];
+  total: number;
+  stats?: Record<string, any>;
 };
 
-/**
- * For individual competitions, entities are just the players.
- * For pair/team, we expect the caller (TourLeaderboardPage) to attach:
- *   (ctx as any).entityMembersById: Record<entityId, string[]>
- *   (ctx as any).entityLabelsById:  Record<entityId, string>
- */
+export type CompetitionResult = {
+  competitionId: string;
+  rows: CompetitionResultRow[];
+};
+
+// ---- Context narrowing (scope-free) -----------------------------------------
+
+type RoundLikeCtx = {
+  players: Array<{ id: string; name: string; playing?: boolean }>;
+  isComplete: (playerId: string) => boolean;
+  // optional group support
+  entityMembersById?: Record<string, string[]>;
+  entityLabelsById?: Record<string, string>;
+  entities?: Array<{ entityId: string; label: string; memberPlayerIds: string[] }>;
+};
+
+type TourLikeCtx = {
+  players: Array<{ id: string; name: string; playing?: boolean }>;
+  rounds: Array<{ isComplete?: (playerId: string) => boolean }>;
+  // optional group support
+  entityMembersById?: Record<string, string[]>;
+  entityLabelsById?: Record<string, string>;
+  entities?: Array<{ entityId: string; label: string; memberPlayerIds: string[] }>;
+};
+
+function isRoundContext(ctx: CompetitionContext): ctx is CompetitionContext & RoundLikeCtx {
+  const c = ctx as any;
+  // If you still sometimes carry scope, respect it.
+  if (typeof c?.scope === "string") return c.scope === "round";
+  // Round contexts have an isComplete(playerId) function and no rounds array
+  return typeof c?.isComplete === "function" && !Array.isArray(c?.rounds);
+}
+
+function isTourContext(ctx: CompetitionContext): ctx is CompetitionContext & TourLikeCtx {
+  const c = ctx as any;
+  if (typeof c?.scope === "string") return c.scope === "tour";
+  return Array.isArray(c?.rounds);
+}
+
+// ---- Entities ---------------------------------------------------------------
+
+type Entity = { entityId: string; label: string; memberPlayerIds: string[] };
+
 function getEntities(def: CompetitionDefinition, ctx: CompetitionContext): Entity[] {
-  if (def.kind === "individual") {
-    return ctx.players.map((p) => ({
-      entityId: p.id,
-      label: p.name,
-      memberPlayerIds: [p.id],
+  const kind = def.kind;
+
+  if (kind === "individual") {
+    const players = (ctx as any)?.players ?? [];
+    return players.map((p: any) => ({
+      entityId: String(p.id),
+      label: String(p.name ?? p.id),
+      memberPlayerIds: [String(p.id)],
     }));
   }
 
-  const membersById = ((ctx as any).entityMembersById ?? {}) as Record<string, string[]>;
-  const labelsById = ((ctx as any).entityLabelsById ?? {}) as Record<string, string>;
+  // pair/team
+  const anyCtx = ctx as any;
 
-  const ids = Object.keys(membersById);
-  return ids.map((id) => ({
+  if (Array.isArray(anyCtx?.entities) && anyCtx.entities.length > 0) {
+    return anyCtx.entities.map((e: any) => ({
+      entityId: String(e.entityId),
+      label: String(e.label ?? e.name ?? e.entityId),
+      memberPlayerIds: Array.isArray(e.memberPlayerIds) ? e.memberPlayerIds.map(String) : [],
+    }));
+  }
+
+  // Fallback to entityMembersById + entityLabelsById
+  const membersById: Record<string, string[]> = anyCtx?.entityMembersById ?? {};
+  const labelsById: Record<string, string> = anyCtx?.entityLabelsById ?? {};
+
+  return Object.keys(membersById).map((id) => ({
     entityId: id,
     label: labelsById[id] ?? id,
-    memberPlayerIds: membersById[id] ?? [],
+    memberPlayerIds: (membersById[id] ?? []).map(String),
   }));
 }
 
-function passesEligibilityForEntity(
-  def: CompetitionDefinition,
-  ctx: CompetitionContext,
-  entity: Entity,
-  playerPlayingById: Record<string, boolean>
-) {
-  const e = def.eligibility ?? {};
+// ---- Eligibility ------------------------------------------------------------
 
-  // onlyPlaying: for groups, require ALL members to be "playing" at the tour/round context level
+function isEntityEligible(def: CompetitionDefinition, ctx: CompetitionContext, entity: Entity): boolean {
+  const e = def.eligibility;
+  if (!e) return true;
+
+  // onlyPlaying: entity members must be "playing" (where available)
   if (e.onlyPlaying) {
+    const playersArr: any[] = (ctx as any)?.players ?? [];
+    const playingById: Record<string, boolean> = {};
+    for (const p of playersArr) playingById[String(p.id)] = p.playing !== false; // default true
+
     for (const pid of entity.memberPlayerIds) {
-      if (!playerPlayingById[pid]) return false;
+      if (playingById[String(pid)] === false) return false;
     }
   }
 
+  // requireComplete:
+  // - round: must be complete for all members using ctx.isComplete
+  // - tour: must be complete for all members across all rounds that expose isComplete
   if (e.requireComplete) {
-    if (ctx.scope === "round") {
-      // Round scope: must be complete for all members
+    if (isRoundContext(ctx)) {
       for (const pid of entity.memberPlayerIds) {
         if (!ctx.isComplete(pid)) return false;
       }
-    } else {
-      // Tour scope: must be complete in ALL included rounds for all members
-      for (const r of ctx.rounds) {
+    } else if (isTourContext(ctx)) {
+      for (const r of ctx.rounds ?? []) {
+        const isComplete = (r as any)?.isComplete;
+        if (typeof isComplete !== "function") continue;
         for (const pid of entity.memberPlayerIds) {
-          if (!r.isComplete(pid)) return false;
+          if (!isComplete(pid)) return false;
         }
       }
+    } else {
+      // unknown ctx shape: be conservative
+      return false;
     }
   }
 
   return true;
 }
 
+// ---- Runner ----------------------------------------------------------------
+
 export function runCompetition(def: CompetitionDefinition, ctx: CompetitionContext): CompetitionResult {
-  // 1) Build a "playing" map for eligibility (works for individual + group)
-  const playerPlayingById: Record<string, boolean> = {};
-  for (const p of ctx.players) playerPlayingById[p.id] = !!p.playing;
+  // Compute rows. Each competition compute returns the rows it wants to show.
+  // We keep the return type loose because different definitions attach different stats.
+  const computed = def.compute(ctx) as any[];
 
-  // 2) Resolve entities for this competition
+  // Build entity map for eligibility / label normalization
   const entities = getEntities(def, ctx);
+  const entityById: Record<string, Entity> = {};
+  for (const e of entities) entityById[e.entityId] = e;
 
-  // 3) Apply eligibility at the entity level
-  const eligibleEntities = entities.filter((ent) =>
-    passesEligibilityForEntity(def, ctx, ent, playerPlayingById)
-  );
+  // Filter by eligibility
+  const rows: CompetitionResultRow[] = [];
+  for (const row of computed ?? []) {
+    const entryId = String(row?.entryId ?? row?.playerId ?? "");
+    if (!entryId) continue;
 
-  // 4) For individual competitions, we keep your existing behavior: filter ctx.players.
-  //    For pair/team, we DO NOT mutate ctx.players (it remains the base player list),
-  //    but we attach eligible entities for the competition compute() to use.
-  const filteredCtx: CompetitionContext =
-    def.kind === "individual"
-      ? ctx.scope === "round"
-        ? { ...ctx, players: ctx.players.filter((p) => eligibleEntities.some((e) => e.entityId === p.id)) }
-        : { ...ctx, players: ctx.players.filter((p) => eligibleEntities.some((e) => e.entityId === p.id)) }
-      : ctx;
+    const entity = entityById[entryId] ?? {
+      entityId: entryId,
+      label: String(row?.label ?? entryId),
+      memberPlayerIds: [entryId],
+    };
 
-  // Attach entities for compute() to use (backwards-compatible: existing comps ignore it)
-  (filteredCtx as any).entities = eligibleEntities;
+    if (!isEntityEligible(def, ctx, entity)) continue;
 
-  const rows = def.compute(filteredCtx).slice().sort(defaultSort);
+    rows.push({
+      entryId,
+      label: String(row?.label ?? entity.label ?? entryId),
+      total: Number(row?.total ?? 0) || 0,
+      stats: row?.stats ?? undefined,
+    });
+  }
 
-  return {
-    competitionId: def.id,
-    competitionName: def.name,
-    kind: def.kind,
-    scope: def.scope,
-    rows,
-  };
+  // Default sort: total desc then label asc
+  rows.sort((a, b) => (b.total !== a.total ? b.total - a.total : a.label.localeCompare(b.label)));
+
+  return { competitionId: def.id, rows };
 }
