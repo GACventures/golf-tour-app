@@ -1,209 +1,242 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useParams, useSearchParams, useRouter } from "next/navigation";
-import Link from "next/link";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
 
 import { supabase } from "@/lib/supabaseClient";
 import { netStablefordPointsForHole } from "@/lib/stableford";
 
-/**
- * Supabase relations can come back as:
- * - an object { ... }
- * - an array of objects [{ ... }]
- * - null
- *
- * This helper normalizes to a single object (first item if array).
- */
-function asSingle<T>(v: T | T[] | null | undefined): T | null {
-  if (!v) return null;
-  return Array.isArray(v) ? v[0] ?? null : v;
-}
+type Tee = "M" | "F";
+type TabKey = "entry" | "summary";
 
 type CourseRel = { name: string };
-type PlayerRel = { id: string; name: string };
 
-type RoundRow = {
+type Round = {
   id: string;
   name: string;
   course_id: string | null;
   is_locked: boolean | null;
-  // relation can be object OR array depending on query shape
   courses?: CourseRel | CourseRel[] | null;
 };
 
-type ParRow = { hole_number: number; par: number; stroke_index: number };
+type ParRow = {
+  course_id: string;
+  hole_number: number;
+  tee: Tee;
+  par: number;
+  stroke_index: number;
+};
 
-// Your scores table shape (adjust if yours differs)
+type RoundPlayerRow = {
+  round_id: string;
+  player_id: string;
+  playing: boolean;
+  playing_handicap: number | null;
+  tee?: Tee | null; // round override (fallback only now)
+};
+
+type PlayerRow = {
+  id: string;
+  name: string;
+  gender?: Tee | null; // global source of truth
+};
+
 type ScoreRow = {
   round_id: string;
   player_id: string;
   hole_number: number;
   strokes: number | null;
-  pickup: boolean | null;
-  // joined relation (optional)
-  players?: PlayerRel | PlayerRel[] | null;
+  pickup?: boolean | null;
 };
 
-type MiniPlayer = {
-  id: string;
-  name: string;
-  playing_handicap?: number; // optional; only used if you have it
-};
+const navy = "bg-slate-950";
+const headerBlue = "bg-sky-500";
+const borderDark = "border-slate-600/60";
+
+function asSingle<T>(v: T | T[] | null | undefined): T | null {
+  if (!v) return null;
+  return Array.isArray(v) ? v[0] ?? null : v;
+}
+
+function clamp(n: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, n));
+}
+
+function normalizeRawInput(v: string): string {
+  const s = (v ?? "").toString().trim().toUpperCase();
+  if (!s) return "";
+  if (s === "P") return "P";
+  if (/^\d+$/.test(s)) return s;
+  return "";
+}
+
+function rawToShots(raw: string): number {
+  const s = normalizeRawInput(raw);
+  if (!s) return 0;
+  if (s === "P") return 0;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeTee(v: any): Tee {
+  const s = String(v ?? "").trim().toUpperCase();
+  return s === "F" ? "F" : "M";
+}
 
 export default function MobileScoreEntryPage() {
   const params = useParams();
   const sp = useSearchParams();
-  const router = useRouter();
 
   const roundId = (params?.id as string) || "";
 
-  // Expect these from /rounds/[id]/mobile selection step
-  const meId = sp.get("me") ?? "";
-  const buddyId = sp.get("buddy") ?? "";
+  const meId = sp.get("meId") ?? "";
+  const buddyId = sp.get("buddyId") ?? "";
 
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const [round, setRound] = useState<Round | null>(null);
+  const [parsByTee, setParsByTee] = useState<Record<Tee, ParRow[]>>({ M: [], F: [] });
+  const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
+  const [playersById, setPlayersById] = useState<Record<string, PlayerRow>>({});
+  const [scores, setScores] = useState<Record<string, Record<number, string>>>({});
+
+  // Baseline for unsaved detection (ME ONLY)
+  const initialScoresRef = useRef<Record<string, Record<number, string>>>({});
+
   const [saving, setSaving] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string>("");
-  const [savedMsg, setSavedMsg] = useState<string>("");
+  const [saveErr, setSaveErr] = useState("");
+  const [savedMsg, setSavedMsg] = useState("");
 
-  const [round, setRound] = useState<RoundRow | null>(null);
-  const [pars, setPars] = useState<ParRow[]>([]);
-  const [players, setPlayers] = useState<MiniPlayer[]>([]);
+  const [hole, setHole] = useState(1);
 
-  // scores[playerId][holeIndex] -> { strokes, pickup }
-  const [scores, setScores] = useState<
-    Record<string, Record<number, { strokes: string; pickup: boolean }>>
-  >({});
+  // Tabs (Entry default)
+  const [tab, setTab] = useState<TabKey>("entry");
 
-  const holes = useMemo(() => Array.from({ length: 18 }, (_, i) => i + 1), []);
-  const selectedIds = useMemo(
-    () => [meId, buddyId].filter(Boolean),
-    [meId, buddyId]
-  );
+  // Summary: one player at a time
+  const [summaryPid, setSummaryPid] = useState<string>("");
 
-  const courseName = useMemo(() => {
-    const c = asSingle(round?.courses);
-    return c?.name ?? "";
-  }, [round]);
+  const isLocked = round?.is_locked === true;
 
-  const isLocked = !!round?.is_locked;
-
+  // --------- Load ----------
   useEffect(() => {
     if (!roundId) return;
-
-    // If user hits /mobile/score directly without choosing Me, send them back.
-    // (No build impact; just a better UX.)
-    if (!meId) {
-      router.replace(`/rounds/${roundId}/mobile`);
-      return;
-    }
-
     let alive = true;
 
     async function load() {
       setLoading(true);
       setErrorMsg("");
+      setSaveErr("");
       setSavedMsg("");
 
       try {
-        // 1) Round + course name
-        const { data: roundData, error: roundErr } = await supabase
+        // Round
+        const { data: rData, error: rErr } = await supabase
           .from("rounds")
-          .select("id, name, course_id, is_locked, courses ( name )")
+          .select("id,name,course_id,is_locked,courses(name)")
           .eq("id", roundId)
           .single();
+        if (rErr) throw rErr;
+        const r = rData as unknown as Round;
 
-        if (roundErr) throw roundErr;
-        const r = roundData as unknown as RoundRow;
-
-        // 2) Pars (course_holes or course_pars table — adjust if yours differs)
-        // Common pattern: course_holes has (course_id, hole_number, par, stroke_index)
-        let parRows: ParRow[] = [];
+        // Pars (both tees)
+        const nextParsByTee: Record<Tee, ParRow[]> = { M: [], F: [] };
         if (r.course_id) {
-          const { data: parData, error: parErr } = await supabase
-            .from("course_holes")
-            .select("hole_number, par, stroke_index")
+          const { data, error } = await supabase
+            .from("pars")
+            .select("course_id,hole_number,tee,par,stroke_index")
             .eq("course_id", r.course_id)
+            .in("tee", ["M", "F"])
             .order("hole_number", { ascending: true });
 
-          if (parErr) throw parErr;
-          parRows = (parData ?? []) as ParRow[];
-        }
+          if (error) throw error;
 
-        // 3) Players in round (adjust if you use a different linking table)
-        // Common pattern: round_players (round_id, player_id, playing, players(...))
-        const { data: rpData, error: rpErr } = await supabase
-          .from("round_players")
-          .select("player_id, playing, players ( id, name, playing_handicap )")
-          .eq("round_id", roundId);
-
-        if (rpErr) throw rpErr;
-
-        // Keep only the selected players for mobile flow: Me + optional Buddy
-        const picked: MiniPlayer[] = [];
-        for (const row of rpData ?? []) {
-          const p = asSingle((row as any)?.players) as any;
-          if (!p?.id) continue;
-          if (!selectedIds.includes(p.id)) continue;
-          picked.push({
-            id: String(p.id),
-            name: String(p.name ?? ""),
-            playing_handicap:
-              typeof p.playing_handicap === "number" ? p.playing_handicap : undefined,
-          });
-        }
-
-        // 4) Existing scores for round (optionally join players)
-        const { data: scoreData, error: scoreErr } = await supabase
-          .from("scores")
-          .select("round_id, player_id, hole_number, strokes, pickup, players ( id, name )")
-          .eq("round_id", roundId);
-
-        if (scoreErr) throw scoreErr;
-
-        // Build score map (and demonstrate robust relation handling)
-        const nextScores: Record<
-          string,
-          Record<number, { strokes: string; pickup: boolean }>
-        > = {};
-
-        const rows = (scoreData ?? []) as unknown as ScoreRow[];
-        for (const row of rows) {
-          // ✅ Robust: players relation can be object OR array; but we actually
-          // only need row.player_id for saving. Still normalize to avoid TS traps.
-          const playerRel = asSingle(row.players);
-          const _pidFromRel = playerRel?.id; // safe now, never errors in TS
-
-          const pid = String(row.player_id);
-          const h = Number(row.hole_number);
-          if (!pid || !Number.isFinite(h) || h < 1 || h > 18) continue;
-
-          if (!nextScores[pid]) nextScores[pid] = {};
-          nextScores[pid][h] = {
-            strokes: row.strokes == null ? "" : String(row.strokes),
-            pickup: !!row.pickup,
-          };
-        }
-
-        // Ensure every selected player has entries
-        for (const p of picked) {
-          if (!nextScores[p.id]) nextScores[p.id] = {};
-          for (const h of holes) {
-            if (!nextScores[p.id][h]) {
-              nextScores[p.id][h] = { strokes: "", pickup: false };
-            }
+          for (const row of data ?? []) {
+            const tee = normalizeTee((row as any).tee);
+            nextParsByTee[tee].push({
+              course_id: String((row as any).course_id),
+              hole_number: Number((row as any).hole_number),
+              tee,
+              par: Number((row as any).par),
+              stroke_index: Number((row as any).stroke_index),
+            });
           }
         }
 
+        // Round players (playing only) + tee (kept, but now fallback only)
+        const { data: rpData, error: rpErr } = await supabase
+          .from("round_players")
+          .select("round_id,player_id,playing,playing_handicap,tee")
+          .eq("round_id", roundId)
+          .eq("playing", true);
+        if (rpErr) throw rpErr;
+
+        const rpRows: RoundPlayerRow[] = (rpData ?? []).map((x: any) => ({
+          round_id: String(x.round_id),
+          player_id: String(x.player_id),
+          playing: x.playing === true,
+          playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
+          tee: x.tee ? normalizeTee(x.tee) : null,
+        }));
+
+        const ids = Array.from(new Set(rpRows.map((x) => x.player_id))).filter(Boolean);
+
+        // Players (GLOBAL gender is source of truth)
+        const pMap: Record<string, PlayerRow> = {};
+        if (ids.length > 0) {
+          const { data: pData, error: pErr } = await supabase.from("players").select("id,name,gender").in("id", ids);
+          if (pErr) throw pErr;
+          for (const p of pData ?? []) {
+            const id = String((p as any).id);
+            pMap[id] = {
+              id,
+              name: String((p as any).name),
+              gender: (p as any).gender ? normalizeTee((p as any).gender) : null,
+            };
+          }
+        }
+
+        // Scores for all playing players (buddy can display), but save only me later
+        let scoreRows: ScoreRow[] = [];
+        if (ids.length > 0) {
+          const { data: sData, error: sErr } = await supabase
+            .from("scores")
+            .select("round_id,player_id,hole_number,strokes,pickup")
+            .eq("round_id", roundId)
+            .in("player_id", ids);
+          if (sErr) throw sErr;
+          scoreRows = (sData ?? []) as ScoreRow[];
+        }
+
+        const nextScores: Record<string, Record<number, string>> = {};
+        for (const pid of ids) nextScores[pid] = {};
+        for (const row of scoreRows) {
+          const pid = String(row.player_id);
+          const h = Number(row.hole_number);
+          const isPickup = (row as any).pickup === true;
+          const raw = isPickup ? "P" : row.strokes === null || row.strokes === undefined ? "" : String(row.strokes);
+          nextScores[pid][h] = normalizeRawInput(raw);
+        }
+
         if (!alive) return;
+
         setRound(r);
-        setPars(parRows);
-        setPlayers(picked);
+        setParsByTee(nextParsByTee);
+        setRoundPlayers(rpRows);
+        setPlayersById(pMap);
         setScores(nextScores);
+
+        // baseline for unsaved: me only
+        initialScoresRef.current = { [meId]: nextScores[meId] ?? {} };
+
+        // summary pid defaults to me (or buddy if no me)
+        if (!summaryPid) setSummaryPid(meId || buddyId || ids[0] || "");
+
+        // land on Entry after navigation
+        setTab("entry");
       } catch (e: any) {
         if (!alive) return;
-        setErrorMsg(e?.message ?? "Failed to load round data.");
+        setErrorMsg(e?.message ?? "Failed to load score entry.");
       } finally {
         if (!alive) return;
         setLoading(false);
@@ -214,222 +247,612 @@ export default function MobileScoreEntryPage() {
     return () => {
       alive = false;
     };
-  }, [roundId, meId, selectedIds, holes, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roundId]);
 
-  const parByHole = useMemo(() => {
-    const map: Record<number, ParRow> = {};
-    for (const row of pars) map[row.hole_number] = row;
-    return map;
-  }, [pars]);
+  // --------- Derived ----------
+  const courseName = useMemo(() => asSingle(round?.courses)?.name ?? "(no course)", [round]);
+  const playingIds = useMemo(() => roundPlayers.map((rp) => rp.player_id), [roundPlayers]);
 
-  function updateStrokes(playerId: string, hole: number, value: string) {
-    setScores((prev) => ({
-      ...prev,
-      [playerId]: {
-        ...(prev[playerId] ?? {}),
-        [hole]: {
-          ...(prev[playerId]?.[hole] ?? { strokes: "", pickup: false }),
-          strokes: value,
-        },
-      },
-    }));
+  const meOk = !!meId && playingIds.includes(meId);
+  const buddyOk = !buddyId || playingIds.includes(buddyId);
+
+  const meName = playersById[meId]?.name ?? "Me";
+  const buddyName = buddyId ? playersById[buddyId]?.name ?? "Buddy" : "";
+
+  const holeInfoByNumberByTee = useMemo(() => {
+    const makeMap = (rows: ParRow[]) => {
+      const by: Record<number, { par: number; si: number }> = {};
+      for (const p of rows) by[p.hole_number] = { par: p.par, si: p.stroke_index };
+      return by;
+    };
+    return { M: makeMap(parsByTee.M), F: makeMap(parsByTee.F) };
+  }, [parsByTee]);
+
+  function teeForPlayer(pid: string): Tee {
+    if (!pid) return "M";
+
+    // ✅ Prefer GLOBAL gender (source of truth)
+    const g = playersById[pid]?.gender;
+    if (g) return normalizeTee(g);
+
+    // Fallback to any round-level tee value (legacy / optional)
+    const rp = roundPlayers.find((x) => x.player_id === pid);
+    if (rp?.tee) return normalizeTee(rp.tee);
+
+    return "M";
   }
 
-  function togglePickup(playerId: string, hole: number) {
-    setScores((prev) => {
-      const cur = prev[playerId]?.[hole] ?? { strokes: "", pickup: false };
-      return {
-        ...prev,
-        [playerId]: {
-          ...(prev[playerId] ?? {}),
-          [hole]: { ...cur, pickup: !cur.pickup },
-        },
-      };
+  const meTee = useMemo(() => teeForPlayer(meId), [meId, roundPlayers, playersById]);
+  const buddyTee = useMemo(() => teeForPlayer(buddyId), [buddyId, roundPlayers, playersById]);
+
+  const meHcp = useMemo(() => {
+    const rp = roundPlayers.find((x) => x.player_id === meId);
+    return Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp?.playing_handicap) : 0;
+  }, [roundPlayers, meId]);
+
+  const buddyHcp = useMemo(() => {
+    const rp = roundPlayers.find((x) => x.player_id === buddyId);
+    return Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp?.playing_handicap) : 0;
+  }, [roundPlayers, buddyId]);
+
+  function infoFor(pid: string, h: number) {
+    const tee = teeForPlayer(pid);
+    return holeInfoByNumberByTee[tee]?.[h] ?? { par: 0, si: 0 };
+  }
+
+  // Always show BOTH tees in the hole box (Entry only)
+  const holeInfoM = holeInfoByNumberByTee.M?.[hole] ?? { par: 0, si: 0 };
+  const holeInfoF = holeInfoByNumberByTee.F?.[hole] ?? { par: 0, si: 0 };
+
+  function setRaw(pid: string, holeNumber: number, raw: string) {
+    const norm = normalizeRawInput(raw);
+    setScores((prev) => ({ ...prev, [pid]: { ...(prev[pid] ?? {}), [holeNumber]: norm } }));
+  }
+
+  function adjustStrokes(pid: string, holeNumber: number, delta: number) {
+    const raw = scores[pid]?.[holeNumber] ?? "";
+    if (raw === "P") return;
+    const cur = raw ? Number(raw) : 0;
+    const next = clamp(cur + delta, 0, 30);
+    setRaw(pid, holeNumber, next === 0 ? "" : String(next));
+  }
+
+  function togglePickup(pid: string, holeNumber: number) {
+    const raw = scores[pid]?.[holeNumber] ?? "";
+    setRaw(pid, holeNumber, raw === "P" ? "" : "P");
+  }
+
+  function pointsFor(pid: string, h: number): number {
+    const hi = infoFor(pid, h);
+    if (!hi?.par || !hi?.si) return 0;
+
+    const raw = scores[pid]?.[h] ?? "";
+    const hcp = pid === meId ? meHcp : pid === buddyId ? buddyHcp : 0;
+
+    return netStablefordPointsForHole({
+      rawScore: raw,
+      par: hi.par,
+      strokeIndex: hi.si,
+      playingHandicap: hcp,
     });
   }
 
+  function sumPoints(pid: string, from: number, to: number): number {
+    let sum = 0;
+    for (let h = from; h <= to; h++) sum += pointsFor(pid, h);
+    return sum;
+  }
+
+  function sumShots(pid: string, from: number, to: number): number {
+    let sum = 0;
+    for (let h = from; h <= to; h++) sum += rawToShots(scores[pid]?.[h] ?? "");
+    return sum;
+  }
+
+  function isDirty(): boolean {
+    const initial = initialScoresRef.current;
+    const pid = meId;
+    if (!pid) return false;
+
+    for (let h = 1; h <= 18; h++) {
+      const a = normalizeRawInput(initial?.[pid]?.[h] ?? "");
+      const b = normalizeRawInput(scores?.[pid]?.[h] ?? "");
+      if (a !== b) return true;
+    }
+    return false;
+  }
+
   async function saveAll() {
+    setSaveErr("");
+    setSavedMsg("");
+
     if (!roundId) return;
     if (isLocked) {
-      setErrorMsg("This round is locked. Scores cannot be edited.");
+      setSaveErr("Round is locked.");
+      return;
+    }
+    if (!meId) {
+      setSaveErr("Missing meId. Go back and reselect Me.");
       return;
     }
 
-    setSaving(true);
-    setErrorMsg("");
-    setSavedMsg("");
+    // SAVE ONLY ME
+    const pid = meId;
 
-    try {
-      const rowsToUpsert: Array<{
-        round_id: string;
-        player_id: string;
-        hole_number: number;
-        strokes: number | null;
-        pickup: boolean;
-      }> = [];
+    const upserts: ScoreRow[] = [];
+    const deletes: { round_id: string; player_id: string; hole_number: number }[] = [];
 
-      for (const p of players) {
-        for (const h of holes) {
-          const cell = scores[p.id]?.[h] ?? { strokes: "", pickup: false };
-          const s = cell.strokes.trim();
-          const strokesNum = s === "" ? null : Number(s);
-          rowsToUpsert.push({
-            round_id: roundId,
-            player_id: p.id,
-            hole_number: h,
-            strokes: Number.isFinite(strokesNum as number) ? (strokesNum as number) : null,
-            pickup: !!cell.pickup,
-          });
-        }
+    const initialMe = initialScoresRef.current?.[pid] ?? {};
+
+    for (let h = 1; h <= 18; h++) {
+      const raw = normalizeRawInput(scores[pid]?.[h] ?? "");
+      const had = normalizeRawInput(initialMe?.[h] ?? "");
+
+      if (!raw) {
+        if (had) deletes.push({ round_id: roundId, player_id: pid, hole_number: h });
+        continue;
       }
 
-      const { error } = await supabase.from("scores").upsert(rowsToUpsert, {
-        onConflict: "round_id,player_id,hole_number",
+      const isPickup = raw === "P";
+      const strokes = isPickup ? null : Number(raw);
+
+      upserts.push({
+        round_id: roundId,
+        player_id: pid,
+        hole_number: h,
+        strokes: Number.isFinite(strokes as any) ? (strokes as any) : null,
+        pickup: isPickup ? true : false,
       });
+    }
 
-      if (error) throw error;
+    setSaving(true);
+    try {
+      for (const d of deletes) {
+        const { error } = await supabase
+          .from("scores")
+          .delete()
+          .eq("round_id", d.round_id)
+          .eq("player_id", d.player_id)
+          .eq("hole_number", d.hole_number);
+        if (error) throw error;
+      }
 
-      setSavedMsg("Saved ✅");
+      if (upserts.length > 0) {
+        const { error } = await supabase.from("scores").upsert(upserts as any, {
+          onConflict: "round_id,player_id,hole_number",
+        });
+        if (error) throw error;
+      }
+
+      initialScoresRef.current = { [meId]: { ...(scores[meId] ?? {}) } };
+      setSavedMsg("Saved ✓");
+      setTimeout(() => setSavedMsg(""), 1200);
     } catch (e: any) {
-      setErrorMsg(e?.message ?? "Failed to save scores.");
+      setSaveErr(e?.message ?? "Save failed.");
     } finally {
       setSaving(false);
     }
   }
 
-  if (loading) {
-    return (
-      <div className="p-4">
-        <div className="text-sm opacity-70">Loading…</div>
-      </div>
-    );
+  // Swipe handling: left = next, right = prev (only on Entry)
+  const swipeRef = useRef<{ x: number; y: number; t: number } | null>(null);
+
+  function onTouchStart(e: React.TouchEvent) {
+    const t = e.touches[0];
+    swipeRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
   }
+
+  function onTouchEnd(e: React.TouchEvent) {
+    const start = swipeRef.current;
+    swipeRef.current = null;
+    if (!start) return;
+
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    const dt = Date.now() - start.t;
+
+    if (Math.abs(dy) > Math.abs(dx)) return;
+    if (dt > 700) return;
+
+    const threshold = 50;
+    if (dx <= -threshold) setHole((h) => clamp(h + 1, 1, 18));
+    if (dx >= threshold) setHole((h) => clamp(h - 1, 1, 18));
+  }
+
+  // --------- Render ----------
+  if (loading) return <div className="p-4 text-sm opacity-70">Loading…</div>;
 
   if (!round) {
     return (
       <div className="p-4 space-y-3">
-        <div className="text-lg font-semibold">Mobile scoring</div>
-        <div className="text-red-600 text-sm">{errorMsg || "Round not found."}</div>
-        <Link className="underline text-sm" href={`/rounds/${roundId}/mobile`}>
-          Back
-        </Link>
+        <div className="text-lg font-semibold">Score entry</div>
+        <div className="text-sm text-red-600">{errorMsg || "Round not found."}</div>
+      </div>
+    );
+  }
+
+  if (!meOk) {
+    return (
+      <div className="p-4 space-y-3">
+        <div className="text-xl font-semibold">{round.name}</div>
+        <div className="text-sm opacity-75">Course: {courseName}</div>
+        <div className="rounded-md border p-3 text-sm space-y-2">
+          <div className="font-semibold">Can’t start scoring</div>
+          <div className="opacity-80">
+            The score page needs a valid <code>meId</code> for a player marked <code>playing=true</code>.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!buddyOk) {
+    return (
+      <div className="p-4 space-y-3">
+        <div className="text-xl font-semibold">{round.name}</div>
+        <div className="text-sm opacity-75">Course: {courseName}</div>
+        <div className="rounded-md border p-3 text-sm space-y-2">
+          <div className="font-semibold">Buddy is not eligible</div>
+          <div className="opacity-80">The selected buddy is not marked as playing for this round.</div>
+        </div>
+      </div>
+    );
+  }
+
+  const dirty = isDirty();
+
+  function SummaryPlayerToggleTop() {
+    const hasBuddy = Boolean(buddyId);
+
+    return (
+      <div className="px-4 pb-3">
+        <div className="flex items-center justify-center">
+          <div className={`w-[260px] rounded-md border ${borderDark} bg-slate-900 text-white text-center py-2`}>
+            <div className="text-xs font-semibold tracking-wide opacity-90">SUMMARY PLAYER</div>
+
+            <div className="mt-2 inline-flex rounded-md overflow-hidden border border-slate-700">
+              <button
+                type="button"
+                onClick={() => setSummaryPid(meId)}
+                className={`px-4 py-2 text-base font-bold ${
+                  summaryPid === meId ? "bg-sky-600 text-white" : "bg-slate-950 text-slate-200"
+                }`}
+              >
+                {meName}
+              </button>
+
+              {hasBuddy ? (
+                <button
+                  type="button"
+                  onClick={() => setSummaryPid(buddyId)}
+                  className={`px-4 py-2 text-base font-bold ${
+                    summaryPid === buddyId ? "bg-sky-600 text-white" : "bg-slate-950 text-slate-200"
+                  }`}
+                >
+                  {buddyName}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function PlayerCard(props: { pid: string; name: string; hcp: number; tee: Tee }) {
+    const { pid, name, hcp, tee } = props;
+    const raw = scores[pid]?.[hole] ?? "";
+    const pickup = raw === "P";
+    const pts = pointsFor(pid, hole);
+
+    const info = infoFor(pid, hole);
+
+    const totalPts = useMemo(() => {
+      let sum = 0;
+      for (let h = 1; h <= 18; h++) sum += pointsFor(pid, h);
+      return sum;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scores, pid, meHcp, buddyHcp, parsByTee]);
+
+    return (
+      <div className="rounded-lg overflow-hidden shadow-sm">
+        <div className={`${headerBlue} px-4 py-2 text-white font-semibold text-base text-center`}>
+          {name} <span className="opacity-90">(HC: {hcp} · Tee: {tee})</span>
+        </div>
+
+        <div className="bg-white p-3 text-black">
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              className="w-16 h-16 rounded-lg border border-slate-300 bg-white text-slate-900 text-5xl font-black leading-none active:scale-[0.98]"
+              onClick={() => adjustStrokes(pid, hole, -1)}
+              disabled={isLocked || pickup}
+              aria-label="Decrease strokes"
+            >
+              −
+            </button>
+
+            <div className="text-center">
+              <div className="text-5xl font-black text-slate-900 leading-none">{pts}</div>
+              <div className="text-sm font-semibold text-slate-700 mt-1">points</div>
+            </div>
+
+            <button
+              type="button"
+              className="w-16 h-16 rounded-lg border border-slate-300 bg-white text-slate-900 text-5xl font-black leading-none active:scale-[0.98]"
+              onClick={() => adjustStrokes(pid, hole, +1)}
+              disabled={isLocked || pickup}
+              aria-label="Increase strokes"
+            >
+              +
+            </button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+            <div>
+              <div className="text-[11px] font-bold tracking-wide text-slate-700">PAR</div>
+              <div className="mt-1 rounded-md border border-slate-300 bg-white text-slate-900 text-2xl font-black py-2">
+                {info.par || "—"}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[11px] font-bold tracking-wide text-slate-700">SI</div>
+              <div className="mt-1 rounded-md border border-slate-300 bg-white text-slate-900 text-2xl font-black py-2">
+                {info.si || "—"}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[11px] font-bold tracking-wide text-slate-700">SHOTS</div>
+              <div
+                className={`mt-1 rounded-md border border-slate-300 text-2xl font-black py-2 ${
+                  pickup ? "bg-slate-100 text-slate-400" : "bg-white text-slate-900"
+                }`}
+              >
+                {pickup ? "—" : raw && raw !== "P" ? raw : "0"}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[11px] font-bold tracking-wide text-slate-700">PICK UP</div>
+              <button
+                type="button"
+                className={`mt-1 w-full rounded-md border border-slate-300 text-2xl font-black py-2 ${
+                  pickup ? "bg-slate-900 text-white" : "bg-white text-slate-900"
+                }`}
+                onClick={() => togglePickup(pid, hole)}
+                disabled={isLocked}
+              >
+                P
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-2 flex justify-between text-xs text-slate-600">
+            <button type="button" className="underline" onClick={() => setRaw(pid, hole, "")} disabled={isLocked}>
+              Clear hole
+            </button>
+            <div className="font-bold">Total pts: {totalPts}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function SummaryTotalsRow(props: { label: string; shots: number; pts: number; onJumpTo?: number }) {
+    const { label, shots, pts, onJumpTo } = props;
+
+    return (
+      <div className="px-3 py-2 border-t border-slate-300 bg-slate-50 grid grid-cols-5 gap-2 items-center text-black">
+        <button
+          type="button"
+          className="rounded-md px-3 py-2 text-left font-bold bg-slate-900 text-white"
+          onClick={() => {
+            if (onJumpTo) {
+              setHole(onJumpTo);
+              setTab("entry");
+            }
+          }}
+        >
+          {label}
+        </button>
+        <div />
+        <div />
+        <div className="text-center font-bold">{shots}</div>
+        <div className="text-center font-bold">{pts}</div>
+      </div>
+    );
+  }
+
+  function SummaryTable() {
+    const pid = summaryPid || meId;
+    const tee = teeForPlayer(pid);
+
+    const frontShots = sumShots(pid, 1, 9);
+    const frontPts = sumPoints(pid, 1, 9);
+    const backShots = sumShots(pid, 10, 18);
+    const backPts = sumPoints(pid, 10, 18);
+    const totalShots = frontShots + backShots;
+    const totalPts = frontPts + backPts;
+
+    return (
+      <div className="rounded-lg overflow-hidden bg-white shadow-sm text-black">
+        <div className="bg-slate-100 px-3 py-2 text-xs font-bold tracking-wide text-slate-700 grid grid-cols-5 gap-2">
+          <div>HOLE</div>
+          <div className="text-center">PAR</div>
+          <div className="text-center">SI</div>
+          <div className="text-center">STROKES</div>
+          <div className="text-center">PTS</div>
+        </div>
+
+        {Array.from({ length: 18 }).map((_, idx) => {
+          const h = idx + 1;
+          const info = holeInfoByNumberByTee[tee]?.[h] ?? { par: 0, si: 0 };
+
+          const raw = scores[pid]?.[h] ?? "";
+          const disp = raw === "P" ? "P" : raw || "—";
+          const pts = pointsFor(pid, h);
+
+          return (
+            <React.Fragment key={h}>
+              <div className="px-3 py-2 border-t border-slate-200 grid grid-cols-5 gap-2 items-center">
+                <button
+                  type="button"
+                  className="rounded-md px-3 py-2 text-left font-bold bg-slate-100 text-slate-900"
+                  onClick={() => {
+                    setHole(h);
+                    setTab("entry");
+                  }}
+                >
+                  {h}
+                </button>
+
+                <div className="text-center font-semibold">{info.par || "—"}</div>
+                <div className="text-center">{info.si || "—"}</div>
+                <div className="text-center font-bold">{disp}</div>
+                <div className="text-center font-bold">{pts}</div>
+              </div>
+
+              {h === 9 ? <SummaryTotalsRow label="Front 9" shots={frontShots} pts={frontPts} onJumpTo={1} /> : null}
+
+              {h === 18 ? (
+                <>
+                  <SummaryTotalsRow label="Back 9" shots={backShots} pts={backPts} onJumpTo={10} />
+                  <SummaryTotalsRow label="Total" shots={totalShots} pts={totalPts} onJumpTo={1} />
+                </>
+              ) : null}
+            </React.Fragment>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function HoleBoxEntryOnly() {
+    return (
+      <div className="px-4 pb-3">
+        <div className="flex items-center justify-center">
+          <div className={`w-[230px] rounded-md border ${borderDark} bg-slate-900 text-white text-center py-2`}>
+            <div className="text-xs font-semibold tracking-wide opacity-90">HOLE</div>
+            <div className="text-4xl font-black leading-tight">{hole}</div>
+            <div className="text-[11px] opacity-85">
+              <div>
+                <span className="font-semibold">M:</span> Par {holeInfoM.par || "—"} · SI {holeInfoM.si || "—"}
+              </div>
+              <div>
+                <span className="font-semibold">F:</span> Par {holeInfoF.par || "—"} · SI {holeInfoF.si || "—"}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="p-4 space-y-4">
-      <header className="space-y-1">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-lg font-semibold">{round.name}</div>
-            <div className="text-xs opacity-70">
-              {courseName ? `Course: ${courseName}` : "Course: (not set)"}
-              {isLocked ? " • Locked" : ""}
+    <div
+      className={`${navy} min-h-[100svh] text-white`}
+      onTouchStart={tab === "entry" ? onTouchStart : undefined}
+      onTouchEnd={tab === "entry" ? onTouchEnd : undefined}
+    >
+      {/* Top bar: round/course left */}
+      <div className="px-4 pt-4 pb-2 flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <button
+            type="button"
+            className="flex items-center gap-2 text-xl font-bold"
+            onClick={() => {
+              const href = `/rounds/${roundId}/mobile?meId=${encodeURIComponent(meId)}${
+                buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""
+              }`;
+              if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?")) window.location.href = href;
+            }}
+          >
+            <span className="text-2xl">‹</span>
+          </button>
+          <div className="leading-tight">
+            <div className="text-sm font-semibold">{round?.name ?? "Round"}</div>
+            <div className="text-xs opacity-75">{courseName}</div>
+            <div className="text-[11px] opacity-80">
+              {isLocked ? (
+                <span className="text-red-300 font-semibold">Locked</span>
+              ) : (
+                <span className="text-green-300 font-semibold">Open</span>
+              )}
             </div>
           </div>
-
-          <Link
-            className="text-sm underline"
-            href={`/rounds/${roundId}/mobile?me=${encodeURIComponent(meId)}${
-              buddyId ? `&buddy=${encodeURIComponent(buddyId)}` : ""
-            }`}
-          >
-            Change players
-          </Link>
         </div>
 
-        {errorMsg ? <div className="text-sm text-red-600">{errorMsg}</div> : null}
-        {savedMsg ? <div className="text-sm text-green-700">{savedMsg}</div> : null}
-      </header>
-
-      <div className="space-y-6">
-        {players.map((p) => (
-          <section key={p.id} className="rounded-lg border p-3 space-y-3">
-            <div className="font-medium">{p.name}</div>
-
-            <div className="grid grid-cols-2 gap-2">
-              {holes.map((h) => {
-                const cell = scores[p.id]?.[h] ?? { strokes: "", pickup: false };
-                const parRow = parByHole[h];
-                const par = parRow?.par ?? 0;
-                const si = parRow?.stroke_index ?? 0;
-
-                // Stableford display: if pickup, treat as 0 (or your app’s convention)
-                const strokesNum = cell.strokes.trim() === "" ? NaN : Number(cell.strokes);
-                const pts =
-                  cell.pickup || !Number.isFinite(strokesNum)
-                    ? null
-                    : netStablefordPointsForHole({
-                        strokes: strokesNum,
-                        par,
-                        strokeIndex: si,
-                        // if you have playing handicap allocation per hole, plug it in here;
-                        // otherwise your helper may already handle it elsewhere
-                        handicapStrokesOnHole: 0,
-                      } as any);
-
-                return (
-                  <div key={h} className="rounded-md border p-2">
-                    <div className="flex items-baseline justify-between">
-                      <div className="text-sm font-semibold">Hole {h}</div>
-                      <div className="text-xs opacity-70 text-right leading-tight">
-                        <div>Par {par || "-"}</div>
-                        <div>SI {si || "-"}</div>
-                      </div>
-                    </div>
-
-                    <div className="mt-2 flex items-center gap-2">
-                      <input
-                        className="w-20 rounded border px-2 py-1 text-sm"
-                        inputMode="numeric"
-                        placeholder="Stk"
-                        value={cell.strokes}
-                        disabled={isLocked}
-                        onChange={(e) => updateStrokes(p.id, h, e.target.value)}
-                      />
-
-                      <label className="flex items-center gap-2 text-xs select-none">
-                        <input
-                          type="checkbox"
-                          checked={cell.pickup}
-                          disabled={isLocked}
-                          onChange={() => togglePickup(p.id, h)}
-                        />
-                        Pickup
-                      </label>
-
-                      <div className="ml-auto text-xs opacity-80">
-                        {pts == null ? (
-                          <span>Pts: –</span>
-                        ) : (
-                          <span>Pts: {pts}</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        ))}
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={saveAll}
+            disabled={saving || isLocked}
+            className={`px-3 py-2 rounded-md text-sm font-bold text-white ${
+              saving || isLocked ? "bg-slate-500" : "bg-sky-600"
+            }`}
+          >
+            {saving ? "Saving…" : isLocked ? "Locked" : "Save (Me)"}
+          </button>
+        </div>
       </div>
 
-      <div className="sticky bottom-0 bg-white/80 backdrop-blur border-t p-3 -mx-4 flex gap-3">
-        <button
-          className="flex-1 rounded-md border px-3 py-2 text-sm"
-          onClick={() => router.push(`/rounds/${roundId}`)}
-        >
-          Exit
-        </button>
+      {/* Entry: show hole box; Summary: show player toggle box (top-center) */}
+      {tab === "entry" ? <HoleBoxEntryOnly /> : <SummaryPlayerToggleTop />}
 
-        <button
-          className="flex-1 rounded-md bg-black text-white px-3 py-2 text-sm disabled:opacity-50"
-          disabled={saving || isLocked}
-          onClick={saveAll}
-        >
-          {saving ? "Saving…" : "Save"}
-        </button>
+      {/* Tabs */}
+      <div className="px-4">
+        <div className="rounded-md border border-slate-600/60 overflow-hidden flex">
+          <button
+            type="button"
+            onClick={() => setTab("entry")}
+            className={`flex-1 py-2 text-sm font-semibold ${
+              tab === "entry" ? "bg-slate-800 text-white" : "bg-slate-900 text-slate-200"
+            }`}
+          >
+            Entry
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("summary")}
+            className={`flex-1 py-2 text-sm font-semibold ${
+              tab === "summary" ? "bg-sky-600 text-white" : "bg-slate-900 text-slate-200"
+            }`}
+          >
+            Summary
+          </button>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="px-4 py-3 space-y-3">
+        {tab === "entry" ? (
+          <>
+            <PlayerCard pid={meId} name={meName} hcp={meHcp} tee={meTee} />
+            {buddyId ? <PlayerCard pid={buddyId} name={buddyName} hcp={buddyHcp} tee={buddyTee} /> : null}
+
+            <div className="text-xs opacity-80 text-center">
+              Swipe <span className="font-semibold">left/right</span> to change hole.{" "}
+              {dirty ? <span className="text-amber-300 font-semibold">Unsaved (Me)</span> : null}
+              {savedMsg ? <span className="text-green-300 font-semibold"> {savedMsg}</span> : null}
+              {saveErr ? <span className="text-red-300 font-semibold"> {saveErr}</span> : null}
+            </div>
+
+            <div className="text-[11px] opacity-70 text-center">
+              Note: Buddy scores are for viewing/entry only and are not saved.
+            </div>
+
+            {errorMsg ? <div className="text-sm text-red-300">{errorMsg}</div> : null}
+          </>
+        ) : (
+          <>
+            <SummaryTable />
+            {errorMsg ? <div className="text-sm text-red-300">{errorMsg}</div> : null}
+          </>
+        )}
       </div>
     </div>
   );

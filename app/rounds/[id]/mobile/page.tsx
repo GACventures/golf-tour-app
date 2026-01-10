@@ -1,298 +1,391 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams } from "next/navigation";
 import Link from "next/link";
+
 import { supabase } from "@/lib/supabaseClient";
+
+type CourseRel = { name: string };
 
 type Round = {
   id: string;
   name: string;
   course_id: string | null;
-  // ✅ Supabase relationship often returns an array
-  courses?: { name: string }[] | null;
+  is_locked: boolean | null;
+  played_on: string | null;
+  courses?: CourseRel | CourseRel[] | null;
 };
 
-type PlayingPlayer = {
-  id: string;
-  name: string;
-  playing_handicap: number;
+type RoundPlayerRow = {
+  round_id: string;
+  player_id: string;
+  playing: boolean;
+  playing_handicap: number | null;
 };
 
-export default function MobilePlayerSelectPage() {
+type PlayerRow = { id: string; name: string };
+
+type RoundGroupPlayerRow = {
+  round_id: string;
+  group_id: string;
+  player_id: string;
+  seat: number | null;
+};
+
+function asSingle<T>(v: T | T[] | null | undefined): T | null {
+  if (!v) return null;
+  return Array.isArray(v) ? v[0] ?? null : v;
+}
+
+export default function MobileSelectPage() {
   const params = useParams();
-  const router = useRouter();
-  const roundId = (params?.id as string) || "";
+  const roundId = String((params as any)?.id ?? "").trim();
 
-  const [round, setRound] = useState<Round | null>(null);
-  const [playingPlayers, setPlayingPlayers] = useState<PlayingPlayer[]>([]);
-  const [meId, setMeId] = useState<string | null>(null);
-  const [buddyId, setBuddyId] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+
+  const [round, setRound] = useState<Round | null>(null);
+  const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
+  const [playersById, setPlayersById] = useState<Record<string, PlayerRow>>({});
+
+  // NEW: group memberships for this round
+  const [groupPlayers, setGroupPlayers] = useState<RoundGroupPlayerRow[]>([]);
+
+  const [meId, setMeId] = useState("");
+  const [buddyId, setBuddyId] = useState("");
+
+  // Tracks if the user explicitly chose a buddy (so we don't overwrite their choice)
+  const buddyManuallySetRef = useRef(false);
 
   useEffect(() => {
     if (!roundId) return;
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    let alive = true;
+
+    async function load() {
+      setLoading(true);
+      setErrorMsg("");
+
+      try {
+        const { data: rData, error: rErr } = await supabase
+          .from("rounds")
+          .select("id,name,course_id,is_locked,played_on,courses(name)")
+          .eq("id", roundId)
+          .single();
+        if (rErr) throw rErr;
+
+        const { data: rpData, error: rpErr } = await supabase
+          .from("round_players")
+          .select("round_id,player_id,playing,playing_handicap")
+          .eq("round_id", roundId)
+          .eq("playing", true);
+        if (rpErr) throw rpErr;
+
+        const rpRows: RoundPlayerRow[] = (rpData ?? []).map((x: any) => ({
+          round_id: String(x.round_id),
+          player_id: String(x.player_id),
+          playing: x.playing === true,
+          playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
+        }));
+
+        const ids = Array.from(new Set(rpRows.map((r) => r.player_id))).filter(Boolean);
+
+        const map: Record<string, PlayerRow> = {};
+        if (ids.length > 0) {
+          const { data: pData, error: pErr } = await supabase.from("players").select("id,name").in("id", ids);
+          if (pErr) throw pErr;
+
+          for (const p of pData ?? []) {
+            const id = String((p as any).id);
+            map[id] = { id, name: String((p as any).name) };
+          }
+        }
+
+        // NEW: load group memberships for this round (if groups exist)
+        let gpRows: RoundGroupPlayerRow[] = [];
+        if (ids.length > 0) {
+          const { data: gpData, error: gpErr } = await supabase
+            .from("round_group_players")
+            .select("round_id,group_id,player_id,seat")
+            .eq("round_id", roundId)
+            .in("player_id", ids);
+
+          // If table doesn't exist yet or RLS blocks, show a friendly message but keep page working.
+          if (gpErr) {
+            // Only set error if it's not "relation does not exist"
+            // (Some users deploy before migrations; we don't want to break mobile selection.)
+            const msg = gpErr.message ?? "";
+            if (!msg.toLowerCase().includes("does not exist")) {
+              // soft warning only; don't fail the whole page
+              console.warn("round_group_players load error:", gpErr);
+            }
+            gpRows = [];
+          } else {
+            gpRows = (gpData ?? []) as RoundGroupPlayerRow[];
+          }
+        }
+
+        if (!alive) return;
+        setRound(rData as unknown as Round);
+        setRoundPlayers(rpRows);
+        setPlayersById(map);
+        setGroupPlayers(gpRows);
+      } catch (e: any) {
+        if (!alive) return;
+        setErrorMsg(e?.message ?? "Failed to load mobile selection.");
+        setRound(null);
+        setRoundPlayers([]);
+        setPlayersById({});
+        setGroupPlayers([]);
+      } finally {
+        if (!alive) return;
+        setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      alive = false;
+    };
   }, [roundId]);
 
-  async function load() {
-    setLoading(true);
-    setErrorMsg("");
+  const courseName = useMemo(() => {
+    const c = asSingle(round?.courses);
+    return c?.name ?? "(no course)";
+  }, [round]);
 
-    // 1) Round header info
-    const { data: roundData, error: roundError } = await supabase
-      .from("rounds")
-      .select(
-        `
-        id,
-        name,
-        course_id,
-        courses ( name )
-      `
-      )
-      .eq("id", roundId)
-      .single();
+  const isLocked = round?.is_locked === true;
 
-    if (roundError) {
-      setErrorMsg(roundError.message);
-      setLoading(false);
-      return;
+  const playingPlayers = useMemo(() => {
+    const list = roundPlayers
+      .filter((rp) => rp.playing === true)
+      .map((rp) => playersById[rp.player_id])
+      .filter((p): p is PlayerRow => !!p && !!p.id);
+
+    list.sort((a, b) => a.name.localeCompare(b.name));
+    return list;
+  }, [roundPlayers, playersById]);
+
+  const groupIdByPlayer = useMemo(() => {
+    const m = new Map<string, { group_id: string; seat: number }>();
+    for (const gp of groupPlayers) {
+      m.set(String(gp.player_id), { group_id: String(gp.group_id), seat: Number(gp.seat ?? 999) });
     }
+    return m;
+  }, [groupPlayers]);
 
-    // ✅ Cast via unknown to avoid TS "insufficient overlap" error
-    setRound(roundData as unknown as Round);
-
-    // 2) ONLY players who are playing in this round
-    const { data: rp, error: rpError } = await supabase
-      .from("round_players")
-      .select(
-        `
-        playing,
-        playing_handicap,
-        players ( id, name )
-      `
-      )
-      .eq("round_id", roundId)
-      .eq("playing", true)
-      .order("created_at", { ascending: true });
-
-    if (rpError) {
-      setErrorMsg(rpError.message);
-      setLoading(false);
-      return;
-    }
-
-    const list: PlayingPlayer[] = (Array.isArray(rp) ? rp : []).map((row: any) => ({
-      id: row.players?.id,
-      name: row.players?.name,
-      playing_handicap: row.playing_handicap ?? 0,
-    }));
-
-    // Filter out any malformed rows just in case
-    const clean = list.filter((p) => !!p.id && !!p.name);
-
-    setPlayingPlayers(clean);
-
-    // If we already had selections and they no longer exist, clear them
-    setMeId((prev) => (prev && clean.some((p) => p.id === prev) ? prev : null));
-    setBuddyId((prev) => (prev && clean.some((p) => p.id === prev) ? prev : null));
-
-    setLoading(false);
-  }
-
-  // Buddy choices = playing players excluding Me
-  const buddyOptions = useMemo(() => {
+  const playersInSameGroup = useMemo(() => {
     if (!meId) return [];
-    return playingPlayers.filter((p) => p.id !== meId);
-  }, [playingPlayers, meId]);
+    const rec = groupIdByPlayer.get(meId);
+    if (!rec) return [];
+    const gid = rec.group_id;
 
-  function continueToScoreEntry() {
-    if (!meId) return;
+    const peers = groupPlayers
+      .filter((x) => String(x.group_id) === gid)
+      .map((x) => ({ player_id: String(x.player_id), seat: Number(x.seat ?? 999) }))
+      .filter((x) => x.player_id !== meId);
 
+    peers.sort((a, b) => a.seat - b.seat);
+
+    // Map to PlayerRow if we have it
+    return peers
+      .map((p) => playersById[p.player_id])
+      .filter((p): p is PlayerRow => !!p && !!p.id);
+  }, [meId, groupIdByPlayer, groupPlayers, playersById]);
+
+  // Auto-suggest buddy when Me changes (unless user already picked buddy manually)
+  useEffect(() => {
+    if (!meId) {
+      buddyManuallySetRef.current = false;
+      setBuddyId("");
+      return;
+    }
+
+    // If buddy was manually set, don't override.
+    if (buddyManuallySetRef.current) return;
+
+    // If we already have a valid buddy (not me), keep it.
+    if (buddyId && buddyId !== meId) return;
+
+    // Prefer first player in the same group (seat order)
+    const suggested = playersInSameGroup[0]?.id ?? "";
+
+    if (suggested) {
+      setBuddyId(suggested);
+    } else {
+      // No group or no peer in group => leave buddy empty
+      setBuddyId("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meId, playersInSameGroup]);
+
+  const targetUrl = useMemo(() => {
+    if (!meId) return "";
     const qs = new URLSearchParams();
-    qs.set("me", meId);
-    if (buddyId) qs.set("buddy", buddyId);
+    qs.set("meId", meId);
+    if (buddyId && buddyId !== meId) qs.set("buddyId", buddyId);
+    return `/rounds/${roundId}/mobile/score?${qs.toString()}`;
+  }, [roundId, meId, buddyId]);
 
-    router.push(`/rounds/${roundId}/mobile/score?${qs.toString()}`);
-  }
+  const buddyLabel = useMemo(() => {
+    if (!meId) return "Buddy (optional)";
+    const inSameGroup = playersInSameGroup.some((p) => p.id === buddyId);
+    if (buddyId && inSameGroup) return "Buddy (suggested from your group)";
+    if (playersInSameGroup.length > 0) return "Buddy (suggested from your group)";
+    return "Buddy (optional)";
+  }, [meId, buddyId, playersInSameGroup]);
 
-  const courseName = round?.courses?.[0]?.name ?? "";
-
-  if (loading) {
-    return (
-      <div style={{ padding: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Mobile entry mode</h2>
-        <p>Loading…</p>
-        {errorMsg && <p style={{ color: "red" }}>Error: {errorMsg}</p>}
-      </div>
-    );
-  }
+  if (loading) return <div className="p-4 text-sm opacity-70">Loading…</div>;
 
   return (
-    <div style={{ padding: 16, maxWidth: 520, margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-        <div>
-          <h2 style={{ marginTop: 0, marginBottom: 6 }}>Mobile entry mode</h2>
-          <div style={{ fontSize: 14, opacity: 0.85 }}>
-            <div>
-              <strong>Round:</strong> {round?.name ?? "—"}
-            </div>
-            {courseName && (
-              <div>
-                <strong>Course:</strong> {courseName}
-              </div>
-            )}
-          </div>
+    <div className="p-4 space-y-4">
+      <div className="space-y-1">
+        <div className="text-xl font-semibold">{round?.name ?? "Round"}</div>
+        <div className="text-sm opacity-75">Course: {courseName}</div>
+        <div className="text-sm">
+          Status:{" "}
+          <span className={isLocked ? "text-red-600" : "text-green-700"}>
+            {isLocked ? "Locked" : "Open"}
+          </span>
         </div>
-
-        <Link
-          href={`/rounds/${roundId}`}
-          style={{ fontSize: 14, textDecoration: "underline", whiteSpace: "nowrap", marginTop: 4 }}
-        >
-          Back to round
-        </Link>
+        {errorMsg ? <div className="text-sm text-red-600">{errorMsg}</div> : null}
       </div>
 
-      {errorMsg && (
-        <p style={{ color: "red", marginTop: 12 }}>
-          Error: {errorMsg}
-        </p>
-      )}
-
       {playingPlayers.length === 0 ? (
-        <div style={{ marginTop: 16, padding: 12, border: "1px solid #ddd", borderRadius: 8 }}>
-          <h3 style={{ marginTop: 0 }}>No playing players</h3>
-          <p style={{ marginBottom: 0 }}>
-            This mobile mode only allows selecting players who are marked as <strong>playing</strong>. Go back to the
-            round page and assign players / tick “playing”, then return here.
-          </p>
+        <div className="rounded-md border p-3 text-sm space-y-2">
+          <div className="font-semibold">No playing players</div>
+          <div className="opacity-80">
+            This mode only allows selecting players marked <code>playing=true</code> in <code>round_players</code>.
+          </div>
         </div>
       ) : (
-        <>
-          {/* ME */}
-          <div style={{ marginTop: 16 }}>
-            <h3 style={{ marginTop: 0, marginBottom: 8 }}>Who are you?</h3>
+        <div className="space-y-3">
+          <label className="block text-sm">
+            <div className="mb-1 font-medium">Me</div>
+            <select
+              className="w-full border rounded-md p-2"
+              value={meId}
+              onChange={(e) => {
+                const nextMe = e.target.value;
+                setMeId(nextMe);
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {playingPlayers.map((p) => {
-                const selected = meId === p.id;
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => {
-                      setMeId(p.id);
-                      // If buddy was same as new me, clear buddy
-                      setBuddyId((b) => (b === p.id ? null : b));
-                    }}
-                    style={{
-                      textAlign: "left",
-                      padding: "12px 12px",
-                      borderRadius: 10,
-                      border: selected ? "2px solid #2563eb" : "1px solid #d1d5db",
-                      background: selected ? "#eff6ff" : "#fff",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <div style={{ fontWeight: 700, fontSize: 16 }}>{p.name}</div>
-                    <div style={{ fontSize: 13, opacity: 0.8 }}>Playing handicap: {p.playing_handicap}</div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+                // If changing me, reset the "manual buddy" flag so we can re-suggest.
+                buddyManuallySetRef.current = false;
 
-          {/* BUDDY */}
-          <div style={{ marginTop: 18 }}>
-            <h3 style={{ marginTop: 0, marginBottom: 8 }}>Add a buddy (optional)</h3>
-
-            {!meId ? (
-              <p style={{ marginTop: 0, opacity: 0.8 }}>Select “Me” first.</p>
-            ) : (
-              <>
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {buddyOptions.map((p) => {
-                    const selected = buddyId === p.id;
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => setBuddyId(p.id)}
-                        style={{
-                          textAlign: "left",
-                          padding: "12px 12px",
-                          borderRadius: 10,
-                          border: selected ? "2px solid #16a34a" : "1px solid #d1d5db",
-                          background: selected ? "#f0fdf4" : "#fff",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <div style={{ fontWeight: 700, fontSize: 16 }}>{p.name}</div>
-                        <div style={{ fontSize: 13, opacity: 0.8 }}>Playing handicap: {p.playing_handicap}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setBuddyId(null)}
-                  disabled={!buddyId}
-                  style={{
-                    marginTop: 10,
-                    padding: "10px 12px",
-                    borderRadius: 10,
-                    border: "1px solid #d1d5db",
-                    background: buddyId ? "#fff" : "#f3f4f6",
-                    color: buddyId ? "#111827" : "#6b7280",
-                    cursor: buddyId ? "pointer" : "not-allowed",
-                    width: "100%",
-                  }}
-                >
-                  No buddy (just me)
-                </button>
-              </>
-            )}
-          </div>
-
-          {/* CONTINUE */}
-          <div style={{ marginTop: 18 }}>
-            <button
-              type="button"
-              onClick={() => {
-                if (busy) return;
-                setBusy(true);
-                try {
-                  continueToScoreEntry();
-                } finally {
-                  setTimeout(() => setBusy(false), 400);
-                }
-              }}
-              disabled={!meId || busy}
-              style={{
-                width: "100%",
-                padding: "12px 12px",
-                borderRadius: 12,
-                border: "1px solid #111827",
-                background: !meId ? "#e5e7eb" : "#111827",
-                color: !meId ? "#6b7280" : "#fff",
-                fontWeight: 700,
-                cursor: !meId ? "not-allowed" : "pointer",
+                // If buddy equals me, clear.
+                if (buddyId === nextMe) setBuddyId("");
               }}
             >
-              Continue to score entry
-            </button>
+              <option value="">Select…</option>
+              {playingPlayers.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
 
-            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
-              Only players marked as <strong>playing</strong> can be selected.
+          <label className="block text-sm">
+            <div className="mb-1 font-medium">{buddyLabel}</div>
+            <select
+              className="w-full border rounded-md p-2"
+              value={buddyId}
+              onChange={(e) => {
+                buddyManuallySetRef.current = true;
+                setBuddyId(e.target.value);
+              }}
+              disabled={!meId}
+            >
+              <option value="">None</option>
+
+              {/* If we have group peers, show them first */}
+              {meId && playersInSameGroup.length > 0 ? (
+                <>
+                  <optgroup label="Same group">
+                    {playersInSameGroup
+                      .filter((p) => p.id !== meId)
+                      .map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                  </optgroup>
+                  <optgroup label="All playing">
+                    {playingPlayers
+                      .filter((p) => p.id !== meId && !playersInSameGroup.some((x) => x.id === p.id))
+                      .map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                  </optgroup>
+                </>
+              ) : (
+                playingPlayers
+                  .filter((p) => p.id !== meId)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))
+              )}
+            </select>
+          </label>
+
+          {/* Small helper line */}
+          {meId ? (
+            <div className="text-xs opacity-70">
+              {playersInSameGroup.length > 0
+                ? "Buddy is suggested from your group, but you can override."
+                : "No group found for you yet (or groups not generated). Buddy is optional."}
             </div>
-          </div>
-        </>
+          ) : null}
+
+          {targetUrl ? (
+            <div className="text-xs opacity-70">
+              Target: <code>{targetUrl}</code>
+            </div>
+          ) : null}
+
+          {/* ✅ Use Link for bulletproof navigation */}
+          {meId && !isLocked ? (
+            <Link
+              href={targetUrl}
+              className="block w-full text-center rounded-md px-4 py-2 text-sm text-white bg-black"
+            >
+              Continue to scoring
+            </Link>
+          ) : (
+            <button type="button" disabled className="w-full rounded-md px-4 py-2 text-sm text-white bg-gray-400">
+              {isLocked ? "Round is locked" : "Select Me to continue"}
+            </button>
+          )}
+
+          {/* Hard navigate fallback (copy/paste) */}
+          {targetUrl ? (
+            <div className="text-xs">
+              If the button doesn’t work, copy/paste this into the address bar:
+              <div className="mt-1">
+                <code>{targetUrl}</code>
+              </div>
+            </div>
+          ) : null}
+        </div>
       )}
+
+      <div className="flex gap-3 text-sm">
+        <Link className="underline" href={`/rounds/${roundId}`}>
+          ← Back to round
+        </Link>
+        <Link className="underline" href={`/rounds/${roundId}/groups`}>
+          Groups
+        </Link>
+        <Link className="underline" href={`/tours`}>
+          Tours
+        </Link>
+      </div>
     </div>
   );
 }

@@ -7,9 +7,44 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
 type Tour = { id: string; name: string };
-type Course = { id: string; tour_id: string; name: string };
-type Player = { id: string; tour_id: string; name: string; start_handicap: number };
-type Round = { id: string; tour_id: string; course_id: string; name: string; created_at: string | null };
+
+// Courses are now often GLOBAL (tour_id can be null)
+type Course = { id: string; name: string; tour_id: string | null };
+
+// Global player library row (displayed via tour_players join)
+type Player = { id: string; name: string; start_handicap: number };
+
+// Tour membership row (join)
+type TourPlayerRow = {
+  tour_id: string;
+  player_id: string;
+  starting_handicap: number;
+  players: { id: string; name: string; start_handicap: number } | null;
+};
+
+type Round = { id: string; tour_id: string; course_id: string | null; name: string; round_no: number | null; created_at: string | null };
+
+type TourGroupRow = {
+  id: string;
+  tour_id: string;
+  scope: "tour" | "round";
+  type: "pair" | "team";
+  name: string | null;
+  round_id: string | null;
+  created_at?: string | null;
+};
+
+type TourGroupMemberRow = {
+  group_id: string;
+  player_id: string;
+};
+
+function roundLabel(r: { id: string; name: string | null; round_no: number | null }) {
+  const nm = (r.name ?? "").trim();
+  if (r.round_no) return `Round ${r.round_no}${nm ? `: ${nm}` : ""}`;
+  if (nm) return nm;
+  return r.id;
+}
 
 export default function TourPage() {
   const params = useParams<{ id: string }>();
@@ -17,221 +52,165 @@ export default function TourPage() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [msg, setMsg] = useState("");
-  const [saving, setSaving] = useState(false);
 
   const [tour, setTour] = useState<Tour | null>(null);
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [players, setPlayers] = useState<Player[]>([]);
+  const [coursesById, setCoursesById] = useState<Record<string, Course>>({});
+  const [tourPlayers, setTourPlayers] = useState<TourPlayerRow[]>([]);
   const [rounds, setRounds] = useState<Round[]>([]);
 
-  // Form state
-  const [newPlayerName, setNewPlayerName] = useState("");
-  const [newPlayerHandicap, setNewPlayerHandicap] = useState<number>(0);
-
-  const [newCourseName, setNewCourseName] = useState("");
-
-  const [newRoundName, setNewRoundName] = useState("");
-  const [newRoundCourseId, setNewRoundCourseId] = useState<string>("");
+  // Pairs/Teams detail for Overview
+  const [tourGroups, setTourGroups] = useState<TourGroupRow[]>([]);
+  const [tourGroupMembers, setTourGroupMembers] = useState<TourGroupMemberRow[]>([]);
 
   async function loadAll() {
     setLoading(true);
     setError("");
-    setMsg("");
 
-    const { data: tourData, error: tourErr } = await supabase
-      .from("tours")
-      .select("id,name")
-      .eq("id", tourId)
-      .single();
+    try {
+      // Tour
+      const { data: tourData, error: tourErr } = await supabase
+        .from("tours")
+        .select("id,name")
+        .eq("id", tourId)
+        .maybeSingle();
 
-    if (tourErr) {
-      setError(tourErr.message);
+      if (tourErr) throw new Error(tourErr.message);
+      if (!tourData) throw new Error("Tour not found (or you do not have access).");
+
+      setTour(tourData as Tour);
+
+      // Rounds (load EARLY so we can fetch the referenced course ids)
+      const { data: roundData, error: roundErr } = await supabase
+        .from("rounds")
+        .select("id,tour_id,course_id,name,round_no,created_at")
+        .eq("tour_id", tourId)
+        .order("created_at", { ascending: true });
+
+      if (roundErr) throw new Error(roundErr.message);
+
+      const roundList = (roundData ?? []) as Round[];
+      setRounds(roundList);
+
+      // ✅ Courses: fetch by the course_ids used by these rounds (works for GLOBAL courses too)
+      const courseIds = Array.from(new Set(roundList.map((r) => r.course_id).filter(Boolean))) as string[];
+      if (courseIds.length) {
+        const { data: cData, error: cErr } = await supabase
+          .from("courses")
+          .select("id,name,tour_id")
+          .in("id", courseIds);
+
+        if (cErr) throw new Error(cErr.message);
+
+        const map: Record<string, Course> = {};
+        for (const c of cData ?? []) {
+          const id = String((c as any).id);
+          map[id] = { id, name: String((c as any).name), tour_id: (c as any).tour_id ?? null };
+        }
+        setCoursesById(map);
+      } else {
+        setCoursesById({});
+      }
+
+      // Tour players via join table
+      const { data: tpData, error: tpErr } = await supabase
+        .from("tour_players")
+        .select("tour_id,player_id,starting_handicap, players(id,name,start_handicap)")
+        .eq("tour_id", tourId)
+        .order("name", { ascending: true, foreignTable: "players" });
+
+      if (tpErr) throw new Error(tpErr.message);
+      setTourPlayers((tpData ?? []) as TourPlayerRow[]);
+
+      // Pairs/Teams groups (tour scope)
+      const { data: gData, error: gErr } = await supabase
+        .from("tour_groups")
+        .select("id,tour_id,scope,type,name,round_id,created_at")
+        .eq("tour_id", tourId)
+        .eq("scope", "tour")
+        .in("type", ["pair", "team"])
+        .order("type", { ascending: true })
+        .order("created_at", { ascending: true });
+
+      if (gErr) throw new Error(gErr.message);
+
+      const glist = (gData ?? []) as TourGroupRow[];
+      setTourGroups(glist);
+
+      const groupIds = glist.map((g) => g.id);
+      if (!groupIds.length) {
+        setTourGroupMembers([]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: mData, error: mErr } = await supabase
+        .from("tour_group_members")
+        .select("group_id,player_id")
+        .in("group_id", groupIds);
+
+      if (mErr) throw new Error(mErr.message);
+
+      setTourGroupMembers((mData ?? []) as TourGroupMemberRow[]);
+    } catch (e: any) {
+      setError(e?.message ?? "Unknown error");
+    } finally {
       setLoading(false);
-      return;
     }
-    setTour(tourData as Tour);
-
-    const { data: courseData, error: courseErr } = await supabase
-      .from("courses")
-      .select("id,tour_id,name")
-      .eq("tour_id", tourId)
-      .order("name", { ascending: true });
-
-    if (courseErr) {
-      setError(courseErr.message);
-      setLoading(false);
-      return;
-    }
-    const courseList = (courseData ?? []) as Course[];
-    setCourses(courseList);
-
-    const { data: playerData, error: playerErr } = await supabase
-      .from("players")
-      .select("id,tour_id,name,start_handicap")
-      .eq("tour_id", tourId)
-      .order("name", { ascending: true });
-
-    if (playerErr) {
-      setError(playerErr.message);
-      setLoading(false);
-      return;
-    }
-    setPlayers((playerData ?? []) as Player[]);
-
-    const { data: roundData, error: roundErr } = await supabase
-      .from("rounds")
-      .select("id,tour_id,course_id,name,created_at")
-      .eq("tour_id", tourId)
-      .order("created_at", { ascending: true });
-
-    if (roundErr) {
-      setError(roundErr.message);
-      setLoading(false);
-      return;
-    }
-  const roundList = (roundData ?? []) as Round[];
-setRounds(roundList);
-
-// ✅ Auto-fill the next round name if empty
-const nextRoundNumber = roundList.length + 1;
-if (!newRoundName.trim()) {
-  setNewRoundName(`Round ${nextRoundNumber}`);
-}
-
-
-    // sensible default course for new round dropdown
-    if (!newRoundCourseId && courseList.length > 0) {
-      setNewRoundCourseId(courseList[0].id);
-    }
-
-    setLoading(false);
   }
 
   useEffect(() => {
-    loadAll();
+    void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tourId]);
 
-  const courseNameById = useMemo(() => {
-    const m: Record<string, string> = {};
-    for (const c of courses) m[c.id] = c.name;
+  const playersInThisTour: Player[] = useMemo(() => {
+    return (tourPlayers ?? [])
+      .map((r) => ({
+        id: r.players?.id ?? "",
+        name: r.players?.name ?? "(missing player)",
+        start_handicap: r.starting_handicap ?? 0,
+      }))
+      .filter((p) => !!p.id);
+  }, [tourPlayers]);
+
+  const playerNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of playersInThisTour) m.set(p.id, p.name);
     return m;
-  }, [courses]);
+  }, [playersInThisTour]);
 
-  async function addPlayer() {
-    const name = newPlayerName.trim();
-    if (!name) return;
+  const membersByGroup = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const row of tourGroupMembers) {
+      if (!m.has(row.group_id)) m.set(row.group_id, []);
+      m.get(row.group_id)!.push(row.player_id);
+    }
+    return m;
+  }, [tourGroupMembers]);
 
-    setSaving(true);
-    setError("");
-    setMsg("");
+  const tourPairs = useMemo(() => tourGroups.filter((g) => g.scope === "tour" && g.type === "pair"), [tourGroups]);
+  const tourTeams = useMemo(() => tourGroups.filter((g) => g.scope === "tour" && g.type === "team"), [tourGroups]);
 
-    const { error: insErr } = await supabase.from("players").insert([
-      {
-        tour_id: tourId,
-        name,
-        start_handicap: Number(newPlayerHandicap) || 0,
-      },
-    ]);
+  function labelForGroup(g: TourGroupRow) {
+    const fallback = `${g.type === "pair" ? "Pair" : "Team"} ${g.id.slice(0, 6)}`;
+    const ids = membersByGroup.get(g.id) ?? [];
 
-    if (insErr) {
-      setError(insErr.message);
-      setSaving(false);
-      return;
+    const storedName = (g.name ?? "").trim();
+    if (storedName) return storedName;
+
+    if (g.type === "pair" && ids.length >= 2) {
+      const a = playerNameById.get(ids[0]) ?? ids[0];
+      const b = playerNameById.get(ids[1]) ?? ids[1];
+      return `${a} / ${b}`;
     }
 
-    setNewPlayerName("");
-    setNewPlayerHandicap(0);
-    setMsg("Player added.");
-    await loadAll();
-    setSaving(false);
+    return fallback;
   }
 
-  async function addCourse() {
-    const name = newCourseName.trim();
-    if (!name) return;
-
-    setSaving(true);
-    setError("");
-    setMsg("");
-
-    const { error: insErr } = await supabase.from("courses").insert([{ tour_id: tourId, name }]);
-
-    if (insErr) {
-      setError(insErr.message);
-      setSaving(false);
-      return;
-    }
-
-    setNewCourseName("");
-    setMsg("Course added.");
-    await loadAll();
-    setSaving(false);
-  }
-
-  async function addRound() {
-    const name = newRoundName.trim();
-
-    if (!name) {
-      setError("Please enter a round name.");
-      return;
-    }
-
-    if (!newRoundCourseId) {
-      setError("Please choose a course for the round.");
-      return;
-    }
-
-    setSaving(true);
-    setError("");
-    setMsg("");
-
-    // 1) Create round (name is required by your DB)
-    const { data: insertedRound, error: roundErr } = await supabase
-      .from("rounds")
-      .insert([{ tour_id: tourId, course_id: newRoundCourseId, name }])
-      .select("id")
-      .single();
-
-    if (roundErr) {
-      setError(roundErr.message);
-      setSaving(false);
-      return;
-    }
-
-    const roundId = insertedRound?.id;
-    if (!roundId) {
-      setError("Round created but no round id returned.");
-      setSaving(false);
-      return;
-    }
-
-    // 2) Seed round_players for all tour players (so round page has checkboxes)
-    if (players.length > 0) {
-      const rows = players.map((p) => ({
-        round_id: roundId,
-        player_id: p.id,
-        playing: false,
-        playing_handicap: p.start_handicap ?? 0,
-      }));
-
-      const { error: rpErr } = await supabase.from("round_players").insert(rows);
-
-      if (rpErr) {
-        setError(rpErr.message);
-        setSaving(false);
-        return;
-      }
-    }
-
-    setMsg("Round created.");
-    setNewRoundName("");
-    await loadAll();
-    setSaving(false);
-
-    // Jump into the new round
-    window.location.href = `/rounds/${roundId}`;
+  function membersLabel(g: TourGroupRow) {
+    const ids = membersByGroup.get(g.id) ?? [];
+    if (!ids.length) return "—";
+    return ids.map((pid) => playerNameById.get(pid) ?? pid).join(g.type === "pair" ? " / " : ", ");
   }
 
   if (loading) return <div style={{ padding: 16 }}>Loading tour…</div>;
@@ -246,121 +225,96 @@ if (!newRoundName.trim()) {
 
   return (
     <div style={{ padding: 16 }}>
-      <div style={{ marginBottom: 10 }}>
-        <Link href="/tours">← Back to Tours</Link>
-      </div>
-
       <h1 style={{ fontSize: 24, fontWeight: 700 }}>{tour?.name ?? "Tour"}</h1>
 
-      <div style={{ marginTop: 8 }}>
-        <Link href={`/tours/${tourId}/leaderboard`}>View Tour Leaderboard</Link>
-      </div>
-
-      {msg && <div style={{ marginTop: 10, color: "green" }}>{msg}</div>}
-
-      {/* Players */}
+      {/* Players (hub) */}
       <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Players</h2>
-
-      <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
-        <input
-          value={newPlayerName}
-          onChange={(e) => setNewPlayerName(e.target.value)}
-          placeholder="New player name"
-          style={{ padding: 8, width: 220 }}
-        />
-
-        <input
-          type="number"
-          value={newPlayerHandicap}
-          onChange={(e) => setNewPlayerHandicap(Number(e.target.value))}
-          placeholder="Start handicap"
-          style={{ padding: 8, width: 140 }}
-        />
-
-        <button onClick={addPlayer} disabled={saving || !newPlayerName.trim()}>
-          Add player
-        </button>
+      <div style={{ marginTop: 8, color: "#333" }}>
+        Total: <strong>{playersInThisTour.length}</strong>
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <Link href={`/tours/${tourId}/players`}>Manage players (this tour) →</Link>
       </div>
 
-      {players.length === 0 ? (
+      {playersInThisTour.length === 0 ? (
         <div style={{ marginTop: 8, color: "#555" }}>No players yet.</div>
       ) : (
         <ul style={{ marginTop: 8 }}>
-          {players.map((p) => (
+          {playersInThisTour.map((p) => (
             <li key={p.id}>
-              {p.name} <span style={{ color: "#777" }}>(start hcp: {p.start_handicap})</span>
+              {p.name} <span style={{ color: "#777" }}>(starting hcp: {p.start_handicap})</span>
             </li>
           ))}
         </ul>
       )}
 
-      {/* Courses */}
-      <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Courses</h2>
+      {/* Pairs & Teams */}
+      <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Pairs &amp; Teams</h2>
+      <div style={{ marginTop: 8 }}>
+        <div style={{ color: "#333" }}>
+          Pairs: <strong>{tourPairs.length}</strong> &nbsp;|&nbsp; Teams: <strong>{tourTeams.length}</strong>
+        </div>
 
-      <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
-        <input
-          value={newCourseName}
-          onChange={(e) => setNewCourseName(e.target.value)}
-          placeholder="New course name"
-          style={{ padding: 8, width: 260 }}
-        />
-        <button onClick={addCourse} disabled={saving || !newCourseName.trim()}>
-          Add course
-        </button>
+        {tourPairs.length === 0 && tourTeams.length === 0 ? (
+          <div style={{ marginTop: 6, color: "#555" }}>No pairs or teams yet.</div>
+        ) : (
+          <div style={{ marginTop: 10 }}>
+            {tourPairs.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Pairs</div>
+                <ul style={{ marginTop: 0 }}>
+                  {tourPairs.map((g) => (
+                    <li key={g.id}>
+                      <strong>{labelForGroup(g)}</strong> <span style={{ color: "#666" }}>({membersLabel(g)})</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {tourTeams.length > 0 && (
+              <div>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Teams</div>
+                <ul style={{ marginTop: 0 }}>
+                  {tourTeams.map((g) => (
+                    <li key={g.id}>
+                      <strong>{labelForGroup(g)}</strong> <span style={{ color: "#666" }}>({membersLabel(g)})</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ marginTop: 8 }}>
+          <Link href={`/tours/${tourId}/groups`}>Manage pairs &amp; teams →</Link>
+        </div>
       </div>
-
-      {courses.length === 0 ? (
-        <div style={{ marginTop: 8, color: "#555" }}>No courses yet.</div>
-      ) : (
-        <ul style={{ marginTop: 8 }}>
-          {courses.map((c) => (
-            <li key={c.id}>{c.name}</li>
-          ))}
-        </ul>
-      )}
 
       {/* Rounds */}
       <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Rounds</h2>
-
-      {courses.length === 0 ? (
-        <div style={{ marginTop: 8, color: "#555" }}>Add a course first, then you can create rounds.</div>
-      ) : (
-        <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
-          <input
-            value={newRoundName}
-            onChange={(e) => setNewRoundName(e.target.value)}
-            placeholder="Round name (e.g. Round 1)"
-            style={{ padding: 8, width: 220 }}
-          />
-
-          <select
-            value={newRoundCourseId}
-            onChange={(e) => setNewRoundCourseId(e.target.value)}
-            style={{ padding: 8 }}
-          >
-            {courses.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-
-          <button onClick={addRound} disabled={saving || !newRoundCourseId || !newRoundName.trim()}>
-            Create round
-          </button>
-        </div>
-      )}
+      <div style={{ marginTop: 8, color: "#333" }}>
+        Total: <strong>{rounds.length}</strong>
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <Link href={`/tours/${tourId}/rounds`}>Manage rounds →</Link>
+      </div>
 
       {rounds.length === 0 ? (
         <div style={{ marginTop: 8, color: "#555" }}>No rounds yet.</div>
       ) : (
         <ul style={{ marginTop: 8 }}>
-          {rounds.map((r, idx) => (
-            <li key={r.id} style={{ marginBottom: 6 }}>
-              <strong>{r.name}</strong> — {courseNameById[r.course_id] ?? r.course_id} |{" "}
-              <Link href={`/rounds/${r.id}`}>Open</Link>
-            </li>
-          ))}
+          {rounds.map((r) => {
+            const courseName = r.course_id ? coursesById[r.course_id]?.name : null;
+
+            return (
+              <li key={r.id} style={{ marginBottom: 6 }}>
+                <strong>{roundLabel(r)}</strong> — {courseName ?? (r.course_id ?? "(no course)")} |{" "}
+                <Link href={`/rounds/${r.id}`}>Open</Link>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

@@ -11,34 +11,65 @@ function pct2(num: number, den: number) {
 }
 
 /**
- * ✅ Because your current CompetitionContext type no longer exposes `scope`,
- * we do runtime narrowing here. This keeps TS happy and the build unblocked.
+ * ✅ Runtime narrowing because your current CompetitionContext typing may not expose scope.
  */
 type TourLikeCtx = {
   scope?: "tour";
-  players: Array<{ id: string; name: string }>;
+  players: Array<{ id: string; name: string; playing?: boolean }>;
   rounds: Array<any>;
-};
 
-type RoundLikeCtx = {
-  scope?: "round";
-  players: Array<{ id: string; name: string }>;
-  // round contexts usually have holes/pars/scores or similar
+  // Optional entity support for pair/team comps
+  entities?: Array<{ entityId: string; label?: string; memberPlayerIds: string[] }>;
+  entityMembersById?: Record<string, string[]>;
+  entityLabelsById?: Record<string, string>;
+  team_best_m?: number;
 };
 
 function isTourContext(ctx: CompetitionContext): ctx is CompetitionContext & TourLikeCtx {
   const c = ctx as any;
-  // Prefer explicit discriminator if present
   if (typeof c?.scope === "string") return c.scope === "tour";
-  // Fallback: tour contexts have an array called rounds
   return Array.isArray(c?.rounds);
 }
 
-function isRoundContext(ctx: CompetitionContext): ctx is CompetitionContext & RoundLikeCtx {
-  const c = ctx as any;
-  if (typeof c?.scope === "string") return c.scope === "round";
-  // Fallback: round contexts do NOT have rounds array
-  return !Array.isArray(c?.rounds);
+function titleCaseKey(key: string) {
+  return key
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (m) => m.toUpperCase())
+    .replace(/\bPct\b/i, "%");
+}
+
+function memberNamesLabel(ctx: TourLikeCtx, memberIds: string[]) {
+  const byId = new Map(ctx.players.map((p) => [p.id, p.name]));
+  return memberIds.map((id) => byId.get(id) ?? id).join(" / ");
+}
+
+function getEntitiesForKind(ctx: TourLikeCtx, kind: "pair" | "team") {
+  const out: Array<{ entityId: string; label: string; memberPlayerIds: string[] }> = [];
+
+  // Prefer explicit entities list if present
+  if (Array.isArray(ctx.entities) && ctx.entities.length) {
+    for (const e of ctx.entities) {
+      const ids = (e as any)?.memberPlayerIds ?? [];
+      if (!Array.isArray(ids) || ids.length === 0) continue;
+      const label = String((e as any)?.label ?? (ctx.entityLabelsById?.[(e as any)?.entityId] ?? (e as any)?.entityId));
+      out.push({ entityId: String((e as any)?.entityId), label, memberPlayerIds: ids.map(String) });
+    }
+    return out;
+  }
+
+  // Fallback to maps if present
+  const membersById = ctx.entityMembersById ?? {};
+  const labelsById = ctx.entityLabelsById ?? {};
+  for (const entityId of Object.keys(membersById)) {
+    const ids = membersById[entityId] ?? [];
+    if (!Array.isArray(ids) || ids.length === 0) continue;
+    out.push({
+      entityId,
+      label: String(labelsById[entityId] ?? entityId),
+      memberPlayerIds: ids.map(String),
+    });
+  }
+  return out;
 }
 
 /**
@@ -67,6 +98,7 @@ function avgStablefordByPar(parTarget: 3 | 4 | 5, id: string, name: string): Com
           const parsByHole: number[] = (r as any)?.parsByHole ?? [];
           const isComplete = (r as any)?.isComplete;
 
+          // requireComplete for this player in this round
           if (typeof isComplete === "function" && !isComplete(p.id)) continue;
 
           for (let i = 0; i < holes.length; i++) {
@@ -229,7 +261,6 @@ function eclectic(id: string, name: string): CompetitionDefinition {
           }
         }
 
-        // If never played a hole, treat as 0
         const total = bestByHole.reduce((s, v) => s + (Number.isFinite(v) ? v : 0), 0);
 
         return {
@@ -246,7 +277,251 @@ function eclectic(id: string, name: string): CompetitionDefinition {
   };
 }
 
+/**
+ * PAIR: Best Ball Stableford across tour
+ * For each hole: take max(points of the two players), sum across all eligible rounds.
+ */
+function tourPairBestBallStableford(id: string, name: string): CompetitionDefinition {
+  return {
+    id,
+    name,
+    scope: "tour",
+    kind: "pair",
+    eligibility: {
+      onlyPlaying: false, // handled by entities
+      requireComplete: true, // will skip any round where a member is incomplete
+    },
+    compute: (ctx: CompetitionContext) => {
+      if (!isTourContext(ctx)) return [];
+
+      const entities = getEntitiesForKind(ctx, "pair");
+      if (entities.length === 0) return [];
+
+      return entities.map((e) => {
+        const members = e.memberPlayerIds.slice(0, 2);
+        let holesPlayed = 0;
+        let totalPts = 0;
+
+        for (const r of ctx.rounds ?? []) {
+          const holes: number[] = (r as any)?.holes ?? [];
+          const isComplete = (r as any)?.isComplete;
+
+          // requireComplete: if any member incomplete in this round, skip this round
+          if (typeof isComplete === "function") {
+            const ok = members.every((pid) => isComplete(pid));
+            if (!ok) continue;
+          }
+
+          for (let i = 0; i < holes.length; i++) {
+            holesPlayed += 1;
+            const ptsA = Number((r as any)?.netPointsForHole?.(members[0], i) ?? 0) || 0;
+            const ptsB = Number((r as any)?.netPointsForHole?.(members[1], i) ?? 0) || 0;
+            totalPts += Math.max(ptsA, ptsB);
+          }
+        }
+
+        return {
+          entryId: e.entityId,
+          label: e.label,
+          total: totalPts,
+          stats: {
+            members: memberNamesLabel(ctx, members),
+            holes_played: holesPlayed,
+            points_total: totalPts,
+          },
+        };
+      });
+    },
+  };
+}
+
+/**
+ * PAIR: Aggregate Stableford across tour
+ * For each hole: sum(points of both), sum across rounds.
+ */
+function tourPairAggregateStableford(id: string, name: string): CompetitionDefinition {
+  return {
+    id,
+    name,
+    scope: "tour",
+    kind: "pair",
+    eligibility: {
+      onlyPlaying: false,
+      requireComplete: true,
+    },
+    compute: (ctx: CompetitionContext) => {
+      if (!isTourContext(ctx)) return [];
+
+      const entities = getEntitiesForKind(ctx, "pair");
+      if (entities.length === 0) return [];
+
+      return entities.map((e) => {
+        const members = e.memberPlayerIds.slice(0, 2);
+        let holesPlayed = 0;
+        let totalPts = 0;
+
+        for (const r of ctx.rounds ?? []) {
+          const holes: number[] = (r as any)?.holes ?? [];
+          const isComplete = (r as any)?.isComplete;
+
+          if (typeof isComplete === "function") {
+            const ok = members.every((pid) => isComplete(pid));
+            if (!ok) continue;
+          }
+
+          for (let i = 0; i < holes.length; i++) {
+            holesPlayed += 1;
+            const ptsA = Number((r as any)?.netPointsForHole?.(members[0], i) ?? 0) || 0;
+            const ptsB = Number((r as any)?.netPointsForHole?.(members[1], i) ?? 0) || 0;
+            totalPts += ptsA + ptsB;
+          }
+        }
+
+        return {
+          entryId: e.entityId,
+          label: e.label,
+          total: totalPts,
+          stats: {
+            members: memberNamesLabel(ctx, members),
+            holes_played: holesPlayed,
+            points_total: totalPts,
+          },
+        };
+      });
+    },
+  };
+}
+
+/**
+ * TEAM: Best M per hole, minus zeros (your custom team comp)
+ * For each hole:
+ *   sum top M member points, then subtract number of 0-point scores on that hole.
+ */
+function tourTeamBestMMinusZeros(id: string, name: string): CompetitionDefinition {
+  return {
+    id,
+    name,
+    scope: "tour",
+    kind: "team",
+    eligibility: {
+      onlyPlaying: false,
+      requireComplete: true,
+    },
+    compute: (ctx: CompetitionContext) => {
+      if (!isTourContext(ctx)) return [];
+
+      const entities = getEntitiesForKind(ctx, "team");
+      if (entities.length === 0) return [];
+
+      const m = Math.max(1, Math.floor(Number((ctx as any)?.team_best_m ?? 2)));
+
+      return entities.map((e) => {
+        const members = e.memberPlayerIds;
+        let holesPlayed = 0;
+        let totalPts = 0;
+        let zeroCountTotal = 0;
+
+        for (const r of ctx.rounds ?? []) {
+          const holes: number[] = (r as any)?.holes ?? [];
+          const isComplete = (r as any)?.isComplete;
+
+          if (typeof isComplete === "function") {
+            const ok = members.every((pid) => isComplete(pid));
+            if (!ok) continue;
+          }
+
+          for (let i = 0; i < holes.length; i++) {
+            holesPlayed += 1;
+
+            const pts = members.map((pid) => Number((r as any)?.netPointsForHole?.(pid, i) ?? 0) || 0);
+            const zeros = pts.filter((x) => x === 0).length;
+            zeroCountTotal += zeros;
+
+            const topM = pts
+              .slice()
+              .sort((a, b) => b - a)
+              .slice(0, Math.min(m, pts.length))
+              .reduce((s, v) => s + v, 0);
+
+            totalPts += topM - zeros;
+          }
+        }
+
+        return {
+          entryId: e.entityId,
+          label: e.label,
+          total: totalPts,
+          stats: {
+            members: memberNamesLabel(ctx, members),
+            holes_played: holesPlayed,
+            points_total: totalPts,
+            team_best_m: m,
+            zero_count: zeroCountTotal,
+          },
+        };
+      });
+    },
+  };
+}
+
+/**
+ * TEAM: Aggregate Stableford across tour (simple baseline)
+ */
+function tourTeamAggregateStableford(id: string, name: string): CompetitionDefinition {
+  return {
+    id,
+    name,
+    scope: "tour",
+    kind: "team",
+    eligibility: {
+      onlyPlaying: false,
+      requireComplete: true,
+    },
+    compute: (ctx: CompetitionContext) => {
+      if (!isTourContext(ctx)) return [];
+
+      const entities = getEntitiesForKind(ctx, "team");
+      if (entities.length === 0) return [];
+
+      return entities.map((e) => {
+        const members = e.memberPlayerIds;
+        let holesPlayed = 0;
+        let totalPts = 0;
+
+        for (const r of ctx.rounds ?? []) {
+          const holes: number[] = (r as any)?.holes ?? [];
+          const isComplete = (r as any)?.isComplete;
+
+          if (typeof isComplete === "function") {
+            const ok = members.every((pid) => isComplete(pid));
+            if (!ok) continue;
+          }
+
+          for (let i = 0; i < holes.length; i++) {
+            holesPlayed += 1;
+            for (const pid of members) {
+              totalPts += Number((r as any)?.netPointsForHole?.(pid, i) ?? 0) || 0;
+            }
+          }
+        }
+
+        return {
+          entryId: e.entityId,
+          label: e.label,
+          total: totalPts,
+          stats: {
+            members: memberNamesLabel(ctx, members),
+            holes_played: holesPlayed,
+            points_total: totalPts,
+          },
+        };
+      });
+    },
+  };
+}
+
 export const competitionCatalog: CompetitionDefinition[] = [
+  // Individual tour comps
   avgStablefordByPar(3, "tour_napoleon_par3_avg", "Napoleon (Par 3 avg)"),
   avgStablefordByPar(4, "tour_big_george_par4_avg", "Big George (Par 4 avg)"),
   avgStablefordByPar(5, "tour_grand_canyon_par5_avg", "Grand Canyon (Par 5 avg)"),
@@ -254,4 +529,12 @@ export const competitionCatalog: CompetitionDefinition[] = [
   bagelMan("tour_bagel_man_zero_pct", "Bagel Man (% zero holes)"),
   wizard("tour_wizard_four_plus_pct", "Wizard (% 4+ holes)"),
   eclectic("tour_eclectic_total", "Eclectic (best per hole)"),
+
+  // ✅ Pair tour comps
+  tourPairBestBallStableford("tour_pair_best_ball_stableford", "Pairs: Best Ball (Stableford)"),
+  tourPairAggregateStableford("tour_pair_aggregate_stableford", "Pairs: Aggregate (Stableford)"),
+
+  // ✅ Team tour comps
+  tourTeamBestMMinusZeros("tour_team_best_m_minus_zeros", "Teams: Best M per hole − zeros"),
+  tourTeamAggregateStableford("tour_team_aggregate_stableford", "Teams: Aggregate (Stableford)"),
 ];

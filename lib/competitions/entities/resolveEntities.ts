@@ -6,9 +6,9 @@ export type CompetitionKind = "individual" | "pair" | "team";
 
 export type LeaderboardEntity = {
   entityType: CompetitionKind;
-  entityId: string;           // playerId OR tour_groups.id OR implicit:* id
-  name: string;               // display label
-  memberPlayerIds: string[];  // 1 for individual, 2 for pair, N for team
+  entityId: string; // playerId OR tour_groups.id OR implicit:* id
+  name: string; // display label
+  memberPlayerIds: string[]; // 1 for individual, 2 for pair, N for team
 };
 
 type PlayerRow = {
@@ -30,6 +30,26 @@ function stablePlayerSort(a: PlayerRow, b: PlayerRow) {
   return a.id.localeCompare(b.id);
 }
 
+function asPairingMode(x: any): PairingMode {
+  const v = String(x ?? "").toUpperCase();
+  // Accept known modes only; fallback safely.
+  if (v === "SEQUENTIAL" || v === "RANDOM" || v === "BALANCED") return v as PairingMode;
+  return "SEQUENTIAL";
+}
+
+function asTeamMode(x: any): TeamMode {
+  const v = String(x ?? "").toUpperCase();
+  if (v === "ROUND_ROBIN" || v === "SEQUENTIAL" || v === "RANDOM") return v as TeamMode;
+  return "ROUND_ROBIN";
+}
+
+function asPositiveInt(x: any, fallback: number) {
+  const n = Number(x);
+  if (!Number.isFinite(n)) return fallback;
+  const k = Math.floor(n);
+  return k >= 1 ? k : fallback;
+}
+
 export async function resolveEntities(params: {
   tourId: string;
   scope: GroupScope; // "tour" | "round"
@@ -38,96 +58,99 @@ export async function resolveEntities(params: {
 }): Promise<{ entities: LeaderboardEntity[]; error?: string }> {
   const { tourId, scope, kind, roundId } = params;
 
-  // 1) Load players (needed for individual + implicit grouping)
-  const { data: playerData, error: playersErr } = await supabase
-    .from("players")
-    .select("id,tour_id,name,created_at")
-    .eq("tour_id", tourId);
+  try {
+    // 1) Load players (needed for individual + implicit grouping)
+    const { data: playerData, error: playersErr } = await supabase
+      .from("players")
+      .select("id,tour_id,name,created_at")
+      .eq("tour_id", tourId);
 
-  if (playersErr) {
-    return { entities: [], error: playersErr.message };
-  }
+    if (playersErr) return { entities: [], error: playersErr.message };
 
-  const players = ((playerData ?? []) as PlayerRow[]).slice().sort(stablePlayerSort);
+    const players = ((playerData ?? []) as PlayerRow[]).slice().sort(stablePlayerSort);
 
-  // ─────────────────────────────────────────────
-  // INDIVIDUAL
-  // ─────────────────────────────────────────────
-  if (kind === "individual") {
-    return {
-      entities: players.map((p) => ({
-        entityType: "individual",
-        entityId: p.id,
-        name: p.name,
-        memberPlayerIds: [p.id],
-      })),
-    };
-  }
+    // INDIVIDUAL
+    if (kind === "individual") {
+      return {
+        entities: players.map((p) => ({
+          entityType: "individual",
+          entityId: p.id,
+          name: p.name,
+          memberPlayerIds: [p.id],
+        })),
+      };
+    }
 
-  // ─────────────────────────────────────────────
-  // PAIR / TEAM — try explicit DB groups first
-  // ─────────────────────────────────────────────
-  const groupType: GroupType = kind === "pair" ? "pair" : "team";
+    // PAIR / TEAM — try explicit DB groups first
+    const groupType: GroupType = kind === "pair" ? "pair" : "team";
 
-  const explicit = await getTourGroups({
-    tourId,
-    scope,
-    type: groupType,
-    roundId,
-  });
+    const explicit = await getTourGroups({
+      tourId,
+      scope,
+      type: groupType,
+      roundId,
+    });
 
-  if (!explicit.error && explicit.groups.length > 0) {
-    return {
-      entities: explicit.groups.map((g) => ({
-        entityType: kind,
-        entityId: g.id,
-        name: g.name,
-        memberPlayerIds: g.members.map((m) => m.player_id),
-      })),
-    };
-  }
+    if (!explicit.error && explicit.groups.length > 0) {
+      return {
+        entities: explicit.groups.map((g) => ({
+          entityType: kind,
+          entityId: g.id,
+          name: g.name,
+          memberPlayerIds: (g.members ?? []).map((m) => m.player_id).filter(Boolean),
+        })),
+      };
+    }
 
-  // ─────────────────────────────────────────────
-  // IMPLICIT FALLBACK
-  // ─────────────────────────────────────────────
-  const { settings } = await getGroupingSettings(tourId);
+    // IMPLICIT FALLBACK
+    // IMPORTANT: getGroupingSettings may fail; we must default safely.
+    let settings: any = {};
+    try {
+      const res = await getGroupingSettings(tourId);
+      settings = (res as any)?.settings ?? {};
+    } catch {
+      settings = {};
+    }
 
-  const playersForGrouping = players.map((p) => ({
-    id: p.id,
-    name: p.name,
-  }));
+    const playersForGrouping = players.map((p) => ({ id: p.id, name: p.name }));
 
-  if (kind === "pair") {
-    const pairs = makeImplicitPairs({
+    if (kind === "pair") {
+      const pairs = makeImplicitPairs({
+        players: playersForGrouping,
+        mode: asPairingMode(settings.default_pairing_mode),
+      });
+
+      return {
+        entities: pairs.map((p) => ({
+          entityType: "pair",
+          entityId: p.id,
+          name: p.name,
+          memberPlayerIds: p.memberPlayerIds,
+        })),
+        // If explicit failed, optionally surface that as info (but don't block results)
+        error: explicit.error ? `Explicit pairs not available: ${explicit.error}` : undefined,
+      };
+    }
+
+    // kind === "team"
+    const teamCount = asPositiveInt(settings.default_team_count, 2);
+
+    const teams = makeImplicitTeams({
       players: playersForGrouping,
-      mode: (settings.default_pairing_mode as PairingMode) ?? "SEQUENTIAL",
+      teamCount,
+      mode: asTeamMode(settings.default_team_mode),
     });
 
     return {
-      entities: pairs.map((p) => ({
-        entityType: "pair",
-        entityId: p.id,
-        name: p.name,
-        memberPlayerIds: p.memberPlayerIds,
+      entities: teams.map((t) => ({
+        entityType: "team",
+        entityId: t.id,
+        name: t.name,
+        memberPlayerIds: t.memberPlayerIds,
       })),
+      error: explicit.error ? `Explicit teams not available: ${explicit.error}` : undefined,
     };
+  } catch (e: any) {
+    return { entities: [], error: e?.message ?? "resolveEntities failed" };
   }
-
-  // kind === "team"
-  const teamCount = Math.max(1, Math.floor(settings.default_team_count ?? 2));
-
-  const teams = makeImplicitTeams({
-    players: playersForGrouping,
-    teamCount,
-    mode: (settings.default_team_mode as TeamMode) ?? "ROUND_ROBIN",
-  });
-
-  return {
-    entities: teams.map((t) => ({
-      entityType: "team",
-      entityId: t.id,
-      name: t.name,
-      memberPlayerIds: t.memberPlayerIds,
-    })),
-  };
 }
