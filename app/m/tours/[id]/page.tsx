@@ -1,30 +1,59 @@
-// app/m/tours/[id]/page.tsx
-import Link from "next/link";
+'use client';
 
-export default function MobileTourOverviewPage({ params }: { params: { id: string } }) {
-  const tourId = params.id;
+import { useParams, useRouter } from 'next/navigation';
+
+export default function MobileTourHomePage() {
+  const params = useParams();
+  const router = useRouter();
+
+  const tourId = (params?.id as string) || '';
 
   return (
-    <div>
-      <h1 style={{ fontSize: 20, fontWeight: 900, margin: 0 }}>Overview</h1>
-      <div style={{ marginTop: 8, color: "#555", fontSize: 13 }}>
-        Mobile tour home. We’ll add tour summary, today’s round, and quick links here.
+    <div className="min-h-screen bg-white text-gray-900">
+      {/* Header */}
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-200">
+        <div className="h-12 px-3 flex items-center">
+          <div className="flex-1 text-center font-semibold">
+            Tour
+          </div>
+        </div>
       </div>
 
-      <div style={{ marginTop: 14, padding: 12, border: "1px solid #eee", borderRadius: 12 }}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Quick links</div>
+      <div className="px-4 py-6 max-w-md mx-auto space-y-3">
+        <button
+          className="w-full h-12 rounded-xl border border-gray-300 font-medium"
+          onClick={() => router.push(`/m/tours/${tourId}/rounds`)}
+        >
+          Rounds
+        </button>
 
-        <div style={{ display: "grid", gap: 10 }}>
-          <Link href={`/m/tours/${tourId}/scoring`} style={{ textDecoration: "underline" }}>
-            Scoring access
-          </Link>
-          <Link href={`/m/tours/${tourId}/leaderboards`} style={{ textDecoration: "underline" }}>
-            Leaderboards
-          </Link>
-          <Link href={`/tours/${tourId}/leaderboard`} style={{ textDecoration: "underline" }}>
-            Desktop leaderboard
-          </Link>
-        </div>
+        <button
+          className="w-full h-12 rounded-xl border border-gray-300 font-medium"
+          onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}
+        >
+          Leaderboards
+        </button>
+
+        <button
+          className="w-full h-12 rounded-xl border border-gray-300 font-medium"
+          onClick={() => router.push(`/m/tours/${tourId}/competitions`)}
+        >
+          Competitions
+        </button>
+
+        <button
+          className="w-full h-12 rounded-xl border border-gray-300 font-medium"
+          onClick={() => router.push(`/m/tours/${tourId}/stats`)}
+        >
+          Player stats
+        </button>
+
+        <button
+          className="w-full h-12 rounded-xl border border-gray-300 font-medium"
+          onClick={() => router.push(`/m/tours/${tourId}/more`)}
+        >
+          More
+        </button>
       </div>
     </div>
   );
