@@ -17,7 +17,7 @@ type TourPlayerRow = {
   player_id: string;
   starting_handicap: number | null;
   created_at?: string | null;
-  players?: Player | null; // joined
+  players?: Player | null; // joined (may be object OR array depending on relationship config)
 };
 
 function intOrNull(s: string): number | null {
@@ -26,6 +26,25 @@ function intOrNull(s: string): number | null {
   const n = Number(t);
   if (!Number.isFinite(n)) return null;
   return Math.trunc(n);
+}
+
+function normalizePlayerJoin(val: any): Player | null {
+  if (!val) return null;
+
+  // Supabase nested select may return either:
+  // - object: { id, name, starting_handicap }
+  // - array:  [{ id, name, starting_handicap }]
+  const p = Array.isArray(val) ? val[0] : val;
+  if (!p) return null;
+
+  const id = p.id != null ? String(p.id) : "";
+  if (!id) return null;
+
+  const name = p.name != null ? String(p.name) : "(missing player)";
+  const h = p.starting_handicap;
+  const starting_handicap = Number.isFinite(Number(h)) ? Number(h) : 0;
+
+  return { id, name, starting_handicap };
 }
 
 export default function TourPlayersPage() {
@@ -73,8 +92,25 @@ export default function TourPlayersPage() {
       if (pErr) throw new Error(pErr.message);
       if (tpErr) throw new Error(tpErr.message);
 
-      const players = (pData ?? []) as Player[];
-      const membership = (tpData ?? []) as TourPlayerRow[];
+      const players: Player[] = (pData ?? []).map((r: any) => ({
+        id: String(r.id),
+        name: String(r.name),
+        starting_handicap: Number.isFinite(Number(r.starting_handicap)) ? Number(r.starting_handicap) : 0,
+      }));
+
+      const membership: TourPlayerRow[] = (tpData ?? []).map((row: any) => {
+        const joined = normalizePlayerJoin(row.players);
+        const starting_handicap =
+          row.starting_handicap == null ? null : Number.isFinite(Number(row.starting_handicap)) ? Number(row.starting_handicap) : null;
+
+        return {
+          tour_id: String(row.tour_id),
+          player_id: String(row.player_id),
+          starting_handicap,
+          created_at: row.created_at ?? null,
+          players: joined,
+        };
+      });
 
       setTour(tData as Tour);
       setAllPlayers(players);
