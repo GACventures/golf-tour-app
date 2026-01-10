@@ -1,21 +1,48 @@
-// app/m/tours/[id]/leaderboards/page.tsx
-import Link from "next/link";
+'use client';
 
-export default function MobileLeaderboardsPage({ params }: { params: { id: string } }) {
-  const tourId = params.id;
+import { useParams, useRouter } from 'next/navigation';
+
+export default function MobileLeaderboardsPage() {
+  const params = useParams();
+  const router = useRouter();
+
+  const tourId = (params?.id as string) || '';
+
+  function goBack() {
+    router.push(`/m/tours/${tourId}`);
+  }
 
   return (
-    <div>
-      <h1 style={{ fontSize: 20, fontWeight: 900, margin: 0 }}>Leaderboards</h1>
-      <div style={{ marginTop: 8, color: "#555", fontSize: 13 }}>
-        Placeholder. Next we’ll reuse your existing tour leaderboard logic and make it mobile-friendly.
+    <div className="min-h-screen bg-white text-gray-900">
+      {/* Header */}
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-200">
+        <div className="h-12 px-3 flex items-center">
+          <button
+            type="button"
+            onClick={goBack}
+            className="w-10 h-10 -ml-1 flex items-center justify-center rounded-full active:bg-gray-100"
+            aria-label="Back"
+          >
+            <span className="text-2xl leading-none">‹</span>
+          </button>
+
+          <div className="flex-1 text-center font-semibold">
+            Leaderboards
+          </div>
+
+          <div className="w-10 h-10" />
+        </div>
       </div>
 
-      <div style={{ marginTop: 14, padding: 12, border: "1px solid #eee", borderRadius: 12 }}>
-        <div style={{ fontWeight: 800, marginBottom: 6 }}>For now</div>
-        <Link href={`/tours/${tourId}/leaderboard`} style={{ textDecoration: "underline" }}>
-          Open desktop leaderboard
-        </Link>
+      <div className="px-4 py-6 max-w-md mx-auto">
+        <div className="rounded-xl border border-gray-200 p-4 shadow-sm">
+          <div className="text-sm text-gray-600">
+            Placeholder page: <span className="font-medium">Leaderboards</span>
+          </div>
+          <div className="text-xs text-gray-500 mt-2">
+            Individual / Pairs / Teams leaderboards will live here.
+          </div>
+        </div>
       </div>
     </div>
   );
