@@ -1,23 +1,53 @@
-// app/m/tours/[id]/more/page.tsx
-import Link from "next/link";
+'use client';
 
-export default function MobileMorePage({ params }: { params: { id: string } }) {
-  const tourId = params.id;
+import { useParams, useRouter } from 'next/navigation';
+
+export default function MobileMorePage() {
+  const params = useParams();
+  const router = useRouter();
+
+  const tourId = (params?.id as string) || '';
+
+  function goBack() {
+    router.push(`/m/tours/${tourId}`);
+  }
 
   return (
-    <div>
-      <h1 style={{ fontSize: 20, fontWeight: 900, margin: 0 }}>More</h1>
-      <div style={{ marginTop: 8, color: "#555", fontSize: 13 }}>
-        Placeholder. This is where “Other competitions” and “Key stats” will live.
+    <div className="min-h-screen bg-white text-gray-900">
+      {/* Header */}
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-200">
+        <div className="h-12 px-3 flex items-center">
+          <button
+            type="button"
+            onClick={goBack}
+            className="w-10 h-10 -ml-1 flex items-center justify-center rounded-full active:bg-gray-100"
+            aria-label="Back"
+          >
+            <span className="text-2xl leading-none">‹</span>
+          </button>
+
+          <div className="flex-1 text-center font-semibold">More</div>
+
+          <div className="w-10 h-10" />
+        </div>
       </div>
 
-      <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-        <Link href={`/m/tours/${tourId}/competitions`} style={{ textDecoration: "underline" }}>
-          Other competition results
-        </Link>
-        <Link href={`/m/tours/${tourId}/stats`} style={{ textDecoration: "underline" }}>
-          Key statistics by player
-        </Link>
+      <div className="px-4 py-6 max-w-md mx-auto space-y-3">
+        <div className="rounded-xl border border-gray-200 p-4 shadow-sm">
+          <div className="text-sm text-gray-600">
+            Placeholder page: <span className="font-medium">More</span>
+          </div>
+          <div className="text-xs text-gray-500 mt-2">
+            Future items: settings, about, rules, help, etc.
+          </div>
+        </div>
+
+        <button
+          className="w-full h-12 rounded-xl border border-gray-300 font-medium"
+          onClick={() => router.push(`/m/tours/${tourId}`)}
+        >
+          Back to Tour
+        </button>
       </div>
     </div>
   );
