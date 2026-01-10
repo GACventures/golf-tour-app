@@ -15,14 +15,22 @@ type Course = { id: string; name: string; tour_id: string | null };
 type Player = { id: string; name: string; start_handicap: number };
 
 // Tour membership row (join)
+// NOTE: Supabase nested select can come back as an object OR array depending on relationship config.
 type TourPlayerRow = {
   tour_id: string;
   player_id: string;
-  starting_handicap: number;
+  starting_handicap: number | null;
   players: { id: string; name: string; start_handicap: number } | null;
 };
 
-type Round = { id: string; tour_id: string; course_id: string | null; name: string; round_no: number | null; created_at: string | null };
+type Round = {
+  id: string;
+  tour_id: string;
+  course_id: string | null;
+  name: string;
+  round_no: number | null;
+  created_at: string | null;
+};
 
 type TourGroupRow = {
   id: string;
@@ -44,6 +52,26 @@ function roundLabel(r: { id: string; name: string | null; round_no: number | nul
   if (r.round_no) return `Round ${r.round_no}${nm ? `: ${nm}` : ""}`;
   if (nm) return nm;
   return r.id;
+}
+
+function normalizePlayerJoin(val: any): { id: string; name: string; start_handicap: number } | null {
+  if (!val) return null;
+
+  // Supabase may return either:
+  // - object: { id, name, start_handicap }
+  // - array:  [{ id, name, start_handicap }]
+  const p = Array.isArray(val) ? val[0] : val;
+  if (!p) return null;
+
+  const id = p.id != null ? String(p.id) : "";
+  const name = p.name != null ? String(p.name) : "";
+  const sh = p.start_handicap ?? p.start_handicap ?? p.start_handicap; // harmless, but keep robust
+
+  // start_handicap should be numeric; coerce safely
+  const start_handicap = Number.isFinite(Number(sh)) ? Number(sh) : 0;
+
+  if (!id) return null;
+  return { id, name: name || "(missing player)", start_handicap };
 }
 
 export default function TourPage() {
@@ -94,10 +122,7 @@ export default function TourPage() {
       // ✅ Courses: fetch by the course_ids used by these rounds (works for GLOBAL courses too)
       const courseIds = Array.from(new Set(roundList.map((r) => r.course_id).filter(Boolean))) as string[];
       if (courseIds.length) {
-        const { data: cData, error: cErr } = await supabase
-          .from("courses")
-          .select("id,name,tour_id")
-          .in("id", courseIds);
+        const { data: cData, error: cErr } = await supabase.from("courses").select("id,name,tour_id").in("id", courseIds);
 
         if (cErr) throw new Error(cErr.message);
 
@@ -119,7 +144,24 @@ export default function TourPage() {
         .order("name", { ascending: true, foreignTable: "players" });
 
       if (tpErr) throw new Error(tpErr.message);
-      setTourPlayers((tpData ?? []) as TourPlayerRow[]);
+
+      const normalizedTP: TourPlayerRow[] = (tpData ?? []).map((row: any) => {
+        // Some schemas call the player’s handicap column start_handicap; your Player type uses start_handicap.
+        // Supabase select asked for start_handicap, so normalize accordingly.
+        const playerObj = normalizePlayerJoin(row.players);
+
+        const starting_handicap =
+          row.starting_handicap == null ? null : Number.isFinite(Number(row.starting_handicap)) ? Number(row.starting_handicap) : null;
+
+        return {
+          tour_id: String(row.tour_id),
+          player_id: String(row.player_id),
+          starting_handicap,
+          players: playerObj,
+        };
+      });
+
+      setTourPlayers(normalizedTP);
 
       // Pairs/Teams groups (tour scope)
       const { data: gData, error: gErr } = await supabase
@@ -143,10 +185,7 @@ export default function TourPage() {
         return;
       }
 
-      const { data: mData, error: mErr } = await supabase
-        .from("tour_group_members")
-        .select("group_id,player_id")
-        .in("group_id", groupIds);
+      const { data: mData, error: mErr } = await supabase.from("tour_group_members").select("group_id,player_id").in("group_id", groupIds);
 
       if (mErr) throw new Error(mErr.message);
 
