@@ -92,7 +92,9 @@ type PairRow = {
 // Helpers
 // -----------------------------
 function isLikelyUuid(v: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    v
+  );
 }
 
 function safeName(v: any, fallback: string) {
@@ -244,7 +246,7 @@ export default function MobileLeaderboardsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
-        // round_players (playing handicap per round)
+        // round_players
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
@@ -258,7 +260,9 @@ export default function MobileLeaderboardsPage() {
             round_id: String(x.round_id),
             player_id: String(x.player_id),
             playing: x.playing === true,
-            playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
+            playing_handicap: Number.isFinite(Number(x.playing_handicap))
+              ? Number(x.playing_handicap)
+              : null,
           }));
 
           if (!alive) return;
@@ -282,8 +286,10 @@ export default function MobileLeaderboardsPage() {
           setScores([]);
         }
 
-        // pars for all courses in rounds (both tees)
-        const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
+        // pars
+        const courseIds = Array.from(
+          new Set(rr.map((r) => r.course_id).filter(Boolean))
+        ) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
             .from("pars")
@@ -309,7 +315,7 @@ export default function MobileLeaderboardsPage() {
           setPars([]);
         }
 
-        // Load Pairs from tour_groups + tour_group_members (tour-level)
+        // pairs: tour_groups + tour_group_members
         const { data: gData, error: gErr } = await supabase
           .from("tour_groups")
           .select("id,tour_id,scope,round_id,type,name,team_index")
@@ -399,7 +405,12 @@ export default function MobileLeaderboardsPage() {
     return m;
   }, [scores]);
 
-  // NEW: playerId -> name
+  const playerById = useMemo(() => {
+    const m = new Map<string, PlayerRow>();
+    for (const p of players) m.set(p.id, p);
+    return m;
+  }, [players]);
+
   const playerNameById = useMemo(() => {
     const m = new Map<string, string>();
     for (const p of players) m.set(p.id, p.name);
@@ -471,7 +482,7 @@ export default function MobileLeaderboardsPage() {
   }, [kind, individualRule, finalRoundId, sortedRounds]);
 
   // -----------------------------
-  // Compute Individual totals by round + tour total
+  // Individual totals
   // -----------------------------
   const individualRows = useMemo(() => {
     const rows: Array<{
@@ -500,23 +511,26 @@ export default function MobileLeaderboardsPage() {
         }
 
         const rp = rpByRoundPlayer.get(`${r.id}|${p.id}`);
+        const isPlaying = rp?.playing === true;
         const hcp = Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp?.playing_handicap) : 0;
 
         let sum = 0;
-        for (let h = 1; h <= 18; h++) {
-          const pr = parsMap.get(h);
-          if (!pr) continue;
+        if (isPlaying) {
+          for (let h = 1; h <= 18; h++) {
+            const pr = parsMap.get(h);
+            if (!pr) continue;
 
-          const sc = scoreByRoundPlayerHole.get(`${r.id}|${p.id}|${h}`);
-          if (!sc) continue;
+            const sc = scoreByRoundPlayerHole.get(`${r.id}|${p.id}|${h}`);
+            if (!sc) continue;
 
-          const raw = normalizeRawScore(sc.strokes, sc.pickup);
-          sum += netStablefordPointsForHole({
-            rawScore: raw,
-            par: pr.par,
-            strokeIndex: pr.si,
-            playingHandicap: hcp,
-          });
+            const raw = normalizeRawScore(sc.strokes, sc.pickup);
+            sum += netStablefordPointsForHole({
+              rawScore: raw,
+              par: pr.par,
+              strokeIndex: pr.si,
+              playingHandicap: hcp,
+            });
+          }
         }
 
         perRound[r.id] = sum;
@@ -529,6 +543,96 @@ export default function MobileLeaderboardsPage() {
     rows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
     return rows;
   }, [players, sortedRounds, parsByCourseTeeHole, rpByRoundPlayer, scoreByRoundPlayerHole]);
+
+  // -----------------------------
+  // Pairs scoring (Better Ball Stableford per hole)
+  // -----------------------------
+  const pairRows = useMemo(() => {
+    const rows: Array<{
+      pairId: string;
+      name: string;
+      memberNames: string;
+      tourTotal: number;
+      perRound: Record<string, number>;
+    }> = [];
+
+    for (const pair of pairs) {
+      const perRound: Record<string, number> = {};
+      let tourTotal = 0;
+
+      const memberNames = pair.playerIds
+        .map((pid) => playerNameById.get(pid) ?? "(unknown)")
+        .join(" · ");
+
+      for (const r of sortedRounds) {
+        const courseId = r.course_id;
+        if (!courseId) {
+          perRound[r.id] = 0;
+          continue;
+        }
+
+        let roundSum = 0;
+
+        for (let hole = 1; hole <= 18; hole++) {
+          let bestForHole = 0;
+
+          for (const pid of pair.playerIds) {
+            const rp = rpByRoundPlayer.get(`${r.id}|${pid}`);
+            const isPlaying = rp?.playing === true;
+            if (!isPlaying) continue; // only include players playing in this round
+
+            const player = playerById.get(pid);
+            const tee: Tee = normalizeTee(player?.gender);
+            const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(hole);
+            if (!pr) continue;
+
+            const sc = scoreByRoundPlayerHole.get(`${r.id}|${pid}|${hole}`);
+            if (!sc) {
+              // missing score counts as 0 (but still eligible)
+              bestForHole = Math.max(bestForHole, 0);
+              continue;
+            }
+
+            const raw = normalizeRawScore(sc.strokes, sc.pickup);
+            const hcp = Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp?.playing_handicap) : 0;
+
+            const pts = netStablefordPointsForHole({
+              rawScore: raw,
+              par: pr.par,
+              strokeIndex: pr.si,
+              playingHandicap: hcp,
+            });
+
+            bestForHole = Math.max(bestForHole, Number.isFinite(pts) ? pts : 0);
+          }
+
+          roundSum += bestForHole;
+        }
+
+        perRound[r.id] = roundSum;
+        tourTotal += roundSum;
+      }
+
+      rows.push({
+        pairId: pair.groupId,
+        name: pair.name,
+        memberNames,
+        tourTotal,
+        perRound,
+      });
+    }
+
+    rows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
+    return rows;
+  }, [
+    pairs,
+    sortedRounds,
+    rpByRoundPlayer,
+    scoreByRoundPlayerHole,
+    parsByCourseTeeHole,
+    playerById,
+    playerNameById,
+  ]);
 
   // -----------------------------
   // UI
@@ -553,25 +657,11 @@ export default function MobileLeaderboardsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Header */}
+      {/* Sticky header (simplified as requested) */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-base font-semibold text-gray-900">Boards</div>
-              <div className="truncate text-sm text-gray-500">{tour?.name ?? ""}</div>
-            </div>
-
-            <Link
-              href={`/m/tours/${tourId}`}
-              className="rounded-xl border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
-            >
-              Overview
-            </Link>
-          </div>
-
           {/* Segment control */}
-          <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <button
               type="button"
               onClick={() => setKind("individual")}
@@ -692,38 +782,36 @@ export default function MobileLeaderboardsPage() {
                       </tr>
                     ))
                   ) : kind === "pairs" ? (
-                    pairs.length === 0 ? (
+                    pairRows.length === 0 ? (
                       <tr>
                         <td colSpan={2 + sortedRounds.length} className="px-4 py-6 text-sm text-gray-700">
                           No pairs found in <b>tour_groups</b> for this tour.
                         </td>
                       </tr>
                     ) : (
-                      pairs.map((pair) => {
-                        const memberNames = pair.playerIds
-                          .map((pid) => playerNameById.get(pid) ?? "(unknown)")
-                          .join(" · ");
-                        return (
-                          <tr key={pair.groupId} className="border-b last:border-b-0">
-                            <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                              <div className="leading-tight">{pair.name}</div>
-                              <div className="mt-1 text-xs font-medium text-gray-500">{memberNames}</div>
-                            </td>
+                      pairRows.map((pair) => (
+                        <tr key={pair.pairId} className="border-b last:border-b-0">
+                          <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                            <div className="leading-tight">{pair.name}</div>
+                            <div className="mt-1 text-xs font-medium text-gray-500">{pair.memberNames}</div>
+                          </td>
 
-                            <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                              <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
-                                {0}
-                              </span>
-                            </td>
+                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
+                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
+                              {pair.tourTotal}
+                            </span>
+                          </td>
 
-                            {sortedRounds.map((r) => (
+                          {sortedRounds.map((r) => {
+                            const v = pair.perRound[r.id] ?? 0;
+                            return (
                               <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                                <span className="inline-flex min-w-[44px] justify-end rounded-md px-2 py-1">{0}</span>
+                                <span className="inline-flex min-w-[44px] justify-end rounded-md px-2 py-1">{v}</span>
                               </td>
-                            ))}
-                          </tr>
-                        );
-                      })
+                            );
+                          })}
+                        </tr>
+                      ))
                     )
                   ) : (
                     <tr>
@@ -731,8 +819,7 @@ export default function MobileLeaderboardsPage() {
                         <div className="space-y-2">
                           <div className="font-semibold">Teams leaderboard</div>
                           <div className="opacity-80">
-                            Next step later: implement team scoring (best {teamRule.bestY} per hole, -1 per zero) across
-                            all rounds.
+                            Next step: implement team scoring (best Y per hole, -1 per zero) across all rounds.
                           </div>
                         </div>
                       </td>
