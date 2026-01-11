@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 
 import { supabase } from "@/lib/supabaseClient";
-import MobileNav from "../../_components/MobileNav";
+import MobileNav from "../_components/MobileNav";
 
 type Tee = "M" | "F";
 
@@ -160,30 +160,10 @@ export default function MobileCompetitionsPage() {
 
   const comps: CompMeta[] = useMemo(
     () => [
-      {
-        key: "napoleon",
-        label: "Napoleon",
-        format: (v) => fmt2(v),
-        description: "Average Stableford points on Par 3 holes.",
-      },
-      {
-        key: "bigGeorge",
-        label: "Big George",
-        format: (v) => fmt2(v),
-        description: "Average Stableford points on Par 4 holes.",
-      },
-      {
-        key: "grandCanyon",
-        label: "Grand Canyon",
-        format: (v) => fmt2(v),
-        description: "Average Stableford points on Par 5 holes.",
-      },
-      {
-        key: "wizard",
-        label: "Wizard",
-        format: (v) => fmtPct(v),
-        description: "% of holes with 4+ Stableford points.",
-      },
+      { key: "napoleon", label: "Napoleon", format: (v) => fmt2(v), description: "Average Stableford points on Par 3 holes." },
+      { key: "bigGeorge", label: "Big George", format: (v) => fmt2(v), description: "Average Stableford points on Par 4 holes." },
+      { key: "grandCanyon", label: "Grand Canyon", format: (v) => fmt2(v), description: "Average Stableford points on Par 5 holes." },
+      { key: "wizard", label: "Wizard", format: (v) => fmtPct(v), description: "% of holes with 4+ Stableford points." },
       {
         key: "bagelMan",
         label: "Bagel Man",
@@ -447,10 +427,7 @@ export default function MobileCompetitionsPage() {
     };
 
     for (const meta of comps) {
-      const entries = players.map((p) => ({
-        id: p.id,
-        value: compValuesByPlayer[p.id]?.[meta.key] ?? 0,
-      }));
+      const entries = players.map((p) => ({ id: p.id, value: compValuesByPlayer[p.id]?.[meta.key] ?? 0 }));
       byComp[meta.key] = rankWithTies(entries, !!meta.lowerIsBetter);
     }
 
@@ -505,7 +482,10 @@ export default function MobileCompetitionsPage() {
                       Player
                     </th>
                     {comps.map((c) => (
-                      <th key={c.key} className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700">
+                      <th
+                        key={c.key}
+                        className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700"
+                      >
                         {c.label}
                       </th>
                     ))}
@@ -517,7 +497,6 @@ export default function MobileCompetitionsPage() {
                     const vals = compValuesByPlayer[p.id] ?? ({} as Record<CompKey, number>);
                     return (
                       <tr key={p.id} className="border-b last:border-b-0">
-                        {/* ✅ Player name is now plain text (not a link) */}
                         <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
                           {p.name}
                         </td>
@@ -526,7 +505,6 @@ export default function MobileCompetitionsPage() {
                           const v = Number.isFinite(Number(vals[c.key])) ? Number(vals[c.key]) : 0;
                           const rk = ranksByComp[c.key].get(p.id) ?? 0;
 
-                          // ✅ Only Eclectic cell is the drilldown link
                           const cellInner =
                             c.key === "eclectic" ? (
                               <Link
@@ -544,7 +522,9 @@ export default function MobileCompetitionsPage() {
 
                           return (
                             <td key={c.key} className="px-3 py-2 text-right text-sm text-gray-900">
-                              <span className="inline-flex min-w-[76px] justify-end rounded-md px-2 py-1">{cellInner}</span>
+                              <span className="inline-flex min-w-[76px] justify-end rounded-md px-2 py-1">
+                                {cellInner}
+                              </span>
                             </td>
                           );
                         })}
