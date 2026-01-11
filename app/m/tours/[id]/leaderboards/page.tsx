@@ -2,17 +2,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useParams } from "next/navigation";
 
-import { supabase } from "@/lib/supabaseClient";
-import { netStablefordPointsForHole } from "@/lib/stableford";
-
-// If you already have MobileNav in this location (you previously did):
 import MobileNav from "../_components/MobileNav";
+import { supabase } from "@/lib/supabaseClient";
 
+// -----------------------------
+// Types
+// -----------------------------
 type Tee = "M" | "F";
-type BoardKind = "individual" | "pairs" | "teams";
+type LeaderboardKind = "individual" | "pairs" | "teams";
 
 type Tour = { id: string; name: string };
 
@@ -21,21 +21,22 @@ type RoundRow = {
   tour_id: string;
   name: string | null;
   round_no: number | null;
-  course_id: string | null;
   created_at: string | null;
+  is_final: boolean | null; // optional if you have it; safe if null
+  course_id: string | null;
 };
 
 type PlayerRow = {
   id: string;
   name: string;
-  gender: Tee | null;
+  gender?: Tee | null;
 };
 
 type TourPlayerRow = {
   tour_id: string;
   player_id: string;
   starting_handicap: number | null;
-  players: { id: string; name: string; gender: Tee | null } | null;
+  players: PlayerRow | null;
 };
 
 type RoundPlayerRow = {
@@ -43,14 +44,6 @@ type RoundPlayerRow = {
   player_id: string;
   playing: boolean | null;
   playing_handicap: number | null;
-};
-
-type ParRow = {
-  course_id: string;
-  hole_number: number;
-  tee: Tee;
-  par: number;
-  stroke_index: number;
 };
 
 type ScoreRow = {
@@ -61,90 +54,118 @@ type ScoreRow = {
   pickup?: boolean | null;
 };
 
+type ParRow = {
+  course_id: string;
+  hole_number: number;
+  tee: Tee;
+  par: number;
+  stroke_index: number;
+};
+
 type IndividualRule =
   | { mode: "ALL" }
   | { mode: "BEST_N"; n: number; finalRequired: boolean };
 
-const UI_HILITE = {
-  // ✅ single “counting rounds” highlight style (one colour only)
-  borderClass: "border-sky-400",
-  bgClass: "bg-sky-900/20",
-};
+type PairRule =
+  | { mode: "ALL" }
+  | { mode: "BEST_Q"; q: number; finalRequired: boolean };
+
+type TeamRule = { bestY: number };
+
+// -----------------------------
+// Helpers
+// -----------------------------
+function isLikelyUuid(v: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+}
+
+function roundLabel(round: RoundRow, index: number, isFinal: boolean) {
+  const n = round.round_no ?? index + 1;
+  return isFinal ? `R${n} (F)` : `R${n}`;
+}
+
+function safeName(v: any, fallback: string) {
+  const s = String(v ?? "").trim();
+  return s ? s : fallback;
+}
 
 function normalizeTee(v: any): Tee {
   const s = String(v ?? "").trim().toUpperCase();
   return s === "F" ? "F" : "M";
 }
 
-function fmtRoundHeading(roundIndex1: number, isFinal: boolean) {
-  return isFinal ? `R${roundIndex1} (F)` : `R${roundIndex1}`;
-}
-
-function safeNum(n: any, fallback = 0) {
-  const x = Number(n);
-  return Number.isFinite(x) ? x : fallback;
-}
-
-function rawScoreFor(strokes: number | null, pickup?: boolean | null) {
+function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
   if (pickup) return "P";
   if (strokes === null || strokes === undefined) return "";
-  return String(strokes);
+  const n = Number(strokes);
+  return Number.isFinite(n) ? String(n) : "";
 }
 
-/**
- * Decide which round indices (0-based) count for the TOTAL.
- * - ALL: all rounds count
- * - BEST_N: choose best N totals; if finalRequired, the final round must be included
- */
-function chooseCountingRounds(params: {
-  perRoundTotals: number[];
-  rule: IndividualRule;
-  finalIndex: number; // 0-based
-}): Set<number> {
-  const { perRoundTotals, rule, finalIndex } = params;
-
-  const count = perRoundTotals.length;
-  const all = new Set<number>();
-  for (let i = 0; i < count; i++) all.add(i);
-
-  if (rule.mode === "ALL") return all;
-
-  const n = Math.max(1, Math.min(rule.n, count));
-
-  // Sort indices by score desc
-  const idxs = Array.from({ length: count }, (_, i) => i);
-  idxs.sort((a, b) => (perRoundTotals[b] ?? 0) - (perRoundTotals[a] ?? 0));
-
-  const picked = new Set<number>();
-
-  if (rule.finalRequired && finalIndex >= 0 && finalIndex < count) {
-    picked.add(finalIndex);
-
-    // Add best remaining until size == n
-    for (const i of idxs) {
-      if (picked.size >= n) break;
-      if (i === finalIndex) continue;
-      picked.add(i);
-    }
-    return picked;
-  }
-
-  // No final requirement: take top N
-  for (let k = 0; k < n; k++) picked.add(idxs[k]);
-  return picked;
+function formatDate(iso: string | null | undefined) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-AU", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }
 
+// Stableford (net) per hole
+function netStablefordPointsForHole(params: {
+  rawScore: string; // "" | "P" | "number"
+  par: number;
+  strokeIndex: number;
+  playingHandicap: number;
+}) {
+  const { rawScore, par, strokeIndex, playingHandicap } = params;
+
+  // Treat blank as not entered -> 0 for totals on leaderboard
+  const raw = String(rawScore ?? "").trim().toUpperCase();
+  if (!raw) return 0;
+  if (raw === "P") return 0;
+
+  const strokes = Number(raw);
+  if (!Number.isFinite(strokes)) return 0;
+
+  // allocate shots by SI
+  const hcp = Math.max(0, Math.floor(Number(playingHandicap) || 0));
+  const base = Math.floor(hcp / 18);
+  const rem = hcp % 18;
+
+  const extra = strokeIndex <= rem ? 1 : 0;
+  const shotsReceived = base + extra;
+
+  const net = strokes - shotsReceived;
+
+  // Stableford points (standard): 2 for net par, 3 for net birdie, etc.
+  // points = 2 + (par - net)
+  const pts = 2 + (par - net);
+  return Math.max(0, Math.min(pts, 10));
+}
+
+function grossOutcomeLabel(strokes: number | null, pickup?: boolean | null, par?: number) {
+  if (pickup) return "pickup";
+  if (strokes === null || strokes === undefined) return "";
+  if (!par) return "";
+  const diff = Number(strokes) - Number(par);
+  if (!Number.isFinite(diff)) return "";
+  if (diff <= -3) return "ace"; // includes ace/albatross style bucket
+  if (diff === -2) return "eagle";
+  if (diff === -1) return "birdie";
+  if (diff === 0) return "par";
+  if (diff === 1) return "bogey";
+  return "dblplus";
+}
+
+// -----------------------------
+// Page
+// -----------------------------
 export default function MobileLeaderboardsPage() {
-  const params = useParams<{ id: string }>();
+  const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
-
-  // ✅ fixed selector (UI only; parameters not editable)
-  const [kind, setKind] = useState<BoardKind>("individual");
-
-  // ✅ Step 1 rule constants (can later be read from DB, but mobile remains read-only)
-  const individualRule: IndividualRule = { mode: "ALL" };
-  // Examples you might use later:
-  // const individualRule: IndividualRule = { mode: "BEST_N", n: 4, finalRequired: true };
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
@@ -153,106 +174,93 @@ export default function MobileLeaderboardsPage() {
   const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
-  const [pars, setPars] = useState<ParRow[]>([]);
   const [scores, setScores] = useState<ScoreRow[]>([]);
+  const [pars, setPars] = useState<ParRow[]>([]);
 
+  // UI selection
+  const [kind, setKind] = useState<LeaderboardKind>("individual");
+
+  // Rules (mobile read-only; these can later be fetched from tour settings)
+  // IMPORTANT: set as union type so TS doesn't reduce to never
+  const individualRule: IndividualRule = { mode: "ALL" };
+  const pairRule: PairRule = { mode: "ALL" };
+  const teamRule: TeamRule = { bestY: 2 }; // example; can come from settings later
+
+  // -----------------------------
+  // Load
+  // -----------------------------
   useEffect(() => {
-    if (!tourId) return;
+    if (!tourId || !isLikelyUuid(tourId)) return;
+
     let alive = true;
 
-    async function load() {
+    async function loadAll() {
       setLoading(true);
       setErrorMsg("");
 
       try {
-        // Tour
         const { data: tData, error: tErr } = await supabase
           .from("tours")
           .select("id,name")
           .eq("id", tourId)
           .single();
         if (tErr) throw tErr;
+        if (!alive) return;
+        setTour(tData as Tour);
 
-        // Rounds
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
-          .select("id,tour_id,name,round_no,course_id,created_at")
+          .select("id,tour_id,name,round_no,created_at,is_final,course_id")
           .eq("tour_id", tourId)
           .order("round_no", { ascending: true, nullsFirst: false })
           .order("created_at", { ascending: true });
         if (rErr) throw rErr;
 
-        const roundRows = (rData ?? []) as RoundRow[];
+        const rr = (rData ?? []) as RoundRow[];
+        if (!alive) return;
+        setRounds(rr);
 
-        // Tour players (roster)
+        // players in tour via tour_players join
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
-          .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
+          .select("player_id,starting_handicap,players(id,name,gender)")
           .eq("tour_id", tourId)
           .order("name", { ascending: true, foreignTable: "players" });
+
         if (tpErr) throw tpErr;
 
-        const roster: PlayerRow[] = (tpData ?? [])
-          .map((row: any) => ({
-            id: String(row.players?.id ?? row.player_id),
-            name: String(row.players?.name ?? "(missing name)"),
-            gender: row.players?.gender ? normalizeTee(row.players.gender) : null,
-          }))
-          .filter((p: any) => !!p.id);
+        const ps: PlayerRow[] = (tpData ?? [])
+          .map((row: any) => row.players)
+          .filter(Boolean)
+          .map((p: any) => ({
+            id: String(p.id),
+            name: safeName(p.name, "(unnamed)"),
+            gender: p.gender ? normalizeTee(p.gender) : null,
+          }));
 
-        const playerIds = roster.map((p) => p.id);
-        const roundIds = roundRows.map((r) => r.id);
+        if (!alive) return;
+        setPlayers(ps);
 
-        // Round players (to get playing_handicap per round; used in Stableford)
-        let rpRows: RoundPlayerRow[] = [];
-        if (roundIds.length && playerIds.length) {
+        const roundIds = rr.map((r) => r.id);
+        const playerIds = ps.map((p) => p.id);
+
+        // round_players for all rounds (playing handicap per round)
+        if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
             .select("round_id,player_id,playing,playing_handicap")
             .in("round_id", roundIds)
             .in("player_id", playerIds);
+
           if (rpErr) throw rpErr;
-
-          rpRows = (rpData ?? []).map((x: any) => ({
-            round_id: String(x.round_id),
-            player_id: String(x.player_id),
-            playing: x.playing === true,
-            playing_handicap: Number.isFinite(Number(x.playing_handicap))
-              ? Number(x.playing_handicap)
-              : null,
-          }));
+          if (!alive) return;
+          setRoundPlayers((rpData ?? []) as RoundPlayerRow[]);
+        } else {
+          setRoundPlayers([]);
         }
 
-        // Pars (for all courses referenced by rounds)
-        const courseIds = Array.from(
-          new Set(roundRows.map((r) => r.course_id).filter(Boolean) as string[])
-        );
-
-        let parRows: ParRow[] = [];
-        if (courseIds.length) {
-          const { data: pData, error: pErr } = await supabase
-            .from("pars")
-            .select("course_id,hole_number,tee,par,stroke_index")
-            .in("course_id", courseIds)
-            .in("tee", ["M", "F"])
-            .order("course_id", { ascending: true })
-            .order("tee", { ascending: true })
-            .order("hole_number", { ascending: true });
-
-          if (pErr) throw pErr;
-
-          parRows = (pData ?? []).map((row: any) => ({
-            course_id: String(row.course_id),
-            hole_number: Number(row.hole_number),
-            tee: normalizeTee(row.tee),
-            par: Number(row.par),
-            stroke_index: Number(row.stroke_index),
-          }));
-        }
-
-        // Scores (all rounds + roster players)
-        let scoreRows: ScoreRow[] = [];
-        if (roundIds.length && playerIds.length) {
+        // scores
+        if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: sData, error: sErr } = await supabase
             .from("scores")
             .select("round_id,player_id,hole_number,strokes,pickup")
@@ -260,17 +268,38 @@ export default function MobileLeaderboardsPage() {
             .in("player_id", playerIds);
 
           if (sErr) throw sErr;
-          scoreRows = (sData ?? []) as ScoreRow[];
+          if (!alive) return;
+          setScores((sData ?? []) as ScoreRow[]);
+        } else {
+          setScores([]);
         }
 
-        if (!alive) return;
+        // pars for the courses in these rounds (both tees)
+        const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
+        if (courseIds.length > 0) {
+          const { data: pData, error: pErr } = await supabase
+            .from("pars")
+            .select("course_id,hole_number,tee,par,stroke_index")
+            .in("course_id", courseIds)
+            .in("tee", ["M", "F"])
+            .order("course_id", { ascending: true })
+            .order("hole_number", { ascending: true });
 
-        setTour(tData as Tour);
-        setRounds(roundRows);
-        setPlayers(roster);
-        setRoundPlayers(rpRows);
-        setPars(parRows);
-        setScores(scoreRows);
+          if (pErr) throw pErr;
+          if (!alive) return;
+
+          const pr: ParRow[] = (pData ?? []).map((x: any) => ({
+            course_id: String(x.course_id),
+            hole_number: Number(x.hole_number),
+            tee: normalizeTee(x.tee),
+            par: Number(x.par),
+            stroke_index: Number(x.stroke_index),
+          }));
+
+          setPars(pr);
+        } else {
+          setPars([]);
+        }
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load leaderboards.");
@@ -280,112 +309,171 @@ export default function MobileLeaderboardsPage() {
       }
     }
 
-    load();
+    void loadAll();
+
     return () => {
       alive = false;
     };
   }, [tourId]);
 
-  const sortedRounds = useMemo(() => {
-    const arr = [...rounds];
-    // Ensure deterministic ordering: round_no then created_at
-    arr.sort((a, b) => {
-      const an = a.round_no ?? 999999;
-      const bn = b.round_no ?? 999999;
-      if (an !== bn) return an - bn;
-      return String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""));
-    });
-    return arr;
-  }, [rounds]);
-
-  const finalRoundIndex = useMemo(() => {
-    return sortedRounds.length ? sortedRounds.length - 1 : -1;
-  }, [sortedRounds]);
-
+  // -----------------------------
+  // Derived maps
+  // -----------------------------
   const playerById = useMemo(() => {
     const m = new Map<string, PlayerRow>();
     for (const p of players) m.set(p.id, p);
     return m;
   }, [players]);
 
-  const roundPlayerHcp = useMemo(() => {
-    // key = roundId|playerId -> playing_handicap (fallback 0)
-    const m = new Map<string, number>();
+  const roundById = useMemo(() => {
+    const m = new Map<string, RoundRow>();
+    for (const r of rounds) m.set(r.id, r);
+    return m;
+  }, [rounds]);
+
+  const rpByRoundPlayer = useMemo(() => {
+    const m = new Map<string, RoundPlayerRow>();
     for (const rp of roundPlayers) {
-      const key = `${rp.round_id}|${rp.player_id}`;
-      if (Number.isFinite(Number(rp.playing_handicap))) m.set(key, Number(rp.playing_handicap));
+      m.set(`${rp.round_id}|${rp.player_id}`, rp);
     }
     return m;
   }, [roundPlayers]);
 
-  const parByCourseTeeHole = useMemo(() => {
-    // courseId|tee -> hole -> {par, si}
-    const m = new Map<string, Map<number, { par: number; si: number }>>();
-    for (const pr of pars) {
-      const key = `${pr.course_id}|${pr.tee}`;
-      if (!m.has(key)) m.set(key, new Map());
-      m.get(key)!.set(pr.hole_number, { par: pr.par, si: pr.stroke_index });
+  const parsByCourseTeeHole = useMemo(() => {
+    const m = new Map<string, Map<Tee, Map<number, { par: number; si: number }>>>();
+    for (const p of pars) {
+      if (!m.has(p.course_id)) m.set(p.course_id, new Map());
+      const byTee = m.get(p.course_id)!;
+      if (!byTee.has(p.tee)) byTee.set(p.tee, new Map());
+      byTee.get(p.tee)!.set(p.hole_number, { par: p.par, si: p.stroke_index });
     }
     return m;
   }, [pars]);
 
-  const scoreByKey = useMemo(() => {
-    // roundId|playerId|hole -> ScoreRow
+  const scoreByRoundPlayerHole = useMemo(() => {
     const m = new Map<string, ScoreRow>();
     for (const s of scores) {
-      const key = `${String(s.round_id)}|${String(s.player_id)}|${Number(s.hole_number)}`;
-      m.set(key, s);
+      m.set(`${s.round_id}|${s.player_id}|${Number(s.hole_number)}`, s);
     }
     return m;
   }, [scores]);
 
-  const individualRows = useMemo(() => {
-    if (!sortedRounds.length || !players.length) return [];
+  // -----------------------------
+  // Final round detection + column labels
+  // -----------------------------
+  const sortedRounds = useMemo(() => {
+    // Always display R1, R2, ... by round_no if present else created order
+    const arr = [...rounds];
+    arr.sort((a, b) => {
+      const an = a.round_no ?? 999999;
+      const bn = b.round_no ?? 999999;
+      if (an !== bn) return an - bn;
+      return (a.created_at ?? "").localeCompare(b.created_at ?? "");
+    });
+    return arr;
+  }, [rounds]);
 
-    // roundId -> courseId
-    const courseByRound = new Map<string, string>();
-    for (const r of sortedRounds) {
-      if (r.course_id) courseByRound.set(r.id, String(r.course_id));
+  const finalRoundId = useMemo(() => {
+    // Prefer explicit is_final if available, else last round
+    const explicit = sortedRounds.find((r) => r.is_final === true);
+    return explicit?.id ?? (sortedRounds[sortedRounds.length - 1]?.id ?? "");
+  }, [sortedRounds]);
+
+  // -----------------------------
+  // Description (✅ fixed TS narrowing)
+  // -----------------------------
+  const description = useMemo(() => {
+    if (kind === "individual") {
+      if (individualRule.mode === "ALL") {
+        return "Individual Stableford · Total points across all rounds";
+      }
+      // BEST_N branch
+      const r = individualRule;
+      return r.finalRequired
+        ? `Individual Stableford · Best ${r.n} rounds (Final required)`
+        : `Individual Stableford · Best ${r.n} rounds`;
     }
 
+    if (kind === "pairs") {
+      if (pairRule.mode === "ALL") {
+        return "Pairs Better Ball · Total points across all rounds";
+      }
+      const r = pairRule;
+      return r.finalRequired
+        ? `Pairs Better Ball · Best ${r.q} rounds (Final required)`
+        : `Pairs Better Ball · Best ${r.q} rounds`;
+    }
+
+    return `Teams · Best ${teamRule.bestY} scores per hole, minus 1 for each zero · All rounds`;
+  }, [kind, individualRule, pairRule, teamRule.bestY]);
+
+  // -----------------------------
+  // Which rounds "count" (for highlighting) — for now only Individual BEST_N supported
+  // (If mode ALL, none highlighted)
+  // -----------------------------
+  const countedRoundIds = useMemo(() => {
+    if (kind !== "individual") return new Set<string>();
+    if (individualRule.mode !== "BEST_N") return new Set<string>();
+
+    const n = Math.max(1, Math.floor(individualRule.n));
+    const mustIncludeFinal = !!individualRule.finalRequired && !!finalRoundId;
+
+    // Placeholder highlighting logic: select last N rounds, ensuring final included if required.
+    // Real highlighting should be computed from totals per player; we'll do that later if needed.
+    const ids = sortedRounds.map((r) => r.id);
+    const chosen = new Set<string>();
+
+    if (mustIncludeFinal) chosen.add(finalRoundId);
+
+    for (let i = ids.length - 1; i >= 0; i--) {
+      if (chosen.size >= n) break;
+      chosen.add(ids[i]);
+    }
+    return chosen;
+  }, [kind, individualRule, finalRoundId, sortedRounds]);
+
+  // -----------------------------
+  // Compute individual totals by round + tour total
+  // -----------------------------
+  const individualRows = useMemo(() => {
     const rows: Array<{
       playerId: string;
       name: string;
-      totalsByRound: number[]; // aligned with sortedRounds
-      countingSet: Set<number>;
-      total: number;
+      tourTotal: number;
+      perRound: Record<string, number>;
     }> = [];
 
     for (const p of players) {
-      const totalsByRound: number[] = [];
+      const perRound: Record<string, number> = {};
+      let grand = 0;
 
-      for (let ri = 0; ri < sortedRounds.length; ri++) {
-        const r = sortedRounds[ri];
-        const courseId = courseByRound.get(r.id);
+      for (const r of sortedRounds) {
+        const courseId = r.course_id;
         if (!courseId) {
-          totalsByRound.push(0);
+          perRound[r.id] = 0;
           continue;
         }
 
-        const tee: Tee = p.gender ? normalizeTee(p.gender) : "M";
-        const parMap = parByCourseTeeHole.get(`${courseId}|${tee}`);
-        if (!parMap) {
-          totalsByRound.push(0);
+        const tee: Tee = normalizeTee(p.gender);
+        const parsMap = parsByCourseTeeHole.get(courseId)?.get(tee);
+        if (!parsMap) {
+          perRound[r.id] = 0;
           continue;
         }
 
-        const hcp = roundPlayerHcp.get(`${r.id}|${p.id}`) ?? 0;
+        // playing handicap for THIS round if present
+        const rp = rpByRoundPlayer.get(`${r.id}|${p.id}`);
+        const hcp = Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp?.playing_handicap) : 0;
 
         let sum = 0;
-        for (let hole = 1; hole <= 18; hole++) {
-          const pr = parMap.get(hole);
+        for (let h = 1; h <= 18; h++) {
+          const pr = parsMap.get(h);
           if (!pr) continue;
 
-          const sc = scoreByKey.get(`${r.id}|${p.id}|${hole}`);
+          const sc = scoreByRoundPlayerHole.get(`${r.id}|${p.id}|${h}`);
           if (!sc) continue;
 
-          const raw = rawScoreFor(sc.strokes, (sc as any).pickup);
-
+          const raw = normalizeRawScore(sc.strokes, sc.pickup);
           sum += netStablefordPointsForHole({
             rawScore: raw,
             par: pr.par,
@@ -394,207 +482,240 @@ export default function MobileLeaderboardsPage() {
           });
         }
 
-        totalsByRound.push(sum);
+        perRound[r.id] = sum;
+        grand += sum;
       }
-
-      const countingSet = chooseCountingRounds({
-        perRoundTotals: totalsByRound,
-        rule: individualRule,
-        finalIndex: finalRoundIndex,
-      });
-
-      let total = 0;
-      for (const i of countingSet) total += totalsByRound[i] ?? 0;
 
       rows.push({
         playerId: p.id,
         name: p.name,
-        totalsByRound,
-        countingSet,
-        total,
+        tourTotal: grand,
+        perRound,
       });
     }
 
-    // Sort by total desc, then name
-    rows.sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+    rows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
     return rows;
-  }, [
-    sortedRounds,
-    players,
-    parByCourseTeeHole,
-    roundPlayerHcp,
-    scoreByKey,
-    individualRule,
-    finalRoundIndex,
-  ]);
+  }, [players, sortedRounds, parsByCourseTeeHole, rpByRoundPlayer, scoreByRoundPlayerHole]);
 
-  const description = useMemo(() => {
-    if (kind === "individual") {
-      if (individualRule.mode === "ALL") {
-        return "Individual Stableford · Total points across all rounds";
-      }
-      return individualRule.finalRequired
-        ? `Individual Stableford · Best ${individualRule.n} rounds (Final required)`
-        : `Individual Stableford · Best ${individualRule.n} rounds`;
-    }
-
-    if (kind === "pairs") {
-      return "Pairs Better Ball Stableford · (Coming next step)";
-    }
-
-    // Teams
-    return "Teams Stableford · Best Y scores per hole, minus 1 for each zero · (Coming next step)";
-  }, [kind, individualRule]);
+  // -----------------------------
+  // UI
+  // -----------------------------
+  if (!tourId || !isLikelyUuid(tourId)) {
+    return (
+      <div className="min-h-dvh bg-white text-gray-900">
+        <div className="mx-auto max-w-md px-4 py-6">
+          <div className="rounded-2xl border p-4 text-sm">
+            Missing or invalid tour id in route.
+            <div className="mt-2">
+              <Link className="underline" href="/m">
+                Go to mobile home
+              </Link>
+            </div>
+          </div>
+        </div>
+        <MobileNav />
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-dvh bg-white pb-[88px]">
+    <div className="min-h-dvh bg-white text-gray-900 pb-24">
       {/* Header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="flex items-center justify-between gap-3">
-            <Link
-              href={`/m/tours/${tourId}`}
-              className="rounded-lg px-2 py-1 text-sm font-semibold text-gray-700 hover:bg-gray-100 active:bg-gray-200"
-            >
-              ← Back
-            </Link>
-            <div className="min-w-0 text-right">
+            <div className="min-w-0">
               <div className="text-base font-semibold text-gray-900">Boards</div>
               <div className="truncate text-sm text-gray-500">{tour?.name ?? ""}</div>
             </div>
+
+            <Link
+              href={`/m/tours/${tourId}`}
+              className="rounded-xl border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
+            >
+              Overview
+            </Link>
+          </div>
+
+          {/* Segment control */}
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => setKind("individual")}
+              className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
+                kind === "individual"
+                  ? "bg-gray-900 text-white border-gray-900"
+                  : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
+              }`}
+            >
+              Individual
+            </button>
+            <button
+              type="button"
+              onClick={() => setKind("pairs")}
+              className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
+                kind === "pairs"
+                  ? "bg-gray-900 text-white border-gray-900"
+                  : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
+              }`}
+            >
+              Pairs
+            </button>
+            <button
+              type="button"
+              onClick={() => setKind("teams")}
+              className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
+                kind === "teams"
+                  ? "bg-gray-900 text-white border-gray-900"
+                  : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
+              }`}
+            >
+              Teams
+            </button>
+          </div>
+
+          <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+            {description}
           </div>
         </div>
       </div>
 
-      <main className="mx-auto w-full max-w-md px-4 py-4 space-y-4">
-        {errorMsg ? (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-            {errorMsg}
-          </div>
-        ) : null}
-
-        {/* Selector */}
-        <div className="rounded-2xl border border-gray-200 bg-white p-2 shadow-sm">
-          <div className="grid grid-cols-3 overflow-hidden rounded-xl border border-gray-200">
-            {[
-              { key: "individual", label: "Individual" },
-              { key: "pairs", label: "Pairs" },
-              { key: "teams", label: "Teams" },
-            ].map((it) => {
-              const active = kind === (it.key as BoardKind);
-              return (
-                <button
-                  key={it.key}
-                  type="button"
-                  onClick={() => setKind(it.key as BoardKind)}
-                  className={`py-2 text-sm font-semibold ${
-                    active ? "bg-gray-900 text-white" : "bg-white text-gray-700"
-                  }`}
-                >
-                  {it.label}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="mt-2 text-xs text-gray-600">{description}</div>
-        </div>
-
-        {/* Table */}
+      <main className="mx-auto w-full max-w-md px-4 py-4">
         {loading ? (
-          <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-600">
-            Loading…
+          <div className="space-y-3">
+            <div className="h-5 w-40 rounded bg-gray-100" />
+            <div className="h-4 w-64 rounded bg-gray-100" />
+            <div className="h-64 rounded-2xl border bg-white" />
           </div>
+        ) : errorMsg ? (
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
+        ) : players.length === 0 ? (
+          <div className="rounded-2xl border p-4 text-sm text-gray-700">No players found for this tour.</div>
         ) : sortedRounds.length === 0 ? (
-          <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
-            No rounds found for this tour.
-          </div>
-        ) : kind !== "individual" ? (
-          <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
-            This leaderboard will be implemented next.
-          </div>
-        ) : individualRows.length === 0 ? (
-          <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
-            No players found for this tour.
-          </div>
+          <div className="rounded-2xl border p-4 text-sm text-gray-700">No rounds found for this tour.</div>
         ) : (
-          <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-            {/* header row */}
-            <div className="flex border-b bg-gray-50">
-              <div className="w-[44px] shrink-0 px-2 py-2 text-xs font-bold text-gray-600 text-center">
-                #
-              </div>
-              <div className="min-w-[150px] flex-1 px-2 py-2 text-xs font-bold text-gray-600">
-                Name
-              </div>
+          <>
+            {/* TABLE */}
+            <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
+              <table className="min-w-full border-collapse">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
+                      Name
+                    </th>
+                    <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700">
+                      <span className="inline-flex items-center rounded-md bg-yellow-100 px-2 py-1 text-[11px] font-extrabold text-yellow-900">
+                        TOUR
+                      </span>
+                    </th>
 
-              {/* Tour total highlighted */}
-              <div className="w-[74px] shrink-0 px-2 py-2 text-xs font-black text-gray-900 bg-gray-900 text-white text-center">
-                Total
-              </div>
+                    {sortedRounds.map((r, idx) => {
+                      const isFinal = r.id === finalRoundId;
+                      return (
+                        <th
+                          key={r.id}
+                          className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700"
+                          title={r.name ?? ""}
+                        >
+                          {roundLabel(r, idx, isFinal)}
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
 
-              {/* Rounds scroll */}
-              <div className="flex-1 overflow-x-auto">
-                <div className="flex">
-                  {sortedRounds.map((r, i) => (
-                    <div
-                      key={r.id}
-                      className="w-[62px] shrink-0 px-2 py-2 text-xs font-bold text-gray-600 text-center"
-                    >
-                      {fmtRoundHeading(i + 1, i === finalRoundIndex)}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+                <tbody>
+                  {kind === "individual" ? (
+                    individualRows.map((row) => (
+                      <tr key={row.playerId} className="border-b last:border-b-0">
+                        <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                          {row.name}
+                        </td>
 
-            {/* body rows */}
-            <div>
-              {individualRows.map((row, idx) => (
-                <div key={row.playerId} className="flex border-b last:border-b-0">
-                  <div className="w-[44px] shrink-0 px-2 py-3 text-sm font-semibold text-gray-700 text-center">
-                    {idx + 1}
-                  </div>
+                        <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
+                          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
+                            {row.tourTotal}
+                          </span>
+                        </td>
 
-                  <div className="min-w-[150px] flex-1 px-2 py-3 text-sm font-semibold text-gray-900 truncate">
-                    {row.name}
-                  </div>
-
-                  <div className="w-[74px] shrink-0 px-2 py-3 text-base font-black bg-gray-900 text-white text-center">
-                    {row.total}
-                  </div>
-
-                  <div className="flex-1 overflow-x-auto">
-                    <div className="flex">
-                      {row.totalsByRound.map((v, ri) => {
-                        const counts = row.countingSet.has(ri);
-                        return (
-                          <div
-                            key={ri}
-                            className="w-[62px] shrink-0 px-2 py-3 text-center"
-                          >
-                            <div
-                              className={`mx-auto w-full rounded-lg px-1 py-1 text-sm font-bold ${
-                                counts
-                                  ? `border ${UI_HILITE.borderClass} ${UI_HILITE.bgClass}`
-                                  : "border border-transparent"
-                              }`}
-                            >
-                              {safeNum(v)}
+                        {sortedRounds.map((r) => {
+                          const val = row.perRound[r.id] ?? 0;
+                          const counted = countedRoundIds.has(r.id);
+                          return (
+                            <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
+                              <span
+                                className={
+                                  counted
+                                    ? "inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1"
+                                    : "inline-flex min-w-[44px] justify-end rounded-md px-2 py-1"
+                                }
+                              >
+                                {val}
+                              </span>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={2 + sortedRounds.length} className="px-4 py-6 text-sm text-gray-700">
+                        {kind === "pairs" ? (
+                          <div className="space-y-2">
+                            <div className="font-semibold">Pairs leaderboard</div>
+                            <div className="opacity-80">
+                              Next step: implement Better Ball Stableford using your saved tour pairs / round groups.
                             </div>
                           </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              ))}
+                        ) : (
+                          <div className="space-y-2">
+                            <div className="font-semibold">Teams leaderboard</div>
+                            <div className="opacity-80">
+                              Next step: implement team scoring (best {teamRule.bestY} per hole, -1 per zero) across all
+                              rounds.
+                            </div>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
-          </div>
+
+            {/* Small hint row */}
+            {kind === "individual" && individualRule.mode === "BEST_N" ? (
+              <div className="mt-3 text-xs text-gray-600">
+                Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the
+                Tour total.
+              </div>
+            ) : null}
+
+            {/* Round meta */}
+            <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm">
+              <div className="font-semibold text-gray-900">Rounds</div>
+              <div className="mt-1 text-gray-600">
+                {sortedRounds.map((r, idx) => {
+                  const isFinal = r.id === finalRoundId;
+                  const lab = roundLabel(r, idx, isFinal);
+                  const dt = formatDate(r.created_at);
+                  return (
+                    <div key={r.id} className="flex items-center justify-between gap-3 py-1">
+                      <div className="min-w-0">
+                        <span className="font-semibold">{lab}</span>{" "}
+                        <span className="text-gray-700">{r.name ? `· ${r.name}` : ""}</span>
+                      </div>
+                      <div className="text-xs text-gray-500 whitespace-nowrap">{dt || ""}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </>
         )}
       </main>
 
-      {/* Bottom nav */}
       <MobileNav />
     </div>
   );
