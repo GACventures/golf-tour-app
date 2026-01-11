@@ -1,7 +1,8 @@
+// /app/m/tours/[id]/rounds/[roundId]/scoring/score/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 
 import { supabase } from "@/lib/supabaseClient";
 import { netStablefordPointsForHole } from "@/lib/stableford";
@@ -32,13 +33,13 @@ type RoundPlayerRow = {
   player_id: string;
   playing: boolean;
   playing_handicap: number | null;
-  tee?: Tee | null;
+  tee?: Tee | null; // round override (fallback only now)
 };
 
 type PlayerRow = {
   id: string;
   name: string;
-  gender?: Tee | null;
+  gender?: Tee | null; // global source of truth
 };
 
 type ScoreRow = {
@@ -50,7 +51,11 @@ type ScoreRow = {
 };
 
 const navy = "bg-slate-950";
-const headerBlue = "bg-sky-500";
+
+// Header colors
+const headerBlueM = "bg-sky-500"; // M / default
+const headerPinkF = "bg-rose-400"; // F (softer pink)
+
 const borderDark = "border-slate-600/60";
 
 function asSingle<T>(v: T | T[] | null | undefined): T | null {
@@ -83,13 +88,13 @@ function normalizeTee(v: any): Tee {
   return s === "F" ? "F" : "M";
 }
 
-export default function MobileScoreEntryPage_M() {
-  const params = useParams<{ id?: string; roundId?: string }>();
-  const router = useRouter();
+export default function MobileScoreEntryPage() {
+  const params = useParams();
   const sp = useSearchParams();
 
-  const tourId = String(params?.id ?? "").trim();
-  const roundId = String(params?.roundId ?? "").trim();
+  // /m/tours/[id]/rounds/[roundId]/...
+  const tourId = String((params as any)?.id ?? "").trim();
+  const roundId = String((params as any)?.roundId ?? "").trim();
 
   const meId = sp.get("meId") ?? "";
   const buddyId = sp.get("buddyId") ?? "";
@@ -103,6 +108,7 @@ export default function MobileScoreEntryPage_M() {
   const [playersById, setPlayersById] = useState<Record<string, PlayerRow>>({});
   const [scores, setScores] = useState<Record<string, Record<number, string>>>({});
 
+  // Baseline for unsaved detection (ME ONLY)
   const initialScoresRef = useRef<Record<string, Record<number, string>>>({});
 
   const [saving, setSaving] = useState(false);
@@ -110,11 +116,16 @@ export default function MobileScoreEntryPage_M() {
   const [savedMsg, setSavedMsg] = useState("");
 
   const [hole, setHole] = useState(1);
+
+  // Tabs (Entry default)
   const [tab, setTab] = useState<TabKey>("entry");
+
+  // Summary: one player at a time
   const [summaryPid, setSummaryPid] = useState<string>("");
 
   const isLocked = round?.is_locked === true;
 
+  // --------- Load ----------
   useEffect(() => {
     if (!roundId) return;
     let alive = true;
@@ -126,6 +137,7 @@ export default function MobileScoreEntryPage_M() {
       setSavedMsg("");
 
       try {
+        // Round
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,name,course_id,is_locked,courses(name)")
@@ -134,6 +146,7 @@ export default function MobileScoreEntryPage_M() {
         if (rErr) throw rErr;
         const r = rData as unknown as Round;
 
+        // Pars (both tees)
         const nextParsByTee: Record<Tee, ParRow[]> = { M: [], F: [] };
         if (r.course_id) {
           const { data, error } = await supabase
@@ -157,6 +170,7 @@ export default function MobileScoreEntryPage_M() {
           }
         }
 
+        // Round players (playing only) + tee (kept, but now fallback only)
         const { data: rpData, error: rpErr } = await supabase
           .from("round_players")
           .select("round_id,player_id,playing,playing_handicap,tee")
@@ -174,6 +188,7 @@ export default function MobileScoreEntryPage_M() {
 
         const ids = Array.from(new Set(rpRows.map((x) => x.player_id))).filter(Boolean);
 
+        // Players (GLOBAL gender is source of truth)
         const pMap: Record<string, PlayerRow> = {};
         if (ids.length > 0) {
           const { data: pData, error: pErr } = await supabase.from("players").select("id,name,gender").in("id", ids);
@@ -188,6 +203,7 @@ export default function MobileScoreEntryPage_M() {
           }
         }
 
+        // Scores for all playing players (buddy can display), but save only me later
         let scoreRows: ScoreRow[] = [];
         if (ids.length > 0) {
           const { data: sData, error: sErr } = await supabase
@@ -217,10 +233,13 @@ export default function MobileScoreEntryPage_M() {
         setPlayersById(pMap);
         setScores(nextScores);
 
+        // baseline for unsaved: me only
         initialScoresRef.current = { [meId]: nextScores[meId] ?? {} };
 
+        // summary pid defaults to me (or buddy if no me)
         if (!summaryPid) setSummaryPid(meId || buddyId || ids[0] || "");
 
+        // land on Entry after navigation
         setTab("entry");
       } catch (e: any) {
         if (!alive) return;
@@ -238,6 +257,7 @@ export default function MobileScoreEntryPage_M() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
+  // --------- Derived ----------
   const courseName = useMemo(() => asSingle(round?.courses)?.name ?? "(no course)", [round]);
   const playingIds = useMemo(() => roundPlayers.map((rp) => rp.player_id), [roundPlayers]);
 
@@ -258,10 +278,15 @@ export default function MobileScoreEntryPage_M() {
 
   function teeForPlayer(pid: string): Tee {
     if (!pid) return "M";
+
+    // ✅ Prefer GLOBAL gender (source of truth)
     const g = playersById[pid]?.gender;
     if (g) return normalizeTee(g);
+
+    // Fallback to any round-level tee value (legacy / optional)
     const rp = roundPlayers.find((x) => x.player_id === pid);
     if (rp?.tee) return normalizeTee(rp.tee);
+
     return "M";
   }
 
@@ -283,6 +308,7 @@ export default function MobileScoreEntryPage_M() {
     return holeInfoByNumberByTee[tee]?.[h] ?? { par: 0, si: 0 };
   }
 
+  // Always show BOTH tees in the hole box (Entry only)
   const holeInfoM = holeInfoByNumberByTee.M?.[hole] ?? { par: 0, si: 0 };
   const holeInfoF = holeInfoByNumberByTee.F?.[hole] ?? { par: 0, si: 0 };
 
@@ -358,6 +384,7 @@ export default function MobileScoreEntryPage_M() {
       return;
     }
 
+    // SAVE ONLY ME
     const pid = meId;
 
     const upserts: ScoreRow[] = [];
@@ -415,6 +442,7 @@ export default function MobileScoreEntryPage_M() {
     }
   }
 
+  // Swipe handling: left = next, right = prev (only on Entry)
   const swipeRef = useRef<{ x: number; y: number; t: number } | null>(null);
 
   function onTouchStart(e: React.TouchEvent) {
@@ -440,6 +468,7 @@ export default function MobileScoreEntryPage_M() {
     if (dx >= threshold) setHole((h) => clamp(h - 1, 1, 18));
   }
 
+  // --------- Render ----------
   if (loading) return <div className="p-4 text-sm opacity-70">Loading…</div>;
 
   if (!round) {
@@ -461,13 +490,6 @@ export default function MobileScoreEntryPage_M() {
           <div className="opacity-80">
             The score page needs a valid <code>meId</code> for a player marked <code>playing=true</code>.
           </div>
-          <button
-            type="button"
-            className="mt-2 rounded-md bg-black px-3 py-2 text-sm text-white"
-            onClick={() => router.push(`/m/tours/${tourId}/rounds/${roundId}/scoring`)}
-          >
-            Back to selection
-          </button>
         </div>
       </div>
     );
@@ -481,13 +503,6 @@ export default function MobileScoreEntryPage_M() {
         <div className="rounded-md border p-3 text-sm space-y-2">
           <div className="font-semibold">Buddy is not eligible</div>
           <div className="opacity-80">The selected buddy is not marked as playing for this round.</div>
-          <button
-            type="button"
-            className="mt-2 rounded-md bg-black px-3 py-2 text-sm text-white"
-            onClick={() => router.push(`/m/tours/${tourId}/rounds/${roundId}/scoring`)}
-          >
-            Back to selection
-          </button>
         </div>
       </div>
     );
@@ -535,6 +550,10 @@ export default function MobileScoreEntryPage_M() {
 
   function PlayerCard(props: { pid: string; name: string; hcp: number; tee: Tee }) {
     const { pid, name, hcp, tee } = props;
+
+    const isFemale = teeForPlayer(pid) === "F";
+    const headerBg = isFemale ? headerPinkF : headerBlueM;
+
     const raw = scores[pid]?.[hole] ?? "";
     const pickup = raw === "P";
     const pts = pointsFor(pid, hole);
@@ -550,7 +569,7 @@ export default function MobileScoreEntryPage_M() {
 
     return (
       <div className="rounded-lg overflow-hidden shadow-sm">
-        <div className={`${headerBlue} px-4 py-2 text-white font-semibold text-base text-center`}>
+        <div className={`${headerBg} px-4 py-2 text-white font-semibold text-base text-center`}>
           {name} <span className="opacity-90">(HC: {hcp} · Tee: {tee})</span>
         </div>
 
@@ -744,25 +763,24 @@ export default function MobileScoreEntryPage_M() {
     );
   }
 
-  function goBackToSelect() {
-    router.push(`/m/tours/${tourId}/rounds/${roundId}/scoring`);
-  }
-
   return (
     <div
-      className={`${navy} min-h-[100svh] text-white pb-24`}
+      className={`${navy} min-h-[100svh] text-white`}
       onTouchStart={tab === "entry" ? onTouchStart : undefined}
       onTouchEnd={tab === "entry" ? onTouchEnd : undefined}
     >
+      {/* Top bar */}
       <div className="px-4 pt-4 pb-2 flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <button
             type="button"
             className="flex items-center gap-2 text-xl font-bold"
             onClick={() => {
-              if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?")) {
-                goBackToSelect();
-              }
+              const href = `/m/tours/${tourId}/rounds/${roundId}/scoring?meId=${encodeURIComponent(meId)}${
+                buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""
+              }`;
+              // eslint-disable-next-line no-restricted-globals
+              if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?")) window.location.href = href;
             }}
           >
             <span className="text-2xl">‹</span>
@@ -796,6 +814,7 @@ export default function MobileScoreEntryPage_M() {
 
       {tab === "entry" ? <HoleBoxEntryOnly /> : <SummaryPlayerToggleTop />}
 
+      {/* Tabs */}
       <div className="px-4">
         <div className="rounded-md border border-slate-600/60 overflow-hidden flex">
           <button
@@ -819,6 +838,7 @@ export default function MobileScoreEntryPage_M() {
         </div>
       </div>
 
+      {/* Content */}
       <div className="px-4 py-3 space-y-3">
         {tab === "entry" ? (
           <>
@@ -830,13 +850,12 @@ export default function MobileScoreEntryPage_M() {
               {dirty ? <span className="text-amber-300 font-semibold">Unsaved (Me)</span> : null}
               {savedMsg ? <span className="text-green-300 font-semibold"> {savedMsg}</span> : null}
               {saveErr ? <span className="text-red-300 font-semibold"> {saveErr}</span> : null}
+              {errorMsg ? <span className="text-red-300 font-semibold"> {errorMsg}</span> : null}
             </div>
 
             <div className="text-[11px] opacity-70 text-center">
               Note: Buddy scores are for viewing/entry only and are not saved.
             </div>
-
-            {errorMsg ? <div className="text-sm text-red-300">{errorMsg}</div> : null}
           </>
         ) : (
           <>

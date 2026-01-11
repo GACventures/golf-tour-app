@@ -1,3 +1,4 @@
+// /app/rounds/[id]/mobile/score/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -50,7 +51,11 @@ type ScoreRow = {
 };
 
 const navy = "bg-slate-950";
-const headerBlue = "bg-sky-500";
+
+// Header colors
+const headerBlueM = "bg-sky-500"; // M / default
+const headerPinkF = "bg-rose-400"; // F (softer pink)
+
 const borderDark = "border-slate-600/60";
 
 function asSingle<T>(v: T | T[] | null | undefined): T | null {
@@ -543,6 +548,10 @@ export default function MobileScoreEntryPage() {
 
   function PlayerCard(props: { pid: string; name: string; hcp: number; tee: Tee }) {
     const { pid, name, hcp, tee } = props;
+
+    const isFemale = teeForPlayer(pid) === "F";
+    const headerBg = isFemale ? headerPinkF : headerBlueM;
+
     const raw = scores[pid]?.[hole] ?? "";
     const pickup = raw === "P";
     const pts = pointsFor(pid, hole);
@@ -558,7 +567,7 @@ export default function MobileScoreEntryPage() {
 
     return (
       <div className="rounded-lg overflow-hidden shadow-sm">
-        <div className={`${headerBlue} px-4 py-2 text-white font-semibold text-base text-center`}>
+        <div className={`${headerBg} px-4 py-2 text-white font-semibold text-base text-center`}>
           {name} <span className="opacity-90">(HC: {hcp} · Tee: {tee})</span>
         </div>
 
@@ -768,6 +777,7 @@ export default function MobileScoreEntryPage() {
               const href = `/rounds/${roundId}/mobile?meId=${encodeURIComponent(meId)}${
                 buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""
               }`;
+              // eslint-disable-next-line no-restricted-globals
               if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?")) window.location.href = href;
             }}
           >
@@ -839,13 +849,12 @@ export default function MobileScoreEntryPage() {
               {dirty ? <span className="text-amber-300 font-semibold">Unsaved (Me)</span> : null}
               {savedMsg ? <span className="text-green-300 font-semibold"> {savedMsg}</span> : null}
               {saveErr ? <span className="text-red-300 font-semibold"> {saveErr}</span> : null}
+              {errorMsg ? <span className="text-red-300 font-semibold"> {errorMsg}</span> : null}
             </div>
 
             <div className="text-[11px] opacity-70 text-center">
               Note: Buddy scores are for viewing/entry only and are not saved.
             </div>
-
-            {errorMsg ? <div className="text-sm text-red-300">{errorMsg}</div> : null}
           </>
         ) : (
           <>
