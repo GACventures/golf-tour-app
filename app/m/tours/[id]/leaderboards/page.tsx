@@ -95,6 +95,16 @@ function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
+/**
+ * netStablefordPointsForHole expects rawScore (string) in your project.
+ * This converts (strokes, pickup) to a compatible rawScore.
+ */
+function toRawScore(strokes: number | null | undefined, pickup: boolean | null | undefined): string {
+  if (pickup) return "P";
+  if (typeof strokes === "number" && Number.isFinite(strokes)) return String(strokes);
+  return ""; // missing => treated as 0 points by caller logic
+}
+
 export default function MobileLeaderboardsPage() {
   const params = useParams();
   const tourId = (params?.id as string) || "";
@@ -348,16 +358,16 @@ export default function MobileLeaderboardsPage() {
           if (isPlaying) {
             for (let hole = 1; hole <= 18; hole++) {
               const s = scoreIndex.get(`${r.id}|${p.id}|${hole}`);
-              const strokes = s?.strokes ?? null;
-              const pickup = !!s?.pickup;
+
+              const rawScore = toRawScore(s?.strokes ?? null, s?.pickup ?? null);
+              if (!rawScore) continue; // missing data => 0
 
               const tee: Tee = p.gender === "F" ? "F" : "M";
               const parSi = parIndex.get(`${r.course_id ?? ""}|${tee}|${hole}`);
               if (!parSi) continue; // missing pars => 0
 
               const pts = netStablefordPointsForHole({
-                strokes,
-                pickup,
+                rawScore,
                 par: parSi.par,
                 strokeIndex: parSi.si,
                 playingHandicap: hcap,
