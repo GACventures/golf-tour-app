@@ -70,10 +70,7 @@ function pickParSi(row: any, gender?: string | null) {
 type Shade = "ace" | "eagle" | "birdie" | "par" | "bogey" | "dbogey" | "none";
 
 /**
- * ✅ Updated blue palette (clearly different shades):
- * - Ace/Albatross: deep navy
- * - Eagle: strong royal blue
- * - Birdie: bright sky/cornflower
+ * Blue palette (distinct shades)
  */
 const BLUE_ACE = "#082B5C";
 const BLUE_EAGLE = "#1757D6";
@@ -92,29 +89,6 @@ function shadeForGross(gross: number | null, pickup: boolean | null | undefined,
   return "dbogey";
 }
 
-function shadeClasses(s: Shade) {
-  switch (s) {
-    case "ace":
-      return `bg-[${BLUE_ACE}] text-white`;
-    case "eagle":
-      return `bg-[${BLUE_EAGLE}] text-white`;
-    case "birdie":
-      return `bg-[${BLUE_BIRDIE}] text-white`;
-    case "par":
-      return "bg-white text-gray-900 border border-gray-300";
-    case "bogey":
-      return "bg-[#f8cfcf] text-gray-900"; // paler red
-    case "dbogey":
-      return "bg-[#c0392b] text-white";
-    default:
-      return "bg-transparent text-gray-900 border border-transparent";
-  }
-}
-
-/**
- * Tailwind doesn't parse dynamic bg-[${...}] at build time.
- * So we use inline style for the blue shades, and keep Tailwind for the rest.
- */
 function blueStyleForShade(s: Shade): React.CSSProperties | undefined {
   if (s === "ace") return { backgroundColor: BLUE_ACE, color: "white" };
   if (s === "eagle") return { backgroundColor: BLUE_EAGLE, color: "white" };
@@ -173,7 +147,10 @@ async function loadParsForCourse(courseId: string) {
 
   const msg = String(attempt1.error.message ?? "");
   if (msg.toLowerCase().includes("does not exist")) {
-    const attempt2 = await supabase.from("pars").select("course_id,hole_number,par,stroke_index").eq("course_id", courseId);
+    const attempt2 = await supabase
+      .from("pars")
+      .select("course_id,hole_number,par,stroke_index")
+      .eq("course_id", courseId);
 
     if (attempt2.error) throw attempt2.error;
     return (attempt2.data ?? []) as any[];
@@ -232,6 +209,7 @@ export default function MobileRoundPlayerResultPage() {
         const allPlayers = await loadPlayersForTour(tourId);
         const p = allPlayers.find((x) => x.id === playerId) ?? null;
 
+        // ✅ playing handicap for this round (if present)
         const { data: rpData, error: rpErr } = await supabase
           .from("round_players")
           .select("round_id,player_id,playing,playing_handicap")
@@ -242,7 +220,7 @@ export default function MobileRoundPlayerResultPage() {
 
         const startHcp = p?.startHandicap ?? 0;
         const h = Number.isFinite(Number((rpData as any)?.playing_handicap))
-          ? Number((rpData as any)?.playing_handicap)
+          ? Number((rpData as any).playing_handicap)
           : startHcp;
 
         const { data: sData, error: sErr } = await supabase
@@ -351,23 +329,21 @@ export default function MobileRoundPlayerResultPage() {
 
   function ScoreBox({ shade, label }: { shade: Shade; label: string | number }) {
     const isBlue = shade === "ace" || shade === "eagle" || shade === "birdie";
+
+    // ✅ Smaller boxes (was min-w-[34px], px-2 py-1, text-base)
+    // Now: min-w 28, smaller padding, smaller font
+    const base = "min-w-[28px] px-1.5 py-0.5 rounded text-center text-sm font-extrabold";
+
     const className =
       shade === "par"
-        ? "min-w-[34px] px-2 py-1 rounded-md text-center text-base font-extrabold bg-white text-gray-900 border border-gray-300"
+        ? `${base} bg-white text-gray-900 border border-gray-300`
         : shade === "bogey"
-        ? "min-w-[34px] px-2 py-1 rounded-md text-center text-base font-extrabold bg-[#f8cfcf] text-gray-900"
+        ? `${base} bg-[#f8cfcf] text-gray-900`
         : shade === "dbogey"
-        ? "min-w-[34px] px-2 py-1 rounded-md text-center text-base font-extrabold bg-[#c0392b] text-white"
-        : "min-w-[34px] px-2 py-1 rounded-md text-center text-base font-extrabold bg-transparent text-gray-900";
+        ? `${base} bg-[#c0392b] text-white`
+        : `${base} bg-transparent text-gray-900`;
 
-    return (
-      <div
-        className={className}
-        style={isBlue ? blueStyleForShade(shade) : undefined}
-      >
-        {label}
-      </div>
-    );
+    return <div className={className} style={isBlue ? blueStyleForShade(shade) : undefined}>{label}</div>;
   }
 
   return (
@@ -505,17 +481,11 @@ export default function MobileRoundPlayerResultPage() {
               </div>
               <div className="rounded-md px-3 py-2 text-sm font-bold border border-white/20 bg-white/10">
                 Eagle{" "}
-                <span
-                  className="ml-2 inline-block w-3 h-3 align-middle rounded-sm"
-                  style={{ backgroundColor: BLUE_EAGLE }}
-                />
+                <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm" style={{ backgroundColor: BLUE_EAGLE }} />
               </div>
               <div className="rounded-md px-3 py-2 text-sm font-bold border border-white/20 bg-white/10">
                 Birdie{" "}
-                <span
-                  className="ml-2 inline-block w-3 h-3 align-middle rounded-sm"
-                  style={{ backgroundColor: BLUE_BIRDIE }}
-                />
+                <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm" style={{ backgroundColor: BLUE_BIRDIE }} />
               </div>
               <div className="rounded-md px-3 py-2 text-sm font-bold border border-white/20 bg-white/10">
                 Par <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm bg-white" />
