@@ -1,9 +1,6 @@
 // app/m/tours/[id]/leaderboards/page.tsx
 "use client";
 
-// PROD MARKER: mobile leaderboards updated
-
-
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -66,6 +63,30 @@ type PairRule =
   | { mode: "BEST_Q"; q: number; finalRequired: boolean };
 
 type TeamRule = { bestY: number };
+
+// Tour-level groups
+type TourGroupRow = {
+  id: string;
+  tour_id: string;
+  scope: string; // "tour"
+  round_id: string | null;
+  type: string; // "pair" | "team"
+  name: string; // NOT NULL
+  team_index: number | null;
+};
+
+type TourGroupMemberRow = {
+  group_id: string;
+  player_id: string;
+  position: number | null;
+  created_at: string;
+};
+
+type PairRow = {
+  groupId: string;
+  name: string;
+  playerIds: string[];
+};
 
 // -----------------------------
 // Helpers
@@ -152,6 +173,9 @@ export default function MobileLeaderboardsPage() {
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
+
+  // NEW: Pairs from tour_groups
+  const [pairs, setPairs] = useState<PairRow[]>([]);
 
   // UI selection
   const [kind, setKind] = useState<LeaderboardKind>("individual");
@@ -284,6 +308,56 @@ export default function MobileLeaderboardsPage() {
         } else {
           setPars([]);
         }
+
+        // NEW: Load Pairs from tour_groups + tour_group_members (tour-level)
+        const { data: gData, error: gErr } = await supabase
+          .from("tour_groups")
+          .select("id,tour_id,scope,round_id,type,name,team_index")
+          .eq("tour_id", tourId)
+          .eq("scope", "tour")
+          .eq("type", "pair");
+
+        if (gErr) throw gErr;
+
+        const groups = (gData ?? []) as TourGroupRow[];
+        const groupIds = groups.map((g) => g.id);
+
+        let members: TourGroupMemberRow[] = [];
+        if (groupIds.length > 0) {
+          const { data: mData, error: mErr } = await supabase
+            .from("tour_group_members")
+            .select("group_id,player_id,position,created_at")
+            .in("group_id", groupIds);
+
+          if (mErr) throw mErr;
+          members = (mData ?? []) as TourGroupMemberRow[];
+        }
+
+        // group -> members (ordered by position if present)
+        const membersByGroup = new Map<string, TourGroupMemberRow[]>();
+        for (const m of members) {
+          const arr = membersByGroup.get(m.group_id) ?? [];
+          arr.push(m);
+          membersByGroup.set(m.group_id, arr);
+        }
+        for (const [gid, arr] of membersByGroup.entries()) {
+          arr.sort((a, b) => (a.position ?? 999) - (b.position ?? 999));
+          membersByGroup.set(gid, arr);
+        }
+
+        const pairRows: PairRow[] = groups
+          .map((g) => {
+            const mem = membersByGroup.get(g.id) ?? [];
+            return {
+              groupId: g.id,
+              name: safeName(g.name, "Pair"),
+              playerIds: mem.map((x) => String(x.player_id)),
+            };
+          })
+          .sort((a, b) => a.name.localeCompare(b.name));
+
+        if (!alive) return;
+        setPairs(pairRows);
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load leaderboards.");
@@ -369,7 +443,6 @@ export default function MobileLeaderboardsPage() {
 
   // -----------------------------
   // Which rounds count (highlighting)
-  // (Real “best N” selection should be computed from player totals; for now we keep the same placeholder logic.)
   // -----------------------------
   const countedRoundIds = useMemo(() => {
     if (kind !== "individual") return new Set<string>();
@@ -474,6 +547,13 @@ export default function MobileLeaderboardsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
+      {/* On-screen marker (to prove this file is rendering) */}
+      <div className="mx-auto w-full max-w-md px-4 pt-3">
+        <div className="rounded-xl border bg-yellow-50 px-3 py-2 text-xs text-yellow-900">
+          <b>PROD MARKER:</b> leaderboards page.tsx loaded · pairs found: <b>{pairs.length}</b>
+        </div>
+      </div>
+
       {/* Header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
@@ -612,25 +692,45 @@ export default function MobileLeaderboardsPage() {
                         })}
                       </tr>
                     ))
+                  ) : kind === "pairs" ? (
+                    pairs.length === 0 ? (
+                      <tr>
+                        <td colSpan={2 + sortedRounds.length} className="px-4 py-6 text-sm text-gray-700">
+                          No pairs found in <b>tour_groups</b> for this tour.
+                        </td>
+                      </tr>
+                    ) : (
+                      pairs.map((pair) => (
+                        <tr key={pair.groupId} className="border-b last:border-b-0">
+                          <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                            {pair.name}
+                          </td>
+
+                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
+                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
+                              {0}
+                            </span>
+                          </td>
+
+                          {sortedRounds.map((r) => (
+                            <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
+                              <span className="inline-flex min-w-[44px] justify-end rounded-md px-2 py-1">{0}</span>
+                            </td>
+                          ))}
+                        </tr>
+                      ))
+                    )
                   ) : (
+                    // Teams still placeholder until later
                     <tr>
                       <td colSpan={2 + sortedRounds.length} className="px-4 py-6 text-sm text-gray-700">
-                        {kind === "pairs" ? (
-                          <div className="space-y-2">
-                            <div className="font-semibold">Pairs leaderboard</div>
-                            <div className="opacity-80">
-                              Next step: implement Better Ball Stableford using your saved tour pairs / round groups.
-                            </div>
+                        <div className="space-y-2">
+                          <div className="font-semibold">Teams leaderboard</div>
+                          <div className="opacity-80">
+                            Next step later: implement team scoring (best {teamRule.bestY} per hole, -1 per zero) across
+                            all rounds.
                           </div>
-                        ) : (
-                          <div className="space-y-2">
-                            <div className="font-semibold">Teams leaderboard</div>
-                            <div className="opacity-80">
-                              Next step: implement team scoring (best {teamRule.bestY} per hole, -1 per zero) across all
-                              rounds.
-                            </div>
-                          </div>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   )}
