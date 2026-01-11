@@ -47,6 +47,22 @@ type TourGroupMemberRow = {
   player_id: string;
 };
 
+type TourGroupingSettings = {
+  tour_id: string;
+
+  // already existed
+  default_team_best_m: number | null;
+
+  // added Step 1
+  individual_mode: "ALL" | "BEST_N" | string;
+  individual_best_n: number | null;
+  individual_final_required: boolean;
+
+  pair_mode: "ALL" | "BEST_Q" | string;
+  pair_best_q: number | null;
+  pair_final_required: boolean;
+};
+
 function roundLabel(r: { id: string; name: string | null; round_no: number | null }) {
   const nm = (r.name ?? "").trim();
   if (r.round_no) return `Round ${r.round_no}${nm ? `: ${nm}` : ""}`;
@@ -74,6 +90,31 @@ function normalizePlayerJoin(val: any): { id: string; name: string; start_handic
   return { id, name: name || "(missing player)", start_handicap };
 }
 
+function fmtRuleIndividual(s: TourGroupingSettings | null) {
+  if (!s) return "All rounds";
+  const mode = String(s.individual_mode ?? "ALL").toUpperCase();
+  if (mode !== "BEST_N") return "All rounds";
+  const n = Number.isFinite(Number(s.individual_best_n)) ? Number(s.individual_best_n) : 0;
+  const fr = s.individual_final_required === true;
+  if (n > 0) return fr ? `Best ${n} rounds (Final required)` : `Best ${n} rounds`;
+  return fr ? "Best N rounds (Final required)" : "Best N rounds";
+}
+
+function fmtRulePairs(s: TourGroupingSettings | null) {
+  if (!s) return "All rounds";
+  const mode = String(s.pair_mode ?? "ALL").toUpperCase();
+  if (mode !== "BEST_Q") return "All rounds";
+  const q = Number.isFinite(Number(s.pair_best_q)) ? Number(s.pair_best_q) : 0;
+  const fr = s.pair_final_required === true;
+  if (q > 0) return fr ? `Best ${q} rounds (Final required)` : `Best ${q} rounds`;
+  return fr ? "Best Q rounds (Final required)" : "Best Q rounds";
+}
+
+function fmtRuleTeams(s: TourGroupingSettings | null) {
+  const y = Number.isFinite(Number(s?.default_team_best_m)) ? Number(s?.default_team_best_m) : 1;
+  return `Best ${y} per hole, −1 per zero (all rounds)`;
+}
+
 export default function TourPage() {
   const params = useParams<{ id: string }>();
   const tourId = params.id;
@@ -89,6 +130,9 @@ export default function TourPage() {
   // Pairs/Teams detail for Overview
   const [tourGroups, setTourGroups] = useState<TourGroupRow[]>([]);
   const [tourGroupMembers, setTourGroupMembers] = useState<TourGroupMemberRow[]>([]);
+
+  // NEW: Event rule settings (read-only here)
+  const [eventSettings, setEventSettings] = useState<TourGroupingSettings | null>(null);
 
   async function loadAll() {
     setLoading(true);
@@ -106,6 +150,18 @@ export default function TourPage() {
       if (!tourData) throw new Error("Tour not found (or you do not have access).");
 
       setTour(tourData as Tour);
+
+      // NEW: load event settings row
+      const { data: sData, error: sErr } = await supabase
+        .from("tour_grouping_settings")
+        .select(
+          "tour_id, default_team_best_m, individual_mode, individual_best_n, individual_final_required, pair_mode, pair_best_q, pair_final_required"
+        )
+        .eq("tour_id", tourId)
+        .maybeSingle();
+
+      if (sErr) throw new Error(sErr.message);
+      setEventSettings((sData ?? null) as TourGroupingSettings | null);
 
       // Rounds (load EARLY so we can fetch the referenced course ids)
       const { data: roundData, error: roundErr } = await supabase
@@ -146,8 +202,6 @@ export default function TourPage() {
       if (tpErr) throw new Error(tpErr.message);
 
       const normalizedTP: TourPlayerRow[] = (tpData ?? []).map((row: any) => {
-        // Some schemas call the player’s handicap column start_handicap; your Player type uses start_handicap.
-        // Supabase select asked for start_handicap, so normalize accordingly.
         const playerObj = normalizePlayerJoin(row.players);
 
         const starting_handicap =
@@ -185,7 +239,10 @@ export default function TourPage() {
         return;
       }
 
-      const { data: mData, error: mErr } = await supabase.from("tour_group_members").select("group_id,player_id").in("group_id", groupIds);
+      const { data: mData, error: mErr } = await supabase
+        .from("tour_group_members")
+        .select("group_id,player_id")
+        .in("group_id", groupIds);
 
       if (mErr) throw new Error(mErr.message);
 
@@ -286,6 +343,24 @@ export default function TourPage() {
           ))}
         </ul>
       )}
+
+      {/* Events (NEW) */}
+      <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Events</h2>
+      <div style={{ marginTop: 8, color: "#333" }}>
+        <div>
+          <strong>Individual</strong> — Stableford total &nbsp;·&nbsp; <span style={{ color: "#555" }}>{fmtRuleIndividual(eventSettings)}</span>
+        </div>
+        <div style={{ marginTop: 6 }}>
+          <strong>Pairs</strong> — Better Ball Stableford &nbsp;·&nbsp; <span style={{ color: "#555" }}>{fmtRulePairs(eventSettings)}</span>
+        </div>
+        <div style={{ marginTop: 6 }}>
+          <strong>Teams</strong> — {fmtRuleTeams(eventSettings)}
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <Link href={`/tours/${tourId}/events/manage`}>Manage events →</Link>
+        </div>
+      </div>
 
       {/* Pairs & Teams */}
       <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Pairs &amp; Teams</h2>
