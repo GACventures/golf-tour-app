@@ -137,7 +137,7 @@ export default function MobileScoreEntryPage() {
     }
   }
 
-  // ✅ FX wrapper styles (slide + fade) — MUST be a hook, but must run EVERY render
+  // ✅ FX wrapper styles (slide + fade) — MUST run EVERY render
   const fxStyle: React.CSSProperties = useMemo(() => {
     const dist = 16; // px
     const base = "transform 160ms ease-out, opacity 160ms ease-out";
@@ -146,13 +146,11 @@ export default function MobileScoreEntryPage() {
       return { transform: "translateX(0px)", opacity: 1, transition: base };
     }
 
-    // When sliding OUT, move in direction of swipe to indicate change
     if (holeFx.stage === "out") {
       const x = holeFx.dir === "next" ? -dist : dist;
       return { transform: `translateX(${x}px)`, opacity: 0.35, transition: base };
     }
 
-    // Sliding IN: come from opposite side
     if (holeFx.stage === "in") {
       const x = holeFx.dir === "next" ? dist : -dist;
       return { transform: `translateX(${x}px)`, opacity: 0.35, transition: base };
@@ -326,7 +324,7 @@ export default function MobileScoreEntryPage() {
   const meTee = useMemo(() => teeForPlayer(meId), [meId, roundPlayers, playersById]);
   const buddyTee = useMemo(() => teeForPlayer(buddyId), [buddyId, roundPlayers, playersById]);
 
-  // ✅ confirm these are playing handicaps from round_players
+  // ✅ these are playing handicaps from round_players
   const meHcp = useMemo(() => {
     const rp = roundPlayers.find((x) => x.player_id === meId);
     return Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp?.playing_handicap) : 0;
@@ -569,9 +567,17 @@ export default function MobileScoreEntryPage() {
 
   function PlayerCard(props: { pid: string; name: string; hcp: number; tee: Tee }) {
     const { pid, name, hcp, tee } = props;
+
     const raw = scores[pid]?.[hole] ?? "";
     const pickup = raw === "P";
+
+    // ✅ Stableford points (NET) — shown in POINTS box
     const pts = pointsFor(pid, hole);
+
+    // ✅ Gross strokes — shown between − and +
+    // - blank treated as 0 for display (same as before)
+    const grossDisplay = pickup ? "—" : raw && raw !== "P" ? raw : "0";
+
     const info = infoFor(pid, hole);
 
     const totalPts = useMemo(() => {
@@ -602,9 +608,10 @@ export default function MobileScoreEntryPage() {
               −
             </button>
 
+            {/* ✅ Center now shows GROSS strokes (not Stableford) */}
             <div className="text-center">
-              <div className="text-5xl font-black text-slate-900 leading-none">{pts}</div>
-              <div className="text-sm font-semibold text-slate-700 mt-1">points</div>
+              <div className="text-5xl font-black text-slate-900 leading-none">{grossDisplay}</div>
+              <div className="text-sm font-semibold text-slate-700 mt-1">strokes</div>
             </div>
 
             <button
@@ -633,14 +640,15 @@ export default function MobileScoreEntryPage() {
               </div>
             </div>
 
+            {/* ✅ This box is now POINTS (net Stableford) */}
             <div>
-              <div className="text-[11px] font-bold tracking-wide text-slate-700">SHOTS</div>
+              <div className="text-[11px] font-bold tracking-wide text-slate-700">POINTS</div>
               <div
                 className={`mt-1 rounded-md border border-slate-300 text-2xl font-black py-2 ${
                   pickup ? "bg-slate-100 text-slate-400" : "bg-white text-slate-900"
                 }`}
               >
-                {pickup ? "—" : raw && raw !== "P" ? raw : "0"}
+                {pickup ? "0" : String(pts)}
               </div>
             </div>
 
@@ -833,7 +841,8 @@ export default function MobileScoreEntryPage() {
                 const href = `/m/tours/${String((params as any)?.id ?? "")}/rounds/${roundId}/scoring?meId=${encodeURIComponent(
                   meId
                 )}${buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""}`;
-                if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?")) window.location.href = href;
+                if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?"))
+                  window.location.href = href;
               }}
             >
               <span className="text-2xl">‹</span>
@@ -906,7 +915,9 @@ export default function MobileScoreEntryPage() {
                 {saveErr ? <span className="text-red-300 font-semibold"> {saveErr}</span> : null}
               </div>
 
-              <div className="text-[11px] opacity-70 text-center">Note: Buddy scores are for viewing/entry only and are not saved.</div>
+              <div className="text-[11px] opacity-70 text-center">
+                Note: Buddy scores are for viewing/entry only and are not saved.
+              </div>
 
               {errorMsg ? <div className="text-sm text-red-300">{errorMsg}</div> : null}
             </>
