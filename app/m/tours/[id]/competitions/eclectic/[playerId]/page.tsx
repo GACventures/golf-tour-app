@@ -258,14 +258,14 @@ export default function MobileEclecticBreakdownPage() {
     return m;
   }, [pars]);
 
-  // Eclectic best per hole + latest round where achieved
+  // ✅ EARLIEST-round tie-break on equal best pts
   const eclectic = useMemo(() => {
     const tee: Tee = normalizeTee(player?.gender);
     const best: Array<{ hole: number; pts: number; roundLabel: string }> = [];
 
     for (let h = 1; h <= 18; h++) {
       let bestPts = 0;
-      let bestRoundIdx = -1;
+      let bestRoundIdx = Number.POSITIVE_INFINITY; // smaller = earlier
       let bestRoundLab = "";
 
       for (let idx = 0; idx < sortedRounds.length; idx++) {
@@ -292,8 +292,8 @@ export default function MobileEclecticBreakdownPage() {
           playingHandicap: hcp,
         });
 
-        // pick best points; on tie, pick LATEST round
-        if (pts > bestPts || (pts === bestPts && idx > bestRoundIdx)) {
+        // best points; if tie, choose EARLIEST (lowest idx)
+        if (pts > bestPts || (pts === bestPts && idx < bestRoundIdx)) {
           bestPts = pts;
           bestRoundIdx = idx;
           bestRoundLab = roundLabelShort(r.round_no, idx, r.id === finalRoundId);
@@ -330,7 +330,6 @@ export default function MobileEclecticBreakdownPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Sticky bar: keep simple */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-sm font-semibold text-gray-900">{player?.name ?? "Player"}</div>
@@ -352,7 +351,6 @@ export default function MobileEclecticBreakdownPage() {
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
-            {/* Front 9 */}
             <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
               <div className="bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-700">Holes 1–9</div>
               <table className="min-w-full border-collapse">
@@ -386,7 +384,6 @@ export default function MobileEclecticBreakdownPage() {
               </table>
             </div>
 
-            {/* Back 9 */}
             <div className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
               <div className="bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-700">Holes 10–18</div>
               <table className="min-w-full border-collapse">
@@ -425,9 +422,10 @@ export default function MobileEclecticBreakdownPage() {
               </table>
             </div>
 
+            {/* ✅ Updated note */}
             <div className="mt-3 text-xs text-gray-500">
-              For each hole, the round shown is the <span className="font-semibold">latest</span> round where the player achieved
-              their best points for that hole.
+              For each hole, the round shown is the <span className="font-semibold">earliest</span> round where the
+              player achieved their best points for that hole.
             </div>
           </>
         )}
