@@ -174,13 +174,13 @@ export default function MobileLeaderboardsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
-  // NEW: Pairs from tour_groups
+  // Pairs from tour_groups
   const [pairs, setPairs] = useState<PairRow[]>([]);
 
   // UI selection
   const [kind, setKind] = useState<LeaderboardKind>("individual");
 
-  // Rules (mobile read-only). Keep them as state so TS preserves union branches.
+  // Rules (mobile read-only).
   const [individualRule] = useState<IndividualRule>({ mode: "ALL" });
   const [pairRule] = useState<PairRule>({ mode: "ALL" });
   const [teamRule] = useState<TeamRule>({ bestY: 2 });
@@ -309,7 +309,7 @@ export default function MobileLeaderboardsPage() {
           setPars([]);
         }
 
-        // NEW: Load Pairs from tour_groups + tour_group_members (tour-level)
+        // Load Pairs from tour_groups + tour_group_members (tour-level)
         const { data: gData, error: gErr } = await supabase
           .from("tour_groups")
           .select("id,tour_id,scope,round_id,type,name,team_index")
@@ -333,7 +333,6 @@ export default function MobileLeaderboardsPage() {
           members = (mData ?? []) as TourGroupMemberRow[];
         }
 
-        // group -> members (ordered by position if present)
         const membersByGroup = new Map<string, TourGroupMemberRow[]>();
         for (const m of members) {
           const arr = membersByGroup.get(m.group_id) ?? [];
@@ -399,6 +398,13 @@ export default function MobileLeaderboardsPage() {
     for (const s of scores) m.set(`${s.round_id}|${s.player_id}|${Number(s.hole_number)}`, s);
     return m;
   }, [scores]);
+
+  // NEW: playerId -> name
+  const playerNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of players) m.set(p.id, p.name);
+    return m;
+  }, [players]);
 
   // -----------------------------
   // Rounds order + final round = highest round_no (fallback created_at)
@@ -547,13 +553,6 @@ export default function MobileLeaderboardsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* On-screen marker (to prove this file is rendering) */}
-      <div className="mx-auto w-full max-w-md px-4 pt-3">
-        <div className="rounded-xl border bg-yellow-50 px-3 py-2 text-xs text-yellow-900">
-          <b>PROD MARKER:</b> leaderboards page.tsx loaded · pairs found: <b>{pairs.length}</b>
-        </div>
-      </div>
-
       {/* Header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
@@ -700,28 +699,33 @@ export default function MobileLeaderboardsPage() {
                         </td>
                       </tr>
                     ) : (
-                      pairs.map((pair) => (
-                        <tr key={pair.groupId} className="border-b last:border-b-0">
-                          <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                            {pair.name}
-                          </td>
-
-                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
-                              {0}
-                            </span>
-                          </td>
-
-                          {sortedRounds.map((r) => (
-                            <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                              <span className="inline-flex min-w-[44px] justify-end rounded-md px-2 py-1">{0}</span>
+                      pairs.map((pair) => {
+                        const memberNames = pair.playerIds
+                          .map((pid) => playerNameById.get(pid) ?? "(unknown)")
+                          .join(" · ");
+                        return (
+                          <tr key={pair.groupId} className="border-b last:border-b-0">
+                            <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                              <div className="leading-tight">{pair.name}</div>
+                              <div className="mt-1 text-xs font-medium text-gray-500">{memberNames}</div>
                             </td>
-                          ))}
-                        </tr>
-                      ))
+
+                            <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
+                              <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
+                                {0}
+                              </span>
+                            </td>
+
+                            {sortedRounds.map((r) => (
+                              <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
+                                <span className="inline-flex min-w-[44px] justify-end rounded-md px-2 py-1">{0}</span>
+                              </td>
+                            ))}
+                          </tr>
+                        );
+                      })
                     )
                   ) : (
-                    // Teams still placeholder until later
                     <tr>
                       <td colSpan={2 + sortedRounds.length} className="px-4 py-6 text-sm text-gray-700">
                         <div className="space-y-2">
