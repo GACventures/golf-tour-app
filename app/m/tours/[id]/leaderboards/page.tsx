@@ -22,7 +22,7 @@ type RoundRow = {
   name: string | null;
   round_no: number | null;
   created_at: string | null;
-  is_final: boolean | null; // optional if you have it; safe if null
+  // ✅ no is_final column in DB right now
   course_id: string | null;
 };
 
@@ -56,9 +56,7 @@ type ParRow = {
 };
 
 type IndividualRule = { mode: "ALL" } | { mode: "BEST_N"; n: number; finalRequired: boolean };
-
 type PairRule = { mode: "ALL" } | { mode: "BEST_Q"; q: number; finalRequired: boolean };
-
 type TeamRule = { bestY: number };
 
 // -----------------------------
@@ -104,7 +102,7 @@ function formatDate(iso: string | null | undefined) {
 
 // Stableford (net) per hole
 function netStablefordPointsForHole(params: {
-  rawScore: string; // "" | "P" | "number"
+  rawScore: string;
   par: number;
   strokeIndex: number;
   playingHandicap: number;
@@ -148,10 +146,9 @@ export default function MobileLeaderboardsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
-  // UI selection
   const [kind, setKind] = useState<LeaderboardKind>("individual");
 
-  // ✅ IMPORTANT: define rules via useMemo so TS doesn't treat them as compile-time constants (prevents "never" narrowing)
+  // rules (mobile read-only for now)
   const individualRule = useMemo<IndividualRule>(() => ({ mode: "ALL" }), []);
   const pairRule = useMemo<PairRule>(() => ({ mode: "ALL" }), []);
   const teamRule = useMemo<TeamRule>(() => ({ bestY: 2 }), []);
@@ -178,9 +175,10 @@ export default function MobileLeaderboardsPage() {
         if (!alive) return;
         setTour(tData as Tour);
 
+        // ✅ Removed is_final from select
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
-          .select("id,tour_id,name,round_no,created_at,is_final,course_id")
+          .select("id,tour_id,name,round_no,created_at,course_id")
           .eq("tour_id", tourId)
           .order("round_no", { ascending: true, nullsFirst: false })
           .order("created_at", { ascending: true });
@@ -190,7 +188,6 @@ export default function MobileLeaderboardsPage() {
         if (!alive) return;
         setRounds(rr);
 
-        // players in tour via tour_players join
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("player_id,starting_handicap,players(id,name,gender)")
@@ -214,7 +211,6 @@ export default function MobileLeaderboardsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
-        // ✅ round_players for all rounds (MUST include "playing" because the type requires it)
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
@@ -237,7 +233,6 @@ export default function MobileLeaderboardsPage() {
           setRoundPlayers([]);
         }
 
-        // scores
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: sData, error: sErr } = await supabase
             .from("scores")
@@ -252,7 +247,6 @@ export default function MobileLeaderboardsPage() {
           setScores([]);
         }
 
-        // pars for the courses in these rounds (both tees)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
@@ -321,7 +315,7 @@ export default function MobileLeaderboardsPage() {
   }, [scores]);
 
   // -----------------------------
-  // Final round detection + column labels
+  // Sorting + Final round (✅ always last round)
   // -----------------------------
   const sortedRounds = useMemo(() => {
     const arr = [...rounds];
@@ -334,13 +328,10 @@ export default function MobileLeaderboardsPage() {
     return arr;
   }, [rounds]);
 
-  const finalRoundId = useMemo(() => {
-    const explicit = sortedRounds.find((r) => r.is_final === true);
-    return explicit?.id ?? (sortedRounds[sortedRounds.length - 1]?.id ?? "");
-  }, [sortedRounds]);
+  const finalRoundId = useMemo(() => sortedRounds[sortedRounds.length - 1]?.id ?? "", [sortedRounds]);
 
   // -----------------------------
-  // Description (no "never" narrowing)
+  // Description
   // -----------------------------
   const description = useMemo(() => {
     if (kind === "individual") {
@@ -369,7 +360,7 @@ export default function MobileLeaderboardsPage() {
   }, [kind, individualRule, pairRule, teamRule.bestY]);
 
   // -----------------------------
-  // Which rounds "count" highlight (individual BEST_N only for now)
+  // Highlighted rounds (individual BEST_N only for now)
   // -----------------------------
   const countedRoundIds = useMemo(() => {
     if (kind !== "individual") return new Set<string>();
@@ -391,7 +382,7 @@ export default function MobileLeaderboardsPage() {
   }, [kind, individualRule, finalRoundId, sortedRounds]);
 
   // -----------------------------
-  // Compute individual totals by round + tour total
+  // Individual totals
   // -----------------------------
   const individualRows = useMemo(() => {
     const rows: Array<{
@@ -473,7 +464,6 @@ export default function MobileLeaderboardsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="flex items-center justify-between gap-3">
@@ -490,7 +480,6 @@ export default function MobileLeaderboardsPage() {
             </Link>
           </div>
 
-          {/* Segment control */}
           <div className="mt-3 grid grid-cols-3 gap-2">
             <button
               type="button"
@@ -634,13 +623,6 @@ export default function MobileLeaderboardsPage() {
                 </tbody>
               </table>
             </div>
-
-            {kind === "individual" && individualRule.mode === "BEST_N" ? (
-              <div className="mt-3 text-xs text-gray-600">
-                Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the
-                Tour total.
-              </div>
-            ) : null}
 
             <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm">
               <div className="font-semibold text-gray-900">Rounds</div>
