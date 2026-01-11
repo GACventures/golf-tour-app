@@ -1,6 +1,9 @@
 // app/m/tours/[id]/leaderboards/page.tsx
 "use client";
 
+// PROD MARKER: mobile leaderboards updated
+
+
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
