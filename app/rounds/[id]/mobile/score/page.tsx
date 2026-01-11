@@ -1,4 +1,3 @@
-// /app/rounds/[id]/mobile/score/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -51,11 +50,8 @@ type ScoreRow = {
 };
 
 const navy = "bg-slate-950";
-
-// Header colors
-const headerBlueM = "bg-sky-500"; // M / default
-const headerPinkF = "bg-rose-400"; // F (softer pink)
-
+const headerBlue = "bg-sky-500";
+const headerPinkSoft = "bg-pink-300"; // ✅ softer pink for Female
 const borderDark = "border-slate-600/60";
 
 function asSingle<T>(v: T | T[] | null | undefined): T | null {
@@ -92,7 +88,9 @@ export default function MobileScoreEntryPage() {
   const params = useParams();
   const sp = useSearchParams();
 
-  const roundId = (params?.id as string) || "";
+  const roundId = (params as any)?.roundId
+    ? String((params as any).roundId)
+    : String((params as any)?.id ?? "");
 
   const meId = sp.get("meId") ?? "";
   const buddyId = sp.get("buddyId") ?? "";
@@ -122,6 +120,44 @@ export default function MobileScoreEntryPage() {
   const [summaryPid, setSummaryPid] = useState<string>("");
 
   const isLocked = round?.is_locked === true;
+
+  // ✅ NEW: tiny transition to make hole change obvious
+  // dir: +1 = next hole (swipe left), -1 = previous hole (swipe right)
+  const [holeFx, setHoleFx] = useState<{ stage: "idle" | "out" | "in"; dir: 1 | -1; key: number }>({
+    stage: "idle",
+    dir: 1,
+    key: 0,
+  });
+  const fxTimerRef = useRef<number | null>(null);
+
+  function clearFxTimer() {
+    if (fxTimerRef.current) {
+      window.clearTimeout(fxTimerRef.current);
+      fxTimerRef.current = null;
+    }
+  }
+
+  function goToHole(next: number, dir: 1 | -1) {
+    const target = clamp(next, 1, 18);
+    if (target === hole) return;
+
+    // If already animating, just jump (avoid stacked timers)
+    clearFxTimer();
+
+    setHoleFx((prev) => ({ ...prev, dir, stage: "out" }));
+
+    // After a short fade/slide out, switch hole, then slide/fade in
+    fxTimerRef.current = window.setTimeout(() => {
+      setHole(target);
+      setHoleFx((prev) => ({ ...prev, stage: "in", key: prev.key + 1 }));
+
+      // Let the "in" settle back to idle quickly
+      fxTimerRef.current = window.setTimeout(() => {
+        setHoleFx((prev) => ({ ...prev, stage: "idle" }));
+        fxTimerRef.current = null;
+      }, 140);
+    }, 140);
+  }
 
   // --------- Load ----------
   useEffect(() => {
@@ -251,6 +287,7 @@ export default function MobileScoreEntryPage() {
     load();
     return () => {
       alive = false;
+      clearFxTimer();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
@@ -432,7 +469,7 @@ export default function MobileScoreEntryPage() {
 
       initialScoresRef.current = { [meId]: { ...(scores[meId] ?? {}) } };
       setSavedMsg("Saved ✓");
-      setTimeout(() => setSavedMsg(""), 1200);
+      window.setTimeout(() => setSavedMsg(""), 1200);
     } catch (e: any) {
       setSaveErr(e?.message ?? "Save failed.");
     } finally {
@@ -462,8 +499,10 @@ export default function MobileScoreEntryPage() {
     if (dt > 700) return;
 
     const threshold = 50;
-    if (dx <= -threshold) setHole((h) => clamp(h + 1, 1, 18));
-    if (dx >= threshold) setHole((h) => clamp(h - 1, 1, 18));
+
+    // ✅ Use goToHole() so we get the transition
+    if (dx <= -threshold) goToHole(hole + 1, +1);
+    if (dx >= threshold) goToHole(hole - 1, -1);
   }
 
   // --------- Render ----------
@@ -546,12 +585,14 @@ export default function MobileScoreEntryPage() {
     );
   }
 
+  function headerClassForPlayer(pid: string) {
+    const tee = teeForPlayer(pid);
+    // ✅ Female -> softer pink
+    return tee === "F" ? headerPinkSoft : headerBlue;
+  }
+
   function PlayerCard(props: { pid: string; name: string; hcp: number; tee: Tee }) {
     const { pid, name, hcp, tee } = props;
-
-    const isFemale = teeForPlayer(pid) === "F";
-    const headerBg = isFemale ? headerPinkF : headerBlueM;
-
     const raw = scores[pid]?.[hole] ?? "";
     const pickup = raw === "P";
     const pts = pointsFor(pid, hole);
@@ -567,7 +608,7 @@ export default function MobileScoreEntryPage() {
 
     return (
       <div className="rounded-lg overflow-hidden shadow-sm">
-        <div className={`${headerBg} px-4 py-2 text-white font-semibold text-base text-center`}>
+        <div className={`${headerClassForPlayer(pid)} px-4 py-2 text-white font-semibold text-base text-center`}>
           {name} <span className="opacity-90">(HC: {hcp} · Tee: {tee})</span>
         </div>
 
@@ -661,8 +702,10 @@ export default function MobileScoreEntryPage() {
           className="rounded-md px-3 py-2 text-left font-bold bg-slate-900 text-white"
           onClick={() => {
             if (onJumpTo) {
+              // ✅ Jump with no “slide” (it’s intentional navigation)
               setHole(onJumpTo);
               setTab("entry");
+              setHoleFx((prev) => ({ ...prev, stage: "idle" }));
             }
           }}
         >
@@ -714,6 +757,7 @@ export default function MobileScoreEntryPage() {
                   onClick={() => {
                     setHole(h);
                     setTab("entry");
+                    setHoleFx((prev) => ({ ...prev, stage: "idle" }));
                   }}
                 >
                   {h}
@@ -761,6 +805,31 @@ export default function MobileScoreEntryPage() {
     );
   }
 
+  // ✅ FX wrapper styles (slide + fade)
+  const fxStyle: React.CSSProperties = useMemo(() => {
+    const dist = 18; // px
+    if (holeFx.stage === "idle") {
+      return { transform: "translateX(0px)", opacity: 1, transition: "transform 140ms ease-out, opacity 140ms ease-out" };
+    }
+    if (holeFx.stage === "out") {
+      // move slightly in swipe direction
+      const x = holeFx.dir === 1 ? -dist : dist;
+      return { transform: `translateX(${x}px)`, opacity: 0.65, transition: "transform 140ms ease-out, opacity 140ms ease-out" };
+    }
+    // in: come from the opposite side then settle immediately via transition
+    const x = holeFx.dir === 1 ? dist : -dist;
+    return { transform: `translateX(${x}px)`, opacity: 0.65, transition: "transform 140ms ease-out, opacity 140ms ease-out" };
+  }, [holeFx.stage, holeFx.dir]);
+
+  // On "in" stage, nudge to 0 on next frame so it visibly slides in.
+  useEffect(() => {
+    if (holeFx.stage !== "in") return;
+    const raf = window.requestAnimationFrame(() => {
+      setHoleFx((prev) => ({ ...prev, stage: "idle" }));
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [holeFx.stage]);
+
   return (
     <div
       className={`${navy} min-h-[100svh] text-white`}
@@ -774,10 +843,9 @@ export default function MobileScoreEntryPage() {
             type="button"
             className="flex items-center gap-2 text-xl font-bold"
             onClick={() => {
-              const href = `/rounds/${roundId}/mobile?meId=${encodeURIComponent(meId)}${
+              const href = `/m/tours/${String((params as any)?.id ?? "")}/rounds/${roundId}/scoring?meId=${encodeURIComponent(meId)}${
                 buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""
               }`;
-              // eslint-disable-next-line no-restricted-globals
               if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?")) window.location.href = href;
             }}
           >
@@ -840,7 +908,8 @@ export default function MobileScoreEntryPage() {
       {/* Content */}
       <div className="px-4 py-3 space-y-3">
         {tab === "entry" ? (
-          <>
+          // ✅ Wrap entry content so hole changes have a visible slide/fade
+          <div key={holeFx.key} style={fxStyle} className="space-y-3">
             <PlayerCard pid={meId} name={meName} hcp={meHcp} tee={meTee} />
             {buddyId ? <PlayerCard pid={buddyId} name={buddyName} hcp={buddyHcp} tee={buddyTee} /> : null}
 
@@ -849,13 +918,14 @@ export default function MobileScoreEntryPage() {
               {dirty ? <span className="text-amber-300 font-semibold">Unsaved (Me)</span> : null}
               {savedMsg ? <span className="text-green-300 font-semibold"> {savedMsg}</span> : null}
               {saveErr ? <span className="text-red-300 font-semibold"> {saveErr}</span> : null}
-              {errorMsg ? <span className="text-red-300 font-semibold"> {errorMsg}</span> : null}
             </div>
 
             <div className="text-[11px] opacity-70 text-center">
               Note: Buddy scores are for viewing/entry only and are not saved.
             </div>
-          </>
+
+            {errorMsg ? <div className="text-sm text-red-300">{errorMsg}</div> : null}
+          </div>
         ) : (
           <>
             <SummaryTable />
