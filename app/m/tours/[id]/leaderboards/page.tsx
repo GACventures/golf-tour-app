@@ -1,34 +1,29 @@
 // app/m/tours/[id]/leaderboards/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 
-import MobileNav from "../_components/MobileNav";
 import { supabase } from "@/lib/supabaseClient";
+import { netStablefordPointsForHole } from "@/lib/stableford";
 
-// -----------------------------
-// Types
-// -----------------------------
 type Tee = "M" | "F";
-type LeaderboardKind = "individual" | "pairs" | "teams";
+type TabKey = "individual" | "pairs" | "teams";
 
 type Tour = { id: string; name: string };
 
 type RoundRow = {
   id: string;
   tour_id: string;
-  name: string | null;
   round_no: number | null;
-  created_at: string | null;
   course_id: string | null;
 };
 
 type PlayerRow = {
   id: string;
+  tour_id: string;
   name: string;
-  gender?: Tee | null;
+  gender: "M" | "F" | null;
 };
 
 type RoundPlayerRow = {
@@ -43,7 +38,7 @@ type ScoreRow = {
   player_id: string;
   hole_number: number;
   strokes: number | null;
-  pickup?: boolean | null;
+  pickup: boolean | null;
 };
 
 type ParRow = {
@@ -54,94 +49,60 @@ type ParRow = {
   stroke_index: number;
 };
 
-type IndividualRule =
-  | { mode: "ALL" }
-  | { mode: "BEST_N"; n: number; finalRequired: boolean };
+// Matches your schema (text columns; name NOT NULL)
+type TourGroupRow = {
+  id: string;
+  tour_id: string;
+  scope: string; // "tour" | "round"
+  round_id: string | null;
+  type: string; // "pair" | "team"
+  name: string; // NOT NULL
+  team_index: number | null;
+};
 
-type PairRule =
-  | { mode: "ALL" }
-  | { mode: "BEST_Q"; q: number; finalRequired: boolean };
+type TourGroupMemberRow = {
+  group_id: string;
+  player_id: string;
+  position: number | null;
+  created_at: string;
+};
 
-type TeamRule = { bestY: number };
+type TourGroupingSettingsRow = {
+  tour_id: string;
+  default_pairing_mode: string;
+  default_team_mode: string;
+  default_team_count: number | null;
+  lock_generated: boolean;
+  updated_at: string;
+  default_team_best_m: number | null; // <-- your "Y" candidate
+};
 
-// -----------------------------
-// Helpers
-// -----------------------------
-function isLikelyUuid(v: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+type GroupResolved = {
+  id: string;
+  name: string;
+  playerIds: string[];
+  team_index: number | null;
+};
+
+type LeaderRow = {
+  id: string; // playerId OR groupId
+  name: string;
+  tourTotal: number;
+  byRound: Record<string, number>; // roundId -> points
+};
+
+function cx(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
 }
 
-function safeName(v: any, fallback: string) {
-  const s = String(v ?? "").trim();
-  return s ? s : fallback;
-}
-
-function normalizeTee(v: any): Tee {
-  const s = String(v ?? "").trim().toUpperCase();
-  return s === "F" ? "F" : "M";
-}
-
-function roundLabel(round: RoundRow, index: number, isFinal: boolean) {
-  const n = round.round_no ?? index + 1;
-  return isFinal ? `R${n} (F)` : `R${n}`;
-}
-
-function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
-  if (pickup) return "P";
-  if (strokes === null || strokes === undefined) return "";
-  const n = Number(strokes);
-  return Number.isFinite(n) ? String(n) : "";
-}
-
-function formatDate(iso: string | null | undefined) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-AU", {
-    weekday: "short",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-// Stableford (net) per hole
-function netStablefordPointsForHole(params: {
-  rawScore: string; // "" | "P" | "number"
-  par: number;
-  strokeIndex: number;
-  playingHandicap: number;
-}) {
-  const { rawScore, par, strokeIndex, playingHandicap } = params;
-
-  const raw = String(rawScore ?? "").trim().toUpperCase();
-  if (!raw) return 0; // blank -> 0 for totals
-  if (raw === "P") return 0;
-
-  const strokes = Number(raw);
-  if (!Number.isFinite(strokes)) return 0;
-
-  const hcp = Math.max(0, Math.floor(Number(playingHandicap) || 0));
-  const base = Math.floor(hcp / 18);
-  const rem = hcp % 18;
-  const extra = strokeIndex <= rem ? 1 : 0;
-  const shotsReceived = base + extra;
-
-  const net = strokes - shotsReceived;
-
-  const pts = 2 + (par - net);
-  return Math.max(0, Math.min(pts, 10));
-}
-
-// -----------------------------
-// Page
-// -----------------------------
 export default function MobileLeaderboardsPage() {
-  const params = useParams<{ id?: string }>();
-  const tourId = String(params?.id ?? "").trim();
+  const params = useParams();
+  const tourId = (params?.id as string) || "";
+
+  const [tab, setTab] = useState<TabKey>("individual");
 
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState("");
+  const [errorMsg, setErrorMsg] = useState<string>("");
 
   const [tour, setTour] = useState<Tour | null>(null);
   const [rounds, setRounds] = useState<RoundRow[]>([]);
@@ -150,523 +111,393 @@ export default function MobileLeaderboardsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
-  // UI selection
-  const [kind, setKind] = useState<LeaderboardKind>("individual");
+  // Step 1: groups + settings
+  const [pairGroups, setPairGroups] = useState<GroupResolved[]>([]);
+  const [teamGroups, setTeamGroups] = useState<GroupResolved[]>([]);
+  const [groupingSettings, setGroupingSettings] = useState<TourGroupingSettingsRow | null>(null);
 
-  // Rules (mobile read-only). Keep them as state so TS preserves union branches.
-  const [individualRule] = useState<IndividualRule>({ mode: "ALL" });
-  const [pairRule] = useState<PairRule>({ mode: "ALL" });
-  const [teamRule] = useState<TeamRule>({ bestY: 2 });
-
-  // -----------------------------
-  // Load
-  // -----------------------------
   useEffect(() => {
-    if (!tourId || !isLikelyUuid(tourId)) return;
-
-    let alive = true;
-
-    async function loadAll() {
-      setLoading(true);
-      setErrorMsg("");
-
-      try {
-        const { data: tData, error: tErr } = await supabase
-          .from("tours")
-          .select("id,name")
-          .eq("id", tourId)
-          .single();
-        if (tErr) throw tErr;
-        if (!alive) return;
-        setTour(tData as Tour);
-
-        const { data: rData, error: rErr } = await supabase
-          .from("rounds")
-          .select("id,tour_id,name,round_no,created_at,course_id")
-          .eq("tour_id", tourId)
-          .order("round_no", { ascending: true, nullsFirst: false })
-          .order("created_at", { ascending: true });
-
-        if (rErr) throw rErr;
-
-        const rr = (rData ?? []) as RoundRow[];
-        if (!alive) return;
-        setRounds(rr);
-
-        // players in tour via tour_players join
-        const { data: tpData, error: tpErr } = await supabase
-          .from("tour_players")
-          .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
-          .eq("tour_id", tourId)
-          .order("name", { ascending: true, foreignTable: "players" });
-
-        if (tpErr) throw tpErr;
-
-        const ps: PlayerRow[] = (tpData ?? [])
-          .map((row: any) => row.players)
-          .filter(Boolean)
-          .map((p: any) => ({
-            id: String(p.id),
-            name: safeName(p.name, "(unnamed)"),
-            gender: p.gender ? normalizeTee(p.gender) : null,
-          }));
-
-        if (!alive) return;
-        setPlayers(ps);
-
-        const roundIds = rr.map((r) => r.id);
-        const playerIds = ps.map((p) => p.id);
-
-        // round_players (playing handicap per round)
-        if (roundIds.length > 0 && playerIds.length > 0) {
-          const { data: rpData, error: rpErr } = await supabase
-            .from("round_players")
-            .select("round_id,player_id,playing,playing_handicap")
-            .in("round_id", roundIds)
-            .in("player_id", playerIds);
-
-          if (rpErr) throw rpErr;
-
-          const rpRows: RoundPlayerRow[] = (rpData ?? []).map((x: any) => ({
-            round_id: String(x.round_id),
-            player_id: String(x.player_id),
-            playing: x.playing === true,
-            playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
-          }));
-
-          if (!alive) return;
-          setRoundPlayers(rpRows);
-        } else {
-          setRoundPlayers([]);
-        }
-
-        // scores
-        if (roundIds.length > 0 && playerIds.length > 0) {
-          const { data: sData, error: sErr } = await supabase
-            .from("scores")
-            .select("round_id,player_id,hole_number,strokes,pickup")
-            .in("round_id", roundIds)
-            .in("player_id", playerIds);
-
-          if (sErr) throw sErr;
-          if (!alive) return;
-          setScores((sData ?? []) as ScoreRow[]);
-        } else {
-          setScores([]);
-        }
-
-        // pars for all courses in rounds (both tees)
-        const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
-        if (courseIds.length > 0) {
-          const { data: pData, error: pErr } = await supabase
-            .from("pars")
-            .select("course_id,hole_number,tee,par,stroke_index")
-            .in("course_id", courseIds)
-            .in("tee", ["M", "F"])
-            .order("course_id", { ascending: true })
-            .order("hole_number", { ascending: true });
-
-          if (pErr) throw pErr;
-
-          const pr: ParRow[] = (pData ?? []).map((x: any) => ({
-            course_id: String(x.course_id),
-            hole_number: Number(x.hole_number),
-            tee: normalizeTee(x.tee),
-            par: Number(x.par),
-            stroke_index: Number(x.stroke_index),
-          }));
-
-          if (!alive) return;
-          setPars(pr);
-        } else {
-          setPars([]);
-        }
-      } catch (e: any) {
-        if (!alive) return;
-        setErrorMsg(e?.message ?? "Failed to load leaderboards.");
-      } finally {
-        if (!alive) return;
-        setLoading(false);
-      }
-    }
-
-    void loadAll();
-
-    return () => {
-      alive = false;
-    };
+    if (!tourId) return;
+    void loadEverything();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tourId]);
 
-  // -----------------------------
-  // Derived maps
-  // -----------------------------
-  const rpByRoundPlayer = useMemo(() => {
-    const m = new Map<string, RoundPlayerRow>();
-    for (const rp of roundPlayers) m.set(`${rp.round_id}|${rp.player_id}`, rp);
-    return m;
-  }, [roundPlayers]);
+  async function loadEverything() {
+    setLoading(true);
+    setErrorMsg("");
 
-  const parsByCourseTeeHole = useMemo(() => {
-    const m = new Map<string, Map<Tee, Map<number, { par: number; si: number }>>>();
+    try {
+      // Tour
+      const { data: tourData, error: tourErr } = await supabase
+        .from("tours")
+        .select("id,name")
+        .eq("id", tourId)
+        .single();
+
+      if (tourErr) throw new Error(tourErr.message);
+      setTour(tourData as Tour);
+
+      // Rounds
+      const { data: roundsData, error: roundsErr } = await supabase
+        .from("rounds")
+        .select("id,tour_id,round_no,course_id")
+        .eq("tour_id", tourId)
+        .order("round_no", { ascending: true });
+
+      if (roundsErr) throw new Error(roundsErr.message);
+      const roundsRows = (roundsData ?? []) as RoundRow[];
+      setRounds(roundsRows);
+
+      // Players
+      const { data: playersData, error: playersErr } = await supabase
+        .from("players")
+        .select("id,tour_id,name,gender")
+        .eq("tour_id", tourId)
+        .order("name", { ascending: true });
+
+      if (playersErr) throw new Error(playersErr.message);
+      const playerRows = (playersData ?? []) as PlayerRow[];
+      setPlayers(playerRows);
+
+      const roundIds = roundsRows.map((r) => r.id);
+
+      // Round players
+      const { data: rpData, error: rpErr } = await supabase
+        .from("round_players")
+        .select("round_id,player_id,playing,playing_handicap")
+        .in("round_id", roundIds);
+
+      if (rpErr) throw new Error(rpErr.message);
+      setRoundPlayers((rpData ?? []) as RoundPlayerRow[]);
+
+      // Scores
+      const { data: scoreData, error: scoreErr } = await supabase
+        .from("scores")
+        .select("round_id,player_id,hole_number,strokes,pickup")
+        .in("round_id", roundIds);
+
+      if (scoreErr) throw new Error(scoreErr.message);
+      setScores((scoreData ?? []) as ScoreRow[]);
+
+      // Pars
+      const courseIds = Array.from(
+        new Set(roundsRows.map((r) => r.course_id).filter(Boolean))
+      ) as string[];
+
+      if (courseIds.length > 0) {
+        const { data: parData, error: parErr } = await supabase
+          .from("pars")
+          .select("course_id,hole_number,tee,par,stroke_index")
+          .in("course_id", courseIds);
+
+        if (parErr) throw new Error(parErr.message);
+        setPars((parData ?? []) as ParRow[]);
+      } else {
+        setPars([]);
+      }
+
+      // Step 1: groups + settings
+      await loadGroupsAndSettings();
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadGroupsAndSettings() {
+    // tour_groups (tour scope only)
+    const { data: groupsData, error: groupsErr } = await supabase
+      .from("tour_groups")
+      .select("id,tour_id,scope,round_id,type,name,team_index")
+      .eq("tour_id", tourId)
+      .eq("scope", "tour");
+
+    if (groupsErr) throw new Error(groupsErr.message);
+    const groups = (groupsData ?? []) as TourGroupRow[];
+    const groupIds = groups.map((g) => g.id);
+
+    // tour_group_members
+    let members: TourGroupMemberRow[] = [];
+    if (groupIds.length > 0) {
+      const { data: membersData, error: membersErr } = await supabase
+        .from("tour_group_members")
+        .select("group_id,player_id,position,created_at")
+        .in("group_id", groupIds);
+
+      if (membersErr) throw new Error(membersErr.message);
+      members = (membersData ?? []) as TourGroupMemberRow[];
+    }
+
+    // tour_grouping_settings
+    const { data: settingsData, error: settingsErr } = await supabase
+      .from("tour_grouping_settings")
+      .select(
+        "tour_id,default_pairing_mode,default_team_mode,default_team_count,lock_generated,updated_at,default_team_best_m"
+      )
+      .eq("tour_id", tourId)
+      .maybeSingle();
+
+    if (settingsErr) throw new Error(settingsErr.message);
+    setGroupingSettings((settingsData ?? null) as TourGroupingSettingsRow | null);
+
+    // Resolve members per group (ordered by position if present)
+    const membersByGroupId = new Map<string, TourGroupMemberRow[]>();
+    for (const m of members) {
+      const arr = membersByGroupId.get(m.group_id) ?? [];
+      arr.push(m);
+      membersByGroupId.set(m.group_id, arr);
+    }
+    for (const [gid, arr] of membersByGroupId.entries()) {
+      arr.sort((a, b) => (a.position ?? 999) - (b.position ?? 999));
+      membersByGroupId.set(gid, arr);
+    }
+
+    const resolvedPairs: GroupResolved[] = [];
+    const resolvedTeams: GroupResolved[] = [];
+
+    for (const g of groups) {
+      const mem = membersByGroupId.get(g.id) ?? [];
+      const ids = mem.map((x) => x.player_id);
+
+      const resolved: GroupResolved = {
+        id: g.id,
+        name: g.name, // NOT NULL per schema
+        playerIds: ids,
+        team_index: g.team_index ?? null,
+      };
+
+      if (g.type === "pair") resolvedPairs.push(resolved);
+      if (g.type === "team") resolvedTeams.push(resolved);
+    }
+
+    resolvedPairs.sort((a, b) => a.name.localeCompare(b.name));
+    resolvedTeams.sort(
+      (a, b) =>
+        (a.team_index ?? 999) - (b.team_index ?? 999) ||
+        a.name.localeCompare(b.name)
+    );
+
+    setPairGroups(resolvedPairs);
+    setTeamGroups(resolvedTeams);
+  }
+
+  const roundsSorted = useMemo(() => {
+    const copy = [...rounds];
+    copy.sort((a, b) => (a.round_no ?? 0) - (b.round_no ?? 0));
+    return copy;
+  }, [rounds]);
+
+  const finalRoundNo = useMemo(() => {
+    let maxNo = 0;
+    for (const r of roundsSorted) maxNo = Math.max(maxNo, r.round_no ?? 0);
+    return maxNo;
+  }, [roundsSorted]);
+
+  function roundLabel(r: RoundRow) {
+    const n = r.round_no ?? 0;
+    if (n === finalRoundNo && n > 0) return `R${n} (F)`;
+    return `R${n}`;
+  }
+
+  // Index pars: courseId + tee + hole -> { par, si }
+  const parIndex = useMemo(() => {
+    const m = new Map<string, { par: number; si: number }>();
     for (const p of pars) {
-      if (!m.has(p.course_id)) m.set(p.course_id, new Map());
-      const byTee = m.get(p.course_id)!;
-      if (!byTee.has(p.tee)) byTee.set(p.tee, new Map());
-      byTee.get(p.tee)!.set(p.hole_number, { par: p.par, si: p.stroke_index });
+      const key = `${p.course_id}|${p.tee}|${p.hole_number}`;
+      m.set(key, { par: p.par, si: p.stroke_index });
     }
     return m;
   }, [pars]);
 
-  const scoreByRoundPlayerHole = useMemo(() => {
+  // Round player index
+  const rpIndex = useMemo(() => {
+    const m = new Map<string, RoundPlayerRow>();
+    for (const rp of roundPlayers) {
+      m.set(`${rp.round_id}|${rp.player_id}`, rp);
+    }
+    return m;
+  }, [roundPlayers]);
+
+  // Score index
+  const scoreIndex = useMemo(() => {
     const m = new Map<string, ScoreRow>();
-    for (const s of scores) m.set(`${s.round_id}|${s.player_id}|${Number(s.hole_number)}`, s);
+    for (const s of scores) {
+      m.set(`${s.round_id}|${s.player_id}|${s.hole_number}`, s);
+    }
     return m;
   }, [scores]);
 
-  // -----------------------------
-  // Rounds order + final round = highest round_no (fallback created_at)
-  // -----------------------------
-  const sortedRounds = useMemo(() => {
-    const arr = [...rounds];
-    arr.sort((a, b) => {
-      const an = a.round_no ?? 999999;
-      const bn = b.round_no ?? 999999;
-      if (an !== bn) return an - bn;
-      return (a.created_at ?? "").localeCompare(b.created_at ?? "");
-    });
-    return arr;
-  }, [rounds]);
+  const leaderRows: LeaderRow[] = useMemo(() => {
+    const byRoundIds = roundsSorted.map((r) => r.id);
 
-  const finalRoundId = useMemo(() => {
-    return sortedRounds.length ? sortedRounds[sortedRounds.length - 1].id : "";
-  }, [sortedRounds]);
+    if (tab === "individual") {
+      const rows: LeaderRow[] = [];
 
-  // -----------------------------
-  // Description
-  // -----------------------------
-  const description = useMemo(() => {
-    if (kind === "individual") {
-      if (individualRule.mode === "ALL") return "Individual Stableford · Total points across all rounds";
-      const r = individualRule;
-      return r.finalRequired
-        ? `Individual Stableford · Best ${r.n} rounds (Final required)`
-        : `Individual Stableford · Best ${r.n} rounds`;
-    }
+      for (const p of players) {
+        const byRound: Record<string, number> = {};
+        let tourTotal = 0;
 
-    if (kind === "pairs") {
-      if (pairRule.mode === "ALL") return "Pairs Better Ball · Total points across all rounds";
-      const r = pairRule;
-      return r.finalRequired
-        ? `Pairs Better Ball · Best ${r.q} rounds (Final required)`
-        : `Pairs Better Ball · Best ${r.q} rounds`;
-    }
+        for (const r of roundsSorted) {
+          const rp = rpIndex.get(`${r.id}|${p.id}`);
+          const isPlaying = !!rp?.playing;
+          const hcap = rp?.playing_handicap ?? 0;
 
-    return `Teams · Best ${teamRule.bestY} scores per hole, minus 1 for each zero · All rounds`;
-  }, [kind, individualRule, pairRule, teamRule.bestY]);
+          let roundPts = 0;
 
-  // -----------------------------
-  // Which rounds count (highlighting)
-  // (Real “best N” selection should be computed from player totals; for now we keep the same placeholder logic.)
-  // -----------------------------
-  const countedRoundIds = useMemo(() => {
-    if (kind !== "individual") return new Set<string>();
-    if (individualRule.mode !== "BEST_N") return new Set<string>();
+          if (isPlaying) {
+            for (let hole = 1; hole <= 18; hole++) {
+              const s = scoreIndex.get(`${r.id}|${p.id}|${hole}`);
+              const strokes = s?.strokes ?? null;
+              const pickup = !!s?.pickup;
 
-    const n = Math.max(1, Math.floor(individualRule.n));
-    const mustIncludeFinal = !!individualRule.finalRequired && !!finalRoundId;
+              const tee: Tee = p.gender === "F" ? "F" : "M";
+              const parSi = parIndex.get(`${r.course_id ?? ""}|${tee}|${hole}`);
+              if (!parSi) continue; // missing pars => 0
 
-    const ids = sortedRounds.map((r) => r.id);
-    const chosen = new Set<string>();
+              const pts = netStablefordPointsForHole({
+                strokes,
+                pickup,
+                par: parSi.par,
+                strokeIndex: parSi.si,
+                playingHandicap: hcap,
+              });
 
-    if (mustIncludeFinal) chosen.add(finalRoundId);
+              roundPts += Number.isFinite(pts) ? pts : 0;
+            }
+          }
 
-    for (let i = ids.length - 1; i >= 0; i--) {
-      if (chosen.size >= n) break;
-      chosen.add(ids[i]);
-    }
-
-    return chosen;
-  }, [kind, individualRule, finalRoundId, sortedRounds]);
-
-  // -----------------------------
-  // Compute Individual totals by round + tour total
-  // -----------------------------
-  const individualRows = useMemo(() => {
-    const rows: Array<{
-      playerId: string;
-      name: string;
-      tourTotal: number;
-      perRound: Record<string, number>;
-    }> = [];
-
-    for (const p of players) {
-      const perRound: Record<string, number> = {};
-      let grand = 0;
-
-      for (const r of sortedRounds) {
-        const courseId = r.course_id;
-        if (!courseId) {
-          perRound[r.id] = 0;
-          continue;
+          byRound[r.id] = roundPts;
+          tourTotal += roundPts;
         }
 
-        const tee: Tee = normalizeTee(p.gender);
-        const parsMap = parsByCourseTeeHole.get(courseId)?.get(tee);
-        if (!parsMap) {
-          perRound[r.id] = 0;
-          continue;
-        }
-
-        const rp = rpByRoundPlayer.get(`${r.id}|${p.id}`);
-        const hcp = Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp?.playing_handicap) : 0;
-
-        let sum = 0;
-        for (let h = 1; h <= 18; h++) {
-          const pr = parsMap.get(h);
-          if (!pr) continue;
-
-          const sc = scoreByRoundPlayerHole.get(`${r.id}|${p.id}|${h}`);
-          if (!sc) continue;
-
-          const raw = normalizeRawScore(sc.strokes, sc.pickup);
-          sum += netStablefordPointsForHole({
-            rawScore: raw,
-            par: pr.par,
-            strokeIndex: pr.si,
-            playingHandicap: hcp,
-          });
-        }
-
-        perRound[r.id] = sum;
-        grand += sum;
+        rows.push({ id: p.id, name: p.name, tourTotal, byRound });
       }
 
-      rows.push({ playerId: p.id, name: p.name, tourTotal: grand, perRound });
+      rows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
+      return rows;
     }
 
-    rows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
-    return rows;
-  }, [players, sortedRounds, parsByCourseTeeHole, rpByRoundPlayer, scoreByRoundPlayerHole]);
+    // Step 1 only: pairs/teams list with 0 scores
+    const groups = tab === "pairs" ? pairGroups : teamGroups;
 
-  // -----------------------------
-  // UI
-  // -----------------------------
-  if (!tourId || !isLikelyUuid(tourId)) {
-    return (
-      <div className="min-h-dvh bg-white text-gray-900">
-        <div className="mx-auto max-w-md px-4 py-6">
-          <div className="rounded-2xl border p-4 text-sm">
-            Missing or invalid tour id in route.
-            <div className="mt-2">
-              <Link className="underline" href="/m">
-                Go to mobile home
-              </Link>
-            </div>
-          </div>
-        </div>
-        <MobileNav />
-      </div>
-    );
-  }
+    const rows: LeaderRow[] = groups.map((g) => {
+      const byRound: Record<string, number> = {};
+      for (const rid of byRoundIds) byRound[rid] = 0;
+      return { id: g.id, name: g.name, tourTotal: 0, byRound };
+    });
+
+    return rows;
+  }, [tab, players, roundsSorted, rpIndex, scoreIndex, parIndex, pairGroups, teamGroups]);
 
   return (
-    <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Header */}
-      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-base font-semibold text-gray-900">Boards</div>
-              <div className="truncate text-sm text-gray-500">{tour?.name ?? ""}</div>
-            </div>
-
-            <Link
-              href={`/m/tours/${tourId}`}
-              className="rounded-xl border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
-            >
-              Overview
-            </Link>
-          </div>
-
-          {/* Segment control */}
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => setKind("individual")}
-              className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
-                kind === "individual"
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
-              }`}
-            >
-              Individual
-            </button>
-            <button
-              type="button"
-              onClick={() => setKind("pairs")}
-              className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
-                kind === "pairs"
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
-              }`}
-            >
-              Pairs
-            </button>
-            <button
-              type="button"
-              onClick={() => setKind("teams")}
-              className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
-                kind === "teams"
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
-              }`}
-            >
-              Teams
-            </button>
-          </div>
-
-          <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
-            {description}
-          </div>
-        </div>
+    <div className="p-4 space-y-3">
+      <div className="space-y-1">
+        <div className="text-sm opacity-70">Leaderboards</div>
+        <div className="text-xl font-semibold">{tour?.name ?? "Tour"}</div>
       </div>
 
-      <main className="mx-auto w-full max-w-md px-4 py-4">
-        {loading ? (
-          <div className="space-y-3">
-            <div className="h-5 w-40 rounded bg-gray-100" />
-            <div className="h-4 w-64 rounded bg-gray-100" />
-            <div className="h-64 rounded-2xl border bg-white" />
-          </div>
-        ) : errorMsg ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
-        ) : players.length === 0 ? (
-          <div className="rounded-2xl border p-4 text-sm text-gray-700">No players found for this tour.</div>
-        ) : sortedRounds.length === 0 ? (
-          <div className="rounded-2xl border p-4 text-sm text-gray-700">No rounds found for this tour.</div>
-        ) : (
-          <>
-            {/* TABLE */}
-            <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <table className="min-w-full border-collapse">
-                <thead>
-                  <tr className="bg-gray-50">
-                    <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
-                      Name
+      {/* Segmented control */}
+      <div className="flex gap-2">
+        <button
+          className={cx(
+            "px-3 py-2 rounded-xl border text-sm",
+            tab === "individual" ? "border-black font-semibold" : "opacity-70"
+          )}
+          onClick={() => setTab("individual")}
+        >
+          Individual
+        </button>
+        <button
+          className={cx(
+            "px-3 py-2 rounded-xl border text-sm",
+            tab === "pairs" ? "border-black font-semibold" : "opacity-70"
+          )}
+          onClick={() => setTab("pairs")}
+        >
+          Pairs
+        </button>
+        <button
+          className={cx(
+            "px-3 py-2 rounded-xl border text-sm",
+            tab === "teams" ? "border-black font-semibold" : "opacity-70"
+          )}
+          onClick={() => setTab("teams")}
+        >
+          Teams
+        </button>
+      </div>
+
+      {errorMsg ? (
+        <div className="p-3 rounded-xl border border-red-300 bg-red-50 text-red-800 text-sm">
+          {errorMsg}
+        </div>
+      ) : null}
+
+      {loading ? (
+        <div className="text-sm opacity-70">Loading…</div>
+      ) : (
+        <>
+          {tab === "teams" ? (
+            <div className="text-xs opacity-70">
+              Team best Y per hole (tour-level):{" "}
+              <span className="font-semibold">
+                {groupingSettings?.default_team_best_m ?? "not set"}
+              </span>
+              {" "}
+              (from tour_grouping_settings.default_team_best_m)
+            </div>
+          ) : null}
+
+          <div className="overflow-x-auto">
+            <table className="min-w-[680px] w-full border-collapse">
+              <thead>
+                <tr className="text-left text-xs opacity-70">
+                  <th className="py-2 pr-3 w-[240px]">Name</th>
+                  <th className="py-2 pr-3 w-[80px]">TOUR</th>
+                  {roundsSorted.map((r) => (
+                    <th key={r.id} className="py-2 pr-3 w-[70px]">
+                      {roundLabel(r)}
                     </th>
-
-                    <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700">
-                      <span className="inline-flex items-center rounded-md bg-yellow-100 px-2 py-1 text-[11px] font-extrabold text-yellow-900">
-                        TOUR
-                      </span>
-                    </th>
-
-                    {sortedRounds.map((r, idx) => {
-                      const isFinal = r.id === finalRoundId;
-                      return (
-                        <th
-                          key={r.id}
-                          className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700"
-                          title={r.name ?? ""}
-                        >
-                          {roundLabel(r, idx, isFinal)}
-                        </th>
-                      );
-                    })}
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {kind === "individual" ? (
-                    individualRows.map((row) => (
-                      <tr key={row.playerId} className="border-b last:border-b-0">
-                        <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                          {row.name}
-                        </td>
-
-                        <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
-                            {row.tourTotal}
-                          </span>
-                        </td>
-
-                        {sortedRounds.map((r) => {
-                          const val = row.perRound[r.id] ?? 0;
-                          const counted = countedRoundIds.has(r.id);
-                          return (
-                            <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                              <span
-                                className={
-                                  counted
-                                    ? "inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1"
-                                    : "inline-flex min-w-[44px] justify-end rounded-md px-2 py-1"
-                                }
-                              >
-                                {val}
-                              </span>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={2 + sortedRounds.length} className="px-4 py-6 text-sm text-gray-700">
-                        {kind === "pairs" ? (
-                          <div className="space-y-2">
-                            <div className="font-semibold">Pairs leaderboard</div>
-                            <div className="opacity-80">
-                              Next step: implement Better Ball Stableford using your saved tour pairs / round groups.
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            <div className="font-semibold">Teams leaderboard</div>
-                            <div className="opacity-80">
-                              Next step: implement team scoring (best {teamRule.bestY} per hole, -1 per zero) across all
-                              rounds.
-                            </div>
-                          </div>
-                        )}
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {leaderRows.map((row) => (
+                  <tr key={row.id} className="border-t">
+                    <td className="py-2 pr-3 text-sm font-medium">{row.name}</td>
+                    <td className="py-2 pr-3 text-sm font-semibold">{row.tourTotal}</td>
+                    {roundsSorted.map((r) => (
+                      <td key={r.id} className="py-2 pr-3 text-sm">
+                        {row.byRound[r.id] ?? 0}
                       </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                    ))}
+                  </tr>
+                ))}
+                {leaderRows.length === 0 ? (
+                  <tr>
+                    <td className="py-4 text-sm opacity-70" colSpan={2 + roundsSorted.length}>
+                      No rows to show.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+
+          {tab === "pairs" ? (
+            <div className="text-xs opacity-70">
+              Step 1: tour-level pairs loaded and displayed (scores are 0 until Step 2).
             </div>
+          ) : null}
 
-            {kind === "individual" && individualRule.mode === "BEST_N" ? (
-              <div className="mt-3 text-xs text-gray-600">
-                Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the
-                Tour total.
-              </div>
-            ) : null}
-
-            {/* Round meta */}
-            <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm">
-              <div className="font-semibold text-gray-900">Rounds</div>
-              <div className="mt-1 text-gray-600">
-                {sortedRounds.map((r, idx) => {
-                  const isFinal = r.id === finalRoundId;
-                  const lab = roundLabel(r, idx, isFinal);
-                  const dt = formatDate(r.created_at);
-                  return (
-                    <div key={r.id} className="flex items-center justify-between gap-3 py-1">
-                      <div className="min-w-0">
-                        <span className="font-semibold">{lab}</span>{" "}
-                        <span className="text-gray-700">{r.name ? `· ${r.name}` : ""}</span>
-                      </div>
-                      <div className="text-xs text-gray-500 whitespace-nowrap">{dt || ""}</div>
-                    </div>
-                  );
-                })}
-              </div>
+          {tab === "teams" ? (
+            <div className="text-xs opacity-70">
+              Step 1: tour-level teams loaded and displayed (scores are 0 until Step 3).
             </div>
-          </>
-        )}
-      </main>
-
-      <MobileNav />
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
