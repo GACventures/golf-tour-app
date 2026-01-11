@@ -243,7 +243,11 @@ export default function MobileLeaderboardsPage() {
       setErrorMsg("");
 
       try {
-        const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
+        const { data: tData, error: tErr } = await supabase
+          .from("tours")
+          .select("id,name")
+          .eq("id", tourId)
+          .single();
         if (tErr) throw tErr;
         if (!alive) return;
         setTour(tData as Tour);
@@ -266,8 +270,11 @@ export default function MobileLeaderboardsPage() {
           const finalRequired = settings?.individual_final_required === true;
           const n = Number.isFinite(Number(settings?.individual_best_n)) ? Number(settings?.individual_best_n) : 0;
 
-          if (mode === "BEST_N" && n > 0) setIndividualRule({ mode: "BEST_N", n: clampInt(n, 1, 99), finalRequired });
-          else setIndividualRule({ mode: "ALL" });
+          if (mode === "BEST_N" && n > 0) {
+            setIndividualRule({ mode: "BEST_N", n: clampInt(n, 1, 99), finalRequired });
+          } else {
+            setIndividualRule({ mode: "ALL" });
+          }
         }
 
         // Pair rule
@@ -276,8 +283,11 @@ export default function MobileLeaderboardsPage() {
           const finalRequired = settings?.pair_final_required === true;
           const q = Number.isFinite(Number(settings?.pair_best_q)) ? Number(settings?.pair_best_q) : 0;
 
-          if (mode === "BEST_Q" && q > 0) setPairRule({ mode: "BEST_Q", q: clampInt(q, 1, 99), finalRequired });
-          else setPairRule({ mode: "ALL" });
+          if (mode === "BEST_Q" && q > 0) {
+            setPairRule({ mode: "BEST_Q", q: clampInt(q, 1, 99), finalRequired });
+          } else {
+            setPairRule({ mode: "ALL" });
+          }
         }
 
         // Team Y
@@ -359,7 +369,7 @@ export default function MobileLeaderboardsPage() {
           setScores([]);
         }
 
-        // pars
+        // pars for all courses in rounds (both tees)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
@@ -385,7 +395,7 @@ export default function MobileLeaderboardsPage() {
           setPars([]);
         }
 
-        // Pairs
+        // PAIRS groups
         const { data: pgData, error: pgErr } = await supabase
           .from("tour_groups")
           .select("id,tour_id,scope,type,name,round_id,team_index,created_at")
@@ -414,7 +424,7 @@ export default function MobileLeaderboardsPage() {
           setPairMembers((pmData ?? []) as TourGroupMemberRow[]);
         }
 
-        // Teams
+        // TEAMS groups
         const { data: tgData, error: tgErr } = await supabase
           .from("tour_groups")
           .select("id,tour_id,scope,type,name,round_id,team_index,created_at")
@@ -508,10 +518,11 @@ export default function MobileLeaderboardsPage() {
 
   const sortedRoundIds = useMemo(() => sortedRounds.map((r) => r.id), [sortedRounds]);
 
-  // membership grouped
+  // Pair/Team membership grouped (ordered)
   const memberIdsByPair = useMemo(() => {
     const m = new Map<string, string[]>();
-    const rows = [...pairMembers].sort((a, b) =>
+    const rows = [...pairMembers];
+    rows.sort((a, b) =>
       a.group_id === b.group_id ? (a.position ?? 999) - (b.position ?? 999) : a.group_id.localeCompare(b.group_id)
     );
     for (const row of rows) {
@@ -523,7 +534,8 @@ export default function MobileLeaderboardsPage() {
 
   const memberIdsByTeam = useMemo(() => {
     const m = new Map<string, string[]>();
-    const rows = [...teamMembers].sort((a, b) =>
+    const rows = [...teamMembers];
+    rows.sort((a, b) =>
       a.group_id === b.group_id ? (a.position ?? 999) - (b.position ?? 999) : a.group_id.localeCompare(b.group_id)
     );
     for (const row of rows) {
@@ -539,14 +551,23 @@ export default function MobileLeaderboardsPage() {
     return ids.map((pid) => playerById.get(pid)?.name ?? pid).join(" / ");
   }
 
-  function teamDisplayName(g: TourGroupRow) {
-    const ids = memberIdsByTeam.get(g.id) ?? [];
-    if (ids.length) return ids.map((pid) => playerById.get(pid)?.name ?? pid).join(", ");
-    const nm = (g.name ?? "").trim();
-    if (nm) return nm;
-    if (g.team_index != null && Number.isFinite(Number(g.team_index))) return `Team ${g.team_index}`;
-    return `Team ${g.id.slice(0, 6)}`;
-  }
+  // ✅ NEW: Team title + members line
+  const teamLabelById = useMemo(() => {
+    const m = new Map<string, { title: string; members: string }>();
+
+    teamGroups.forEach((g, idx) => {
+      const ids = memberIdsByTeam.get(g.id) ?? [];
+      const members = ids.map((pid) => playerById.get(pid)?.name ?? pid).join(", ");
+
+      const nm = (g.name ?? "").trim();
+      const hasIdx = Number.isFinite(Number(g.team_index));
+      const title = nm ? nm : hasIdx ? `Team ${Number(g.team_index)}` : `Team ${idx + 1}`;
+
+      m.set(g.id, { title, members });
+    });
+
+    return m;
+  }, [teamGroups, memberIdsByTeam, playerById]);
 
   // -----------------------------
   // Description
@@ -555,21 +576,31 @@ export default function MobileLeaderboardsPage() {
     if (kind === "individual") {
       if (individualRule.mode === "ALL") return "Individual Stableford · Total points across all rounds";
       const r = individualRule;
-      return r.finalRequired ? `Individual Stableford · Best ${r.n} rounds (Final required)` : `Individual Stableford · Best ${r.n} rounds`;
+      return r.finalRequired
+        ? `Individual Stableford · Best ${r.n} rounds (Final required)`
+        : `Individual Stableford · Best ${r.n} rounds`;
     }
+
     if (kind === "pairs") {
       if (pairRule.mode === "ALL") return "Pairs Better Ball · Total points across all rounds";
       const r = pairRule;
       return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
     }
-    return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 per zero · All rounds`;
+
+    return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 for each zero · All rounds`;
   }, [kind, individualRule, pairRule, teamRule.bestY]);
 
   // -----------------------------
   // Individual scoring
   // -----------------------------
   const individualRows = useMemo(() => {
-    const rows: Array<{ playerId: string; name: string; tourTotal: number; perRound: Record<string, number>; countedIds: Set<string> }> = [];
+    const rows: Array<{
+      playerId: string;
+      name: string;
+      tourTotal: number;
+      perRound: Record<string, number>;
+      countedIds: Set<string>;
+    }> = [];
 
     for (const p of players) {
       const perRound: Record<string, number> = {};
@@ -600,10 +631,17 @@ export default function MobileLeaderboardsPage() {
         for (let h = 1; h <= 18; h++) {
           const pr = parsMap.get(h);
           if (!pr) continue;
+
           const sc = scoreByRoundPlayerHole.get(`${r.id}|${p.id}|${h}`);
           if (!sc) continue;
+
           const raw = normalizeRawScore(sc.strokes, sc.pickup);
-          sum += netStablefordPointsForHole({ rawScore: raw, par: pr.par, strokeIndex: pr.si, playingHandicap: hcp });
+          sum += netStablefordPointsForHole({
+            rawScore: raw,
+            par: pr.par,
+            strokeIndex: pr.si,
+            playingHandicap: hcp,
+          });
         }
 
         perRound[r.id] = sum;
@@ -630,17 +668,33 @@ export default function MobileLeaderboardsPage() {
 
     rows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
     return rows;
-  }, [players, sortedRounds, sortedRoundIds, parsByCourseTeeHole, rpByRoundPlayer, scoreByRoundPlayerHole, individualRule, finalRoundId]);
+  }, [
+    players,
+    sortedRounds,
+    sortedRoundIds,
+    parsByCourseTeeHole,
+    rpByRoundPlayer,
+    scoreByRoundPlayerHole,
+    individualRule,
+    finalRoundId,
+  ]);
 
   // -----------------------------
   // Pairs scoring (Better Ball per hole)
   // -----------------------------
   const pairRows = useMemo(() => {
-    const rows: Array<{ groupId: string; name: string; tourTotal: number; perRound: Record<string, number>; countedIds: Set<string> }> = [];
+    const rows: Array<{
+      groupId: string;
+      name: string;
+      tourTotal: number;
+      perRound: Record<string, number>;
+      countedIds: Set<string>;
+    }> = [];
 
     for (const g of pairGroups) {
       const memberIds = memberIdsByPair.get(g.id) ?? [];
       const displayName = pairDisplayName(g.id);
+
       const perRound: Record<string, number> = {};
 
       for (const r of sortedRounds) {
@@ -664,13 +718,20 @@ export default function MobileLeaderboardsPage() {
 
             const pl = playerById.get(pid);
             const tee: Tee = normalizeTee(pl?.gender);
+
             const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(h);
             if (!pr) continue;
 
             const raw = normalizeRawScore(sc.strokes, sc.pickup);
             const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
 
-            const pts = netStablefordPointsForHole({ rawScore: raw, par: pr.par, strokeIndex: pr.si, playingHandicap: hcp });
+            const pts = netStablefordPointsForHole({
+              rawScore: raw,
+              par: pr.par,
+              strokeIndex: pr.si,
+              playingHandicap: hcp,
+            });
+
             if (pts > best) best = pts;
           }
 
@@ -701,25 +762,38 @@ export default function MobileLeaderboardsPage() {
 
     rows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
     return rows;
-  }, [pairGroups, memberIdsByPair, sortedRounds, sortedRoundIds, finalRoundId, pairRule, rpByRoundPlayer, playerById, parsByCourseTeeHole, scoreByRoundPlayerHole]);
+  }, [
+    pairGroups,
+    memberIdsByPair,
+    sortedRounds,
+    sortedRoundIds,
+    finalRoundId,
+    pairRule,
+    rpByRoundPlayer,
+    playerById,
+    parsByCourseTeeHole,
+    scoreByRoundPlayerHole,
+  ]);
 
   // -----------------------------
-  // Teams scoring (FIXED to match your rule)
-  //
-  // For each hole:
-  // - Eligible = players who are playing AND have a saved score for that hole
-  // - Compute points for each eligible player
-  // - Best Y = take ONLY points > 0, pick top Y, sum them
-  // - Penalty = -1 for each ZERO (pts === 0) among ALL eligible scores (not missing/not playing)
-  // - Hole score = sum(best positive Y) - zerosCount
+  // Teams scoring (best Y positive, minus 1 for each zero among eligible)
   // -----------------------------
   const teamRows = useMemo(() => {
-    const rows: Array<{ groupId: string; name: string; tourTotal: number; perRound: Record<string, number> }> = [];
+    const rows: Array<{
+      groupId: string;
+      title: string;
+      members: string;
+      tourTotal: number;
+      perRound: Record<string, number>;
+    }> = [];
+
     const Y = clampInt(teamRule.bestY, 1, 99);
 
     for (const g of teamGroups) {
       const memberIds = memberIdsByTeam.get(g.id) ?? [];
-      const displayName = teamDisplayName(g);
+      const lab = teamLabelById.get(g.id);
+      const title = lab?.title ?? "Team";
+      const membersLine = lab?.members ?? "";
 
       const perRound: Record<string, number> = {};
       let tourTotal = 0;
@@ -734,45 +808,42 @@ export default function MobileLeaderboardsPage() {
         let roundSum = 0;
 
         for (let h = 1; h <= 18; h++) {
-          const eligiblePoints: number[] = [];
+          const positives: number[] = [];
+          let zeroCount = 0;
 
           for (const pid of memberIds) {
             const rp = rpByRoundPlayer.get(`${r.id}|${pid}`);
             if (!rp?.playing) continue;
 
             const sc = scoreByRoundPlayerHole.get(`${r.id}|${pid}|${h}`);
-            if (!sc) continue; // missing is ignored and does NOT create a zero penalty
+            if (!sc) continue;
 
             const pl = playerById.get(pid);
             const tee: Tee = normalizeTee(pl?.gender);
+
             const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(h);
             if (!pr) continue;
 
             const raw = normalizeRawScore(sc.strokes, sc.pickup);
             const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
 
-            const pts = netStablefordPointsForHole({ rawScore: raw, par: pr.par, strokeIndex: pr.si, playingHandicap: hcp });
-            eligiblePoints.push(pts);
-          }
+            const pts = netStablefordPointsForHole({
+              rawScore: raw,
+              par: pr.par,
+              strokeIndex: pr.si,
+              playingHandicap: hcp,
+            });
 
-          if (eligiblePoints.length === 0) continue;
-
-          // penalty = -1 per zero among ALL eligible
-          let zeros = 0;
-          const positives: number[] = [];
-          for (const pts of eligiblePoints) {
-            if (pts === 0) zeros += 1;
+            if (pts === 0) zeroCount += 1;
             if (pts > 0) positives.push(pts);
           }
 
-          // best Y = only positives
           positives.sort((a, b) => b - a);
-          const selectedPositives = positives.slice(0, Math.min(Y, positives.length));
+          const selected = positives.slice(0, Math.min(Y, positives.length));
 
           let holeSum = 0;
-          for (const pts of selectedPositives) holeSum += pts;
-
-          holeSum -= zeros; // can go negative (as per your example)
+          for (const pts of selected) holeSum += pts;
+          holeSum -= zeroCount;
 
           roundSum += holeSum;
         }
@@ -781,12 +852,22 @@ export default function MobileLeaderboardsPage() {
         tourTotal += roundSum;
       }
 
-      rows.push({ groupId: g.id, name: displayName, tourTotal, perRound });
+      rows.push({ groupId: g.id, title, members: membersLine, tourTotal, perRound });
     }
 
-    rows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
+    rows.sort((a, b) => b.tourTotal - a.tourTotal || a.title.localeCompare(b.title));
     return rows;
-  }, [teamGroups, teamRule.bestY, memberIdsByTeam, sortedRounds, rpByRoundPlayer, scoreByRoundPlayerHole, playerById, parsByCourseTeeHole]);
+  }, [
+    teamGroups,
+    teamRule.bestY,
+    teamLabelById,
+    memberIdsByTeam,
+    sortedRounds,
+    rpByRoundPlayer,
+    scoreByRoundPlayerHole,
+    playerById,
+    parsByCourseTeeHole,
+  ]);
 
   // -----------------------------
   // UI
@@ -849,7 +930,9 @@ export default function MobileLeaderboardsPage() {
             </button>
           </div>
 
-          <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">{description}</div>
+          <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+            {description}
+          </div>
         </div>
       </div>
 
@@ -875,15 +958,21 @@ export default function MobileLeaderboardsPage() {
                     <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
                       Name
                     </th>
+
                     <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700">
                       <span className="inline-flex items-center rounded-md bg-yellow-100 px-2 py-1 text-[11px] font-extrabold text-yellow-900">
                         TOUR
                       </span>
                     </th>
+
                     {sortedRounds.map((r, idx) => {
                       const isFinal = r.id === finalRoundId;
                       return (
-                        <th key={r.id} className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700">
+                        <th
+                          key={r.id}
+                          className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700"
+                          title={r.name ?? ""}
+                        >
                           {roundLabel(r, idx, isFinal)}
                         </th>
                       );
@@ -892,18 +981,99 @@ export default function MobileLeaderboardsPage() {
                 </thead>
 
                 <tbody>
-                  {kind === "individual" ? (
+                  {kind === "teams" ? (
+                    teamRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={2 + sortedRounds.length} className="px-4 py-6 text-sm text-gray-700">
+                          No teams found for this tour (tour_groups scope=tour type=team).
+                        </td>
+                      </tr>
+                    ) : (
+                      teamRows.map((row) => (
+                        <tr key={row.groupId} className="border-b last:border-b-0">
+                          <td className="sticky left-0 z-10 bg-white px-3 py-2 whitespace-nowrap">
+                            <div className="text-sm font-semibold text-gray-900">{row.title}</div>
+                            {row.members ? (
+                              <div className="text-[11px] text-gray-500 truncate max-w-[220px]">{row.members}</div>
+                            ) : null}
+                          </td>
+
+                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
+                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
+                              {row.tourTotal}
+                            </span>
+                          </td>
+
+                          {sortedRounds.map((r) => {
+                            const val = row.perRound[r.id] ?? 0;
+                            return (
+                              <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
+                                <span className="inline-flex min-w-[44px] justify-end rounded-md px-2 py-1">{val}</span>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))
+                    )
+                  ) : kind === "pairs" ? (
+                    pairRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={2 + sortedRounds.length} className="px-4 py-6 text-sm text-gray-700">
+                          No pairs found for this tour (tour_groups scope=tour type=pair).
+                        </td>
+                      </tr>
+                    ) : (
+                      pairRows.map((row) => (
+                        <tr key={row.groupId} className="border-b last:border-b-0">
+                          <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                            {row.name}
+                          </td>
+
+                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
+                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
+                              {row.tourTotal}
+                            </span>
+                          </td>
+
+                          {sortedRounds.map((r) => {
+                            const val = row.perRound[r.id] ?? 0;
+                            const counted = pairRule.mode === "BEST_Q" ? row.countedIds.has(r.id) : false;
+
+                            return (
+                              <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
+                                <span
+                                  className={
+                                    counted
+                                      ? "inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1"
+                                      : "inline-flex min-w-[44px] justify-end rounded-md px-2 py-1"
+                                  }
+                                >
+                                  {val}
+                                </span>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))
+                    )
+                  ) : (
+                    // individual
                     individualRows.map((row) => (
                       <tr key={row.playerId} className="border-b last:border-b-0">
                         <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
                           {row.name}
                         </td>
+
                         <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">{row.tourTotal}</span>
+                          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
+                            {row.tourTotal}
+                          </span>
                         </td>
+
                         {sortedRounds.map((r) => {
                           const val = row.perRound[r.id] ?? 0;
                           const counted = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
+
                           return (
                             <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
                               <span
@@ -915,53 +1085,6 @@ export default function MobileLeaderboardsPage() {
                               >
                                 {val}
                               </span>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))
-                  ) : kind === "pairs" ? (
-                    pairRows.map((row) => (
-                      <tr key={row.groupId} className="border-b last:border-b-0">
-                        <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                          {row.name}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">{row.tourTotal}</span>
-                        </td>
-                        {sortedRounds.map((r) => {
-                          const val = row.perRound[r.id] ?? 0;
-                          const counted = pairRule.mode === "BEST_Q" ? row.countedIds.has(r.id) : false;
-                          return (
-                            <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                              <span
-                                className={
-                                  counted
-                                    ? "inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1"
-                                    : "inline-flex min-w-[44px] justify-end rounded-md px-2 py-1"
-                                }
-                              >
-                                {val}
-                              </span>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))
-                  ) : (
-                    teamRows.map((row) => (
-                      <tr key={row.groupId} className="border-b last:border-b-0">
-                        <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                          {row.name}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">{row.tourTotal}</span>
-                        </td>
-                        {sortedRounds.map((r) => {
-                          const val = row.perRound[r.id] ?? 0;
-                          return (
-                            <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                              <span className="inline-flex min-w-[44px] justify-end rounded-md px-2 py-1">{val}</span>
                             </td>
                           );
                         })}
@@ -988,7 +1111,8 @@ export default function MobileLeaderboardsPage() {
                   return (
                     <div key={r.id} className="flex items-center justify-between gap-3 py-1">
                       <div className="min-w-0">
-                        <span className="font-semibold">{lab}</span> <span className="text-gray-700">{r.name ? `· ${r.name}` : ""}</span>
+                        <span className="font-semibold">{lab}</span>{" "}
+                        <span className="text-gray-700">{r.name ? `· ${r.name}` : ""}</span>
                       </div>
                       <div className="text-xs text-gray-500 whitespace-nowrap">{dt || ""}</div>
                     </div>
