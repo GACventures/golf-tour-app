@@ -2,29 +2,36 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-type Tour = {
-  id: string;
-  name: string;
-};
-
-type Round = {
+type RoundRow = {
   id: string;
   tour_id: string;
-  name: string | null;
+  course_id: string | null;
   created_at: string | null;
-  // If you later add a dedicated date column, we can prefer that.
-  date?: string | null;
+  name?: string | null;
+  courses?: { name: string } | { name: string }[] | null;
 };
 
-function formatDate(iso: string | null | undefined) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-AU", {
+type Mode = "tee-times" | "score" | "results";
+
+function getCourseName(r: RoundRow) {
+  const c: any = r.courses;
+  if (!c) return "Course";
+  if (Array.isArray(c)) return c?.[0]?.name ?? "Course";
+  return c?.name ?? "Course";
+}
+
+function parseISODate(s: string | null): Date | null {
+  if (!s) return null;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function fmtDate(d: Date | null) {
+  if (!d) return "";
+  return d.toLocaleDateString(undefined, {
     weekday: "short",
     day: "2-digit",
     month: "short",
@@ -32,166 +39,171 @@ function formatDate(iso: string | null | undefined) {
   });
 }
 
-export default function MobileRoundsListPage() {
-  const params = useParams();
+function normalizeMode(raw: string | null): Mode {
+  if (raw === "tee-times" || raw === "score" || raw === "results") return raw;
+  return "score";
+}
 
-  // IMPORTANT: your folder is /tours/[id]/..., so the param is "id"
-  const tourId = (params?.id as string) || "";
+export default function MobileRoundsHubPage() {
+  const params = useParams<{ id: string }>();
+  const tourId = params?.id ?? "";
+  const router = useRouter();
+  const sp = useSearchParams();
 
-  const [tour, setTour] = useState<Tour | null>(null);
-  const [rounds, setRounds] = useState<Round[]>([]);
+  const mode = normalizeMode(sp.get("mode"));
+
+  const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState<string>("");
+  const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
-    let cancelled = false;
+    let alive = true;
 
-    async function load() {
+    async function loadRounds() {
       setLoading(true);
       setErrorMsg("");
 
-      try {
-        // Tour (for header)
-        const { data: tourData, error: tourErr } = await supabase
-          .from("tours")
-          .select("id,name")
-          .eq("id", tourId)
-          .single();
+      const { data, error } = await supabase
+        .from("rounds")
+        .select("id,tour_id,course_id,created_at,name,courses(name)")
+        .eq("tour_id", tourId)
+        .order("created_at", { ascending: true });
 
-        if (tourErr) throw tourErr;
+      if (!alive) return;
 
-        // Rounds list
-        const { data: roundsData, error: roundsErr } = await supabase
-          .from("rounds")
-          .select("id,tour_id,name,created_at")
-          .eq("tour_id", tourId)
-          .order("created_at", { ascending: true });
-
-        if (roundsErr) throw roundsErr;
-
-        if (cancelled) return;
-
-        setTour(tourData as Tour);
-        setRounds((roundsData ?? []) as Round[]);
-      } catch (e: any) {
-        if (cancelled) return;
-        setErrorMsg(e?.message ?? "Failed to load rounds.");
-      } finally {
-        if (!cancelled) setLoading(false);
+      if (error) {
+        setErrorMsg(error.message);
+        setRounds([]);
+        setLoading(false);
+        return;
       }
+
+      setRounds((data ?? []) as RoundRow[]);
+      setLoading(false);
     }
 
-    if (tourId) load();
+    if (tourId) loadRounds();
+    else {
+      setErrorMsg("Missing tour id in route.");
+      setLoading(false);
+    }
 
     return () => {
-      cancelled = true;
+      alive = false;
     };
   }, [tourId]);
 
-  const rows = useMemo(() => {
-    return rounds.map((r, idx) => {
-      const label = (r.name && r.name.trim()) || `Round ${idx + 1}`;
-      const dateText = formatDate((r as any).date ?? r.created_at);
-      return { ...r, label, dateText, idx };
+  const sorted = useMemo(() => {
+    const arr = [...rounds];
+    arr.sort((a, b) => {
+      const da = parseISODate(a.created_at)?.getTime() ?? 0;
+      const db = parseISODate(b.created_at)?.getTime() ?? 0;
+      if (da !== db) return da - db;
+      return a.id.localeCompare(b.id);
     });
+    return arr;
   }, [rounds]);
 
+  function setMode(next: Mode) {
+    const usp = new URLSearchParams(sp.toString());
+    usp.set("mode", next);
+    router.replace(`/m/tours/${tourId}/rounds?${usp.toString()}`);
+  }
+
+  function openRound(roundId: string) {
+    const base = `/m/tours/${tourId}/rounds/${roundId}`;
+    const href =
+      mode === "tee-times"
+        ? `${base}/tee-times`
+        : mode === "results"
+          ? `${base}/results`
+          : `${base}/scoring`;
+
+    router.push(href);
+  }
+
+  const pillBase =
+    "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
+  const pillActive = "border-gray-900 bg-gray-900 text-white";
+  const pillIdle = "border-gray-200 bg-white text-gray-900";
+
   return (
-    <div className="min-h-dvh bg-white">
-      {/* Header */}
-      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
+    <div className="min-h-dvh bg-white text-gray-900">
+      {/* Inner header row (under the top bar line) */}
+      <div className="border-b bg-white">
         <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="flex items-center gap-3">
-            <Link
-              href={`/m/tours/${tourId}`}
-              className="rounded-lg px-2 py-1 text-sm font-medium text-gray-700 hover:bg-gray-100 active:bg-gray-200"
-            >
-              ← Back
-            </Link>
-            <div className="min-w-0">
-              <div className="text-base font-semibold text-gray-900">Rounds</div>
-              <div className="truncate text-sm text-gray-500">
-                {tour?.name ?? ""}
-              </div>
-            </div>
-          </div>
+          <div className="text-base font-semibold">Rounds</div>
         </div>
       </div>
 
-      {/* Body */}
-      <main className="mx-auto w-full max-w-md px-4 py-4">
-        {errorMsg ? (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-            {errorMsg}
-          </div>
-        ) : null}
+      {/* Mode buttons */}
+      <div className="mx-auto w-full max-w-md px-4 pt-4">
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className={`${pillBase} ${mode === "tee-times" ? pillActive : pillIdle}`}
+            onClick={() => setMode("tee-times")}
+          >
+            Tee times
+          </button>
+          <button
+            type="button"
+            className={`${pillBase} ${mode === "score" ? pillActive : pillIdle}`}
+            onClick={() => setMode("score")}
+          >
+            Score
+          </button>
+          <button
+            type="button"
+            className={`${pillBase} ${mode === "results" ? pillActive : pillIdle}`}
+            onClick={() => setMode("results")}
+          >
+            Results
+          </button>
+        </div>
+      </div>
 
+      {/* Rounds list */}
+      <div className="mx-auto w-full max-w-md px-4 pt-4 pb-28">
         {loading ? (
           <div className="space-y-3">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="rounded-2xl border p-4">
-                <div className="h-5 w-40 rounded bg-gray-100" />
-                <div className="mt-2 h-4 w-28 rounded bg-gray-100" />
-                <div className="mt-4 flex gap-2">
-                  <div className="h-10 flex-1 rounded-xl bg-gray-100" />
-                  <div className="h-10 flex-1 rounded-xl bg-gray-100" />
-                  <div className="h-10 flex-1 rounded-xl bg-gray-100" />
-                </div>
-              </div>
-            ))}
+            <div className="h-12 rounded-2xl bg-gray-100" />
+            <div className="h-12 rounded-2xl bg-gray-100" />
+            <div className="h-12 rounded-2xl bg-gray-100" />
           </div>
-        ) : rows.length === 0 ? (
-          <div className="rounded-2xl border p-4 text-sm text-gray-700">
-            No rounds found for this tour.
-          </div>
+        ) : errorMsg ? (
+          <div className="text-sm text-red-700">{errorMsg}</div>
+        ) : sorted.length === 0 ? (
+          <div className="text-sm text-gray-600">No rounds yet.</div>
         ) : (
-          <div className="space-y-3">
-            {rows.map((r) => (
-              <div
-                key={r.id}
-                className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-base font-semibold text-gray-900">
-                      {r.label}
+          <div className="space-y-2">
+            {sorted.map((r, idx) => {
+              const label = `R${idx + 1}`;
+              const d = fmtDate(parseISODate(r.created_at));
+              const course = getCourseName(r);
+
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-left shadow-sm active:bg-gray-50"
+                  onClick={() => openRound(r.id)}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-extrabold text-gray-900">{label}</div>
+                    <div className="text-xs font-semibold text-gray-600 whitespace-nowrap">
+                      {d || "—"}
                     </div>
-                    {r.dateText ? (
-                      <div className="mt-1 text-sm text-gray-500">
-                        {r.dateText}
-                      </div>
-                    ) : null}
                   </div>
-                </div>
-
-                {/* Buttons only — no card-wide tap */}
-                <div className="mt-4 flex gap-2">
-                  <Link
-                    href={`/m/tours/${tourId}/rounds/${r.id}/tee-times`}
-                    className="flex-1 rounded-xl border border-gray-300 px-3 py-2.5 text-center text-sm font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
-                  >
-                    Tee times
-                  </Link>
-
-                  <Link
-                    href={`/m/tours/${tourId}/rounds/${r.id}/scoring`}
-                    className="flex-1 rounded-xl bg-gray-900 px-3 py-2.5 text-center text-sm font-semibold text-white hover:bg-gray-800 active:bg-gray-700"
-                  >
-                    Score
-                  </Link>
-
-                  <Link
-                    href={`/m/tours/${tourId}/rounds/${r.id}/results`}
-                    className="flex-1 rounded-xl border border-gray-300 px-3 py-2.5 text-center text-sm font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
-                  >
-                    Results
-                  </Link>
-                </div>
-              </div>
-            ))}
+                  <div className="mt-1 text-sm font-semibold text-gray-900 truncate">
+                    {course}
+                  </div>
+                </button>
+              );
+            })}
           </div>
         )}
-      </main>
+      </div>
     </div>
   );
 }
