@@ -90,77 +90,44 @@ export default function MobileTourLandingPage() {
   const dateLabel = useMemo(() => formatTourDates(start, end), [start, end]);
 
   return (
-    <div className="bg-white text-gray-900">
+    <div className="relative h-[calc(100dvh-3.5rem)] bg-black">
+      {/* Full-screen hero image */}
+      {heroImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={heroImage}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+      ) : (
+        <div className="absolute inset-0 bg-gradient-to-br from-gray-200 to-gray-300" />
+      )}
 
-      {/* 🔴 PRODUCTION MARKER – REMOVE AFTER CONFIRMATION */}
-      <div className="px-4 pt-2 text-xs font-extrabold text-red-600">
-        🚨 NEW MOBILE TOUR LANDING — PROD MARKER v5
-      </div>
+      {/* Dark gradient for text readability */}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/25 to-transparent" />
 
-      {/* Hero */}
-      <div className="relative mt-2">
-        <div className="h-52 w-full bg-gray-100 overflow-hidden">
-          {heroImage ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={heroImage}
-              alt=""
-              className="h-52 w-full object-cover"
-            />
+      {/* Bottom text overlay */}
+      <div className="absolute inset-x-0 bottom-0 px-4 pb-6">
+        <div className="mx-auto max-w-md">
+          {loading ? (
+            <div className="space-y-2">
+              <div className="h-6 w-48 rounded bg-white/30" />
+              <div className="h-4 w-64 rounded bg-white/20" />
+            </div>
+          ) : errorMsg ? (
+            <div className="text-sm text-red-200">{errorMsg}</div>
           ) : (
-            <div className="h-52 w-full bg-gradient-to-br from-gray-100 to-gray-200" />
-          )}
-        </div>
-
-        <div className="absolute inset-0 bg-black/25" />
-
-        <div className="absolute inset-x-0 bottom-0 px-4 pb-4">
-          <div className="rounded-2xl bg-white/92 backdrop-blur border border-white/60 shadow-sm px-4 py-3">
-            {loading ? (
-              <div className="space-y-2">
-                <div className="h-5 w-44 bg-gray-200 rounded" />
-                <div className="h-4 w-64 bg-gray-200 rounded" />
+            <>
+              <div className="text-2xl font-extrabold leading-tight text-white drop-shadow">
+                {title}
               </div>
-            ) : errorMsg ? (
-              <div className="text-sm text-red-700">{errorMsg}</div>
-            ) : (
-              <>
-                <div className="text-xl font-extrabold leading-tight">
-                  {title}
-                </div>
-                <div className="text-sm font-semibold text-gray-700 mt-1">
-                  {dateLabel || "Dates TBD"}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Body */}
-      <div className="px-4 pt-5 space-y-3">
-        <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="text-sm font-semibold text-gray-800">Welcome</div>
-          <div className="text-sm text-gray-600 mt-1">
-            Use the tabs below to view rounds, leaderboards, competitions, and stats.
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="text-sm font-semibold text-gray-800">Tour details</div>
-          <div className="mt-2 space-y-1 text-sm text-gray-700">
-            <div>
-              <span className="font-semibold text-gray-900">Name:</span>{" "}
-              {loading ? "Loading..." : title}
-            </div>
-            <div>
-              <span className="font-semibold text-gray-900">Dates:</span>{" "}
-              {loading ? "Loading..." : dateLabel || "Dates TBD"}
-            </div>
-          </div>
+              <div className="mt-1 text-sm font-semibold text-white/90 drop-shadow">
+                {dateLabel || "Dates TBD"}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
   );
 }
-
