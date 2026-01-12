@@ -1,4 +1,3 @@
-// app/m/tours/[id]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -8,13 +7,12 @@ import { supabase } from "@/lib/supabaseClient";
 type TourRow = {
   id: string;
   name: string | null;
-  start_date: string | null; // date in ISO from Supabase
-  end_date: string | null;   // date in ISO from Supabase
-  image_url?: string | null; // optional
-  created_at?: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  image_url?: string | null;
 };
 
-function safeParseDate(value: string | null): Date | null {
+function parseDate(value: string | null): Date | null {
   if (!value) return null;
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
@@ -56,7 +54,7 @@ export default function MobileTourLandingPage() {
 
       const { data, error } = await supabase
         .from("tours")
-        .select("id, name, start_date, end_date, image_url, created_at")
+        .select("id, name, start_date, end_date, image_url")
         .eq("id", tourId)
         .single();
 
@@ -85,20 +83,30 @@ export default function MobileTourLandingPage() {
   }, [tourId]);
 
   const title = tour?.name?.trim() || "Tour";
-  const heroImage = (tour?.image_url?.trim() || "") as string;
+  const heroImage = tour?.image_url?.trim() || "";
 
-  const start = useMemo(() => safeParseDate(tour?.start_date ?? null), [tour?.start_date]);
-  const end = useMemo(() => safeParseDate(tour?.end_date ?? null), [tour?.end_date]);
+  const start = useMemo(() => parseDate(tour?.start_date ?? null), [tour?.start_date]);
+  const end = useMemo(() => parseDate(tour?.end_date ?? null), [tour?.end_date]);
   const dateLabel = useMemo(() => formatTourDates(start, end), [start, end]);
 
   return (
     <div className="bg-white text-gray-900">
+
+      {/* 🔴 PRODUCTION MARKER – REMOVE AFTER CONFIRMATION */}
+      <div className="px-4 pt-2 text-xs font-extrabold text-red-600">
+        🚨 NEW MOBILE TOUR LANDING — PROD MARKER v5
+      </div>
+
       {/* Hero */}
-      <div className="relative">
+      <div className="relative mt-2">
         <div className="h-52 w-full bg-gray-100 overflow-hidden">
           {heroImage ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={heroImage} alt="" className="h-52 w-full object-cover" />
+            <img
+              src={heroImage}
+              alt=""
+              className="h-52 w-full object-cover"
+            />
           ) : (
             <div className="h-52 w-full bg-gradient-to-br from-gray-100 to-gray-200" />
           )}
@@ -117,7 +125,9 @@ export default function MobileTourLandingPage() {
               <div className="text-sm text-red-700">{errorMsg}</div>
             ) : (
               <>
-                <div className="text-xl font-extrabold leading-tight">{title}</div>
+                <div className="text-xl font-extrabold leading-tight">
+                  {title}
+                </div>
                 <div className="text-sm font-semibold text-gray-700 mt-1">
                   {dateLabel || "Dates TBD"}
                 </div>
@@ -141,11 +151,11 @@ export default function MobileTourLandingPage() {
           <div className="mt-2 space-y-1 text-sm text-gray-700">
             <div>
               <span className="font-semibold text-gray-900">Name:</span>{" "}
-              {loading ? "Loading…" : title}
+              {loading ? "Loading..." : title}
             </div>
             <div>
               <span className="font-semibold text-gray-900">Dates:</span>{" "}
-              {loading ? "Loading…" : dateLabel || "Dates TBD"}
+              {loading ? "Loading..." : dateLabel || "Dates TBD"}
             </div>
           </div>
         </div>
@@ -153,3 +163,4 @@ export default function MobileTourLandingPage() {
     </div>
   );
 }
+
