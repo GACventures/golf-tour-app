@@ -91,7 +91,7 @@ export default function MobileTourLandingPage() {
 
   return (
     <div className="relative h-[calc(100dvh-3.5rem)] bg-black">
-      {/* Full-screen hero image */}
+      {/* Hero image */}
       {heroImage ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -103,10 +103,10 @@ export default function MobileTourLandingPage() {
         <div className="absolute inset-0 bg-gradient-to-br from-gray-200 to-gray-300" />
       )}
 
-      {/* Dark gradient for text readability */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/25 to-transparent" />
+      {/* Dark gradient for readability */}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/30 to-transparent" />
 
-      {/* Bottom text overlay */}
+      {/* Bottom overlay text */}
       <div className="absolute inset-x-0 bottom-0 px-4 pb-6">
         <div className="mx-auto max-w-md">
           {loading ? (
