@@ -1,291 +1,272 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-type RoundRow = {
+type TourGroupRow = {
   id: string;
   tour_id: string;
-  name: string | null;
+  scope: "tour" | "round";
+  round_id: string | null;
+  type: "pair" | "team";
+  name: string;
+  team_index: number | null;
   created_at: string | null;
-  round_no: number | null;
-  course_id: string | null;
-  courses?: { name: string } | null;
 };
 
-type RoundGroup = {
-  id: string;
-  round_id: string;
-  group_no: number;
-  start_hole: number;
-  tee_time: string | null;
-  notes: string | null;
-};
-
-type RoundGroupPlayer = {
-  id: string;
-  round_id: string;
+type MemberRow = {
   group_id: string;
   player_id: string;
-  seat: number | null;
+  position: number | null;
+  players?: { name: string | null } | { name: string | null }[] | null;
 };
 
-type PlayerRow = { id: string; name: string };
+type RoundPlayerRow = {
+  player_id: string;
+  playing_handicap: number | string | null;
+};
 
-function formatDate(iso: string | null | undefined) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-AU", {
-    weekday: "short",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
+type GroupSettingRow = {
+  group_id: string;
+  tee_time?: string | null; // expected format e.g. "07:30" or "7:30 AM"
+  starting_hole?: number | string | null; // 1..18
+};
+
+function firstName(p: any): string {
+  if (!p) return "Player";
+  if (Array.isArray(p)) return (p?.[0]?.name ?? "Player") as string;
+  return (p?.name ?? "Player") as string;
 }
 
-function fmtTime(ts?: string | null) {
-  if (!ts) return "";
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return String(ts);
-  return d.toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" });
+function toNum(v: any): number | null {
+  if (v === null || v === undefined) return null;
+  const n = typeof v === "number" ? v : Number(String(v).trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+function ordinal(n: number) {
+  // 1 -> 1st, 2 -> 2nd, 3 -> 3rd, 4 -> 4th ... 11 -> 11th, 12 -> 12th, 13 -> 13th
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+  const mod10 = n % 10;
+  if (mod10 === 1) return `${n}st`;
+  if (mod10 === 2) return `${n}nd`;
+  if (mod10 === 3) return `${n}rd`;
+  return `${n}th`;
 }
 
 export default function MobileRoundTeeTimesPage() {
-  const params = useParams<Record<string, string | string[]>>();
-  const router = useRouter();
+  const params = useParams<{ id: string; roundId: string }>();
+  const tourId = params?.id ?? "";
+  const roundId = params?.roundId ?? "";
 
-  // Be tolerant of param naming differences
-  const tourId = String(params?.id ?? "").trim();
-
-  const roundId = String(
-    (params?.roundId as any) ??
-      (params?.rid as any) ??
-      (params?.round as any) ??
-      ""
-  ).trim();
+  const [groups, setGroups] = useState<TourGroupRow[]>([]);
+  const [members, setMembers] = useState<MemberRow[]>([]);
+  const [hcpByPlayer, setHcpByPlayer] = useState<Record<string, number>>({});
+  const [settingsByGroup, setSettingsByGroup] = useState<Record<string, GroupSettingRow>>({});
 
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState<string>("");
-
-  const [round, setRound] = useState<RoundRow | null>(null);
-  const [groups, setGroups] = useState<RoundGroup[]>([]);
-  const [members, setMembers] = useState<RoundGroupPlayer[]>([]);
-  const [players, setPlayers] = useState<PlayerRow[]>([]);
-
-  function goBack() {
-    // Best UX when user came from the hub
-    router.back();
-
-    // Fallback for direct visits/bookmarks
-    // (push after a microtask so router.back() gets first shot)
-    queueMicrotask(() => {
-      if (tourId && roundId) router.push(`/m/tours/${tourId}/rounds/${roundId}`);
-      else if (tourId) router.push(`/m/tours/${tourId}/rounds`);
-      else router.push(`/m`);
-    });
-  }
+  const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
-    let cancelled = false;
+    let alive = true;
 
     async function load() {
-      if (!tourId || !roundId) return;
-
       setLoading(true);
       setErrorMsg("");
 
-      try {
-        const { data: rData, error: rErr } = await supabase
-          .from("rounds")
-          .select("id,tour_id,name,created_at,round_no,course_id,courses(name)")
-          .eq("id", roundId)
-          .eq("tour_id", tourId)
-          .single();
+      // 1) Load round-scope groups for this round
+      const { data: gData, error: gErr } = await supabase
+        .from("tour_groups")
+        .select("id,tour_id,scope,round_id,type,name,team_index,created_at")
+        .eq("tour_id", tourId)
+        .eq("scope", "round")
+        .eq("round_id", roundId)
+        .order("team_index", { ascending: true })
+        .order("created_at", { ascending: true });
 
-        if (rErr) throw rErr;
+      if (!alive) return;
 
-        const { data: gData, error: gErr } = await supabase
-          .from("round_groups")
-          .select("id,round_id,group_no,start_hole,tee_time,notes")
-          .eq("round_id", roundId)
-          .order("group_no", { ascending: true });
+      if (gErr) {
+        setErrorMsg(gErr.message);
+        setGroups([]);
+        setMembers([]);
+        setHcpByPlayer({});
+        setSettingsByGroup({});
+        setLoading(false);
+        return;
+      }
 
-        if (gErr) throw gErr;
+      const gs = (gData ?? []) as TourGroupRow[];
+      setGroups(gs);
 
+      const groupIds = gs.map((g) => g.id);
+
+      // 2) Load members (with player names)
+      if (groupIds.length) {
         const { data: mData, error: mErr } = await supabase
-          .from("round_group_players")
-          .select("id,round_id,group_id,player_id,seat")
+          .from("tour_group_members")
+          .select("group_id,player_id,position,players(name)")
+          .in("group_id", groupIds)
+          .order("position", { ascending: true });
+
+        if (!alive) return;
+
+        if (mErr) {
+          setErrorMsg(mErr.message);
+          setMembers([]);
+        } else {
+          setMembers((mData ?? []) as MemberRow[]);
+        }
+      } else {
+        setMembers([]);
+      }
+
+      // 3) Load playing handicaps for the round
+      const { data: rpData, error: rpErr } = await supabase
+        .from("round_players")
+        .select("player_id,playing_handicap")
+        .eq("round_id", roundId);
+
+      if (!alive) return;
+
+      if (rpErr) {
+        // Not fatal; just omit handicaps
+        setHcpByPlayer({});
+      } else {
+        const map: Record<string, number> = {};
+        for (const r of (rpData ?? []) as RoundPlayerRow[]) {
+          const n = toNum(r.playing_handicap);
+          if (n !== null) map[r.player_id] = n;
+        }
+        setHcpByPlayer(map);
+      }
+
+      // 4) Optional: group settings (tee time + starting hole per group)
+      // If this table/columns don't exist, ignore silently.
+      if (groupIds.length) {
+        const { data: sData, error: sErr } = await supabase
+          .from("tour_grouping_settings")
+          .select("group_id,tee_time,starting_hole")
+          .eq("tour_id", tourId)
           .eq("round_id", roundId);
 
-        if (mErr) throw mErr;
+        if (!alive) return;
 
-        const { data: tpData, error: tpErr } = await supabase
-          .from("tour_players")
-          .select("player_id, players(id,name)")
-          .eq("tour_id", tourId)
-          .order("name", { ascending: true, foreignTable: "players" });
-
-        if (tpErr) throw tpErr;
-
-        const playerRows: PlayerRow[] = (tpData ?? [])
-          .map((r: any) => ({
-            id: String(r.players?.id ?? r.player_id),
-            name: String(r.players?.name ?? "(missing name)"),
-          }))
-          .filter((p) => !!p.id);
-
-        if (cancelled) return;
-
-        setRound((rData ?? null) as any);
-        setGroups((gData ?? []) as RoundGroup[]);
-        setMembers((mData ?? []) as RoundGroupPlayer[]);
-        setPlayers(playerRows);
-      } catch (e: any) {
-        if (cancelled) return;
-        setErrorMsg(e?.message ?? "Failed to load tee times.");
-      } finally {
-        if (!cancelled) setLoading(false);
+        if (!sErr) {
+          const sMap: Record<string, GroupSettingRow> = {};
+          for (const row of (sData ?? []) as GroupSettingRow[]) {
+            if (row?.group_id) sMap[row.group_id] = row;
+          }
+          setSettingsByGroup(sMap);
+        } else {
+          setSettingsByGroup({});
+        }
+      } else {
+        setSettingsByGroup({});
       }
+
+      setLoading(false);
     }
 
-    void load();
+    if (tourId && roundId) load();
+    else {
+      setErrorMsg("Missing tourId or roundId in route.");
+      setLoading(false);
+    }
 
     return () => {
-      cancelled = true;
+      alive = false;
     };
   }, [tourId, roundId]);
 
-  const playerNameById = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const p of players) m.set(p.id, p.name);
-    return m;
-  }, [players]);
-
   const membersByGroup = useMemo(() => {
-    const m = new Map<string, RoundGroupPlayer[]>();
-    for (const mem of members) {
-      if (!m.has(mem.group_id)) m.set(mem.group_id, []);
-      m.get(mem.group_id)!.push(mem);
+    const map: Record<string, MemberRow[]> = {};
+    for (const m of members) {
+      if (!map[m.group_id]) map[m.group_id] = [];
+      map[m.group_id].push(m);
     }
-    for (const [gid, arr] of m.entries()) {
-      arr.sort((a, b) => (a.seat ?? 999) - (b.seat ?? 999));
-      m.set(gid, arr);
+    // ensure sorted by position
+    for (const gid of Object.keys(map)) {
+      map[gid].sort((a, b) => (toNum(a.position) ?? 999) - (toNum(b.position) ?? 999));
     }
-    return m;
+    return map;
   }, [members]);
 
-  const roundTitle = useMemo(() => {
-    const courseName = round?.courses?.name ? ` – ${round.courses.name}` : "";
-    const noPrefix =
-      typeof round?.round_no === "number" && round.round_no > 0
-        ? `Round ${round.round_no}`
-        : "";
-    const name = (round?.name ?? "").trim();
-    const main = name ? name : noPrefix ? noPrefix : "Round";
-    return `${main}${courseName}`;
-  }, [round]);
+  function groupTitle(g: TourGroupRow, idx: number) {
+    const label = `Group ${idx + 1}`;
+    const teeTime = settingsByGroup[g.id]?.tee_time?.toString().trim();
+    return teeTime ? `${label} — ${teeTime}` : label;
+  }
 
-  const roundDateText = useMemo(() => formatDate(round?.created_at), [round]);
+  function startingHoleLabel(g: TourGroupRow) {
+    const raw = settingsByGroup[g.id]?.starting_hole;
+    const n = toNum(raw);
+    if (!n) return null;
+    return `Starting Hole: ${ordinal(n)}`;
+  }
 
   return (
-    <div className="bg-white">
-      <main className="mx-auto w-full max-w-md px-4 py-4 pb-24">
-        {/* Title row */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-xl font-semibold text-gray-900">Tee times</div>
-            <div className="mt-1 truncate text-sm text-gray-600">{roundTitle}</div>
-            {roundDateText ? (
-              <div className="mt-1 text-sm text-gray-500">{roundDateText}</div>
-            ) : null}
-          </div>
-
-          <button
-            type="button"
-            onClick={goBack}
-            className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
-          >
-            Back
-          </button>
+    <div className="min-h-dvh bg-white text-gray-900">
+      {/* Simple header row */}
+      <div className="border-b bg-white">
+        <div className="mx-auto w-full max-w-md px-4 py-3">
+          <div className="text-base font-semibold">Tee times</div>
         </div>
+      </div>
 
-        {errorMsg ? (
-          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-            {errorMsg}
-          </div>
-        ) : null}
-
+      <div className="mx-auto w-full max-w-md px-4 pt-4 pb-28">
         {loading ? (
-          <div className="mt-4 space-y-3">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="rounded-2xl border p-4">
-                <div className="h-5 w-32 rounded bg-gray-100" />
-                <div className="mt-2 h-4 w-44 rounded bg-gray-100" />
-                <div className="mt-3 space-y-2">
-                  <div className="h-4 w-56 rounded bg-gray-100" />
-                  <div className="h-4 w-52 rounded bg-gray-100" />
-                  <div className="h-4 w-48 rounded bg-gray-100" />
-                </div>
-              </div>
-            ))}
+          <div className="space-y-3">
+            <div className="h-20 rounded-2xl bg-gray-100" />
+            <div className="h-20 rounded-2xl bg-gray-100" />
+            <div className="h-20 rounded-2xl bg-gray-100" />
           </div>
+        ) : errorMsg ? (
+          <div className="text-sm text-red-700">{errorMsg}</div>
         ) : groups.length === 0 ? (
-          <div className="mt-4 rounded-2xl border p-4 text-sm text-gray-700">
-            No tee times set for this round.
-          </div>
+          <div className="text-sm text-gray-600">No groups set for this round.</div>
         ) : (
-          <div className="mt-4 space-y-3">
-            {groups.map((g) => {
-              const mem = membersByGroup.get(g.id) ?? [];
-              const timeText = fmtTime(g.tee_time);
+          <div className="space-y-3">
+            {groups.map((g, idx) => {
+              const m = membersByGroup[g.id] ?? [];
+              const startHole = startingHoleLabel(g);
 
               return (
-                <div
-                  key={g.id}
-                  className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-base font-semibold text-gray-900">
-                        Group {g.group_no}
-                      </div>
-                      <div className="mt-1 text-sm text-gray-600">
-                        Start: <span className="font-medium">{g.start_hole}</span>
-                        {timeText ? (
-                          <>
-                            {" "}
-                            · Time: <span className="font-medium">{timeText}</span>
-                          </>
-                        ) : null}
-                      </div>
-                      {g.notes ? (
-                        <div className="mt-1 text-xs text-gray-500">{g.notes}</div>
-                      ) : null}
+                <div key={g.id} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                  <div className="px-4 py-3 border-b border-gray-100">
+                    <div className="text-sm font-extrabold text-gray-900">
+                      {groupTitle(g, idx)}
                     </div>
-
-                    <div className="text-xs text-gray-500 whitespace-nowrap">
-                      Players: {mem.length}
-                    </div>
+                    {startHole ? (
+                      <div className="mt-1 text-xs font-semibold text-gray-600">
+                        {startHole}
+                      </div>
+                    ) : null}
                   </div>
 
-                  <div className="mt-3 space-y-2">
-                    {mem.length === 0 ? (
-                      <div className="text-sm text-gray-600">
-                        No players assigned.
-                      </div>
+                  <div className="px-4 py-3">
+                    {m.length === 0 ? (
+                      <div className="text-sm text-gray-600">No players in this group.</div>
                     ) : (
-                      mem.map((m, idx) => (
-                        <div key={m.id} className="flex items-center justify-between gap-3">
-                          <div className="min-w-0 truncate text-sm text-gray-900">
-                            <span className="mr-2 text-gray-500">
-                              {m.seat ?? idx + 1}.
-                            </span>
-                            {playerNameById.get(m.player_id) ?? "(unknown player)"}
-                          </div>
-                        </div>
-                      ))
+                      <div className="space-y-2">
+                        {m.map((mm) => {
+                          const name = firstName(mm.players);
+                          const hcp = hcpByPlayer[mm.player_id];
+                          const hcpText =
+                            typeof hcp === "number" && Number.isFinite(hcp) ? ` (${hcp})` : "";
+                          return (
+                            <div
+                              key={mm.player_id}
+                              className="text-sm font-semibold text-gray-900"
+                            >
+                              {name}
+                              {hcpText}
+                            </div>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -293,7 +274,7 @@ export default function MobileRoundTeeTimesPage() {
             })}
           </div>
         )}
-      </main>
+      </div>
     </div>
   );
 }
