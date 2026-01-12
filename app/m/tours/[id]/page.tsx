@@ -90,24 +90,23 @@ export default function MobileTourLandingPage() {
   const dateLabel = useMemo(() => formatTourDates(start, end), [start, end]);
 
   return (
-    <div className="relative h-[calc(100dvh-3.5rem)] bg-black">
-      {/* Hero image */}
-      {heroImage ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={heroImage}
-          alt=""
-          className="absolute inset-0 h-full w-full object-cover"
-        />
-      ) : (
-        <div className="absolute inset-0 bg-gradient-to-br from-gray-200 to-gray-300" />
-      )}
+    <div className="bg-black text-white">
+      {/* HERO IMAGE (takes most of screen, but not all) */}
+      <div className="relative h-[72vh] w-full overflow-hidden">
+        {heroImage ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={heroImage}
+            alt=""
+            className="h-full w-full object-contain bg-black"
+          />
+        ) : (
+          <div className="h-full w-full bg-gradient-to-br from-gray-200 to-gray-300" />
+        )}
+      </div>
 
-      {/* Dark gradient for readability */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/30 to-transparent" />
-
-      {/* Bottom overlay text */}
-      <div className="absolute inset-x-0 bottom-0 px-4 pb-6">
+      {/* TEXT AREA (always visible, no scroll needed) */}
+      <div className="px-4 py-5">
         <div className="mx-auto max-w-md">
           {loading ? (
             <div className="space-y-2">
@@ -115,13 +114,13 @@ export default function MobileTourLandingPage() {
               <div className="h-4 w-64 rounded bg-white/20" />
             </div>
           ) : errorMsg ? (
-            <div className="text-sm text-red-200">{errorMsg}</div>
+            <div className="text-sm text-red-300">{errorMsg}</div>
           ) : (
             <>
-              <div className="text-2xl font-extrabold leading-tight text-white drop-shadow">
+              <div className="text-2xl font-extrabold leading-tight">
                 {title}
               </div>
-              <div className="mt-1 text-sm font-semibold text-white/90 drop-shadow">
+              <div className="mt-1 text-sm font-semibold text-white/80">
                 {dateLabel || "Dates TBD"}
               </div>
             </>
