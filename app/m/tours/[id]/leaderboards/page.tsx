@@ -1,4 +1,4 @@
-// app/m/tours/[id]/leaderboards/page.tsx
+// PRODUCTION
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -16,6 +16,8 @@ type LeaderboardKind = "individual" | "pairs" | "teams";
 
 type Tour = { id: string; name: string };
 
+type CourseRel = { name: string };
+
 type RoundRow = {
   id: string;
   tour_id: string;
@@ -23,6 +25,7 @@ type RoundRow = {
   round_no: number | null;
   created_at: string | null;
   course_id: string | null;
+  courses?: CourseRel | CourseRel[] | null;
 };
 
 type PlayerRow = {
@@ -107,6 +110,11 @@ function safeName(v: any, fallback: string) {
 function normalizeTee(v: any): Tee {
   const s = String(v ?? "").trim().toUpperCase();
   return s === "F" ? "F" : "M";
+}
+
+function asSingle<T>(v: T | T[] | null | undefined): T | null {
+  if (!v) return null;
+  return Array.isArray(v) ? v[0] ?? null : v;
 }
 
 function roundLabel(round: RoundRow, index: number, isFinal: boolean) {
@@ -296,10 +304,10 @@ export default function MobileLeaderboardsPage() {
           setTeamRule({ bestY: clampInt(y, 1, 99) });
         }
 
-        // Rounds
+        // Rounds (include course name)
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
-          .select("id,tour_id,name,round_no,created_at,course_id")
+          .select("id,tour_id,name,round_no,created_at,course_id,courses(name)")
           .eq("tour_id", tourId)
           .order("round_no", { ascending: true, nullsFirst: false })
           .order("created_at", { ascending: true });
@@ -551,7 +559,7 @@ export default function MobileLeaderboardsPage() {
     return ids.map((pid) => playerById.get(pid)?.name ?? pid).join(" / ");
   }
 
-  // ✅ NEW: Team title + members line
+  // Team title + members line
   const teamLabelById = useMemo(() => {
     const m = new Map<string, { title: string; members: string }>();
 
@@ -584,7 +592,9 @@ export default function MobileLeaderboardsPage() {
     if (kind === "pairs") {
       if (pairRule.mode === "ALL") return "Pairs Better Ball · Total points across all rounds";
       const r = pairRule;
-      return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
+      return r.finalRequired
+        ? `Pairs Better Ball · Best ${r.q} rounds (Final required)`
+        : `Pairs Better Ball · Best ${r.q} rounds`;
     }
 
     return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 for each zero · All rounds`;
@@ -1057,7 +1067,6 @@ export default function MobileLeaderboardsPage() {
                       ))
                     )
                   ) : (
-                    // individual
                     individualRows.map((row) => (
                       <tr key={row.playerId} className="border-b last:border-b-0">
                         <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
@@ -1095,9 +1104,11 @@ export default function MobileLeaderboardsPage() {
               </table>
             </div>
 
-            {(kind === "individual" && individualRule.mode === "BEST_N") || (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
+            {(kind === "individual" && individualRule.mode === "BEST_N") ||
+            (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
               <div className="mt-3 text-xs text-gray-600">
-                Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour total.
+                Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour
+                total.
               </div>
             ) : null}
 
@@ -1108,11 +1119,13 @@ export default function MobileLeaderboardsPage() {
                   const isFinal = r.id === finalRoundId;
                   const lab = roundLabel(r, idx, isFinal);
                   const dt = formatDate(r.created_at);
+
+                  const courseName = safeName(asSingle(r.courses)?.name, "(course)");
                   return (
                     <div key={r.id} className="flex items-center justify-between gap-3 py-1">
                       <div className="min-w-0">
-                        <span className="font-semibold">{lab}</span>{" "}
-                        <span className="text-gray-700">{r.name ? `· ${r.name}` : ""}</span>
+                        <span className="font-semibold">{lab}</span>
+                        <span className="text-gray-700">{` · ${courseName}`}</span>
                       </div>
                       <div className="text-xs text-gray-500 whitespace-nowrap">{dt || ""}</div>
                     </div>
