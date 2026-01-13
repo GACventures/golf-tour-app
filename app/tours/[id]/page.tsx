@@ -1,3 +1,4 @@
+// app/tours/[id]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -6,7 +7,13 @@ import Link from "next/link";
 
 import { supabase } from "@/lib/supabaseClient";
 
-type Tour = { id: string; name: string };
+type Tour = {
+  id: string;
+  name: string;
+  rehandicapping_enabled: boolean | null;
+  handicap_rules_summary: string | null;
+  rehandicapping_rules_summary: string | null;
+};
 
 // Courses are now often GLOBAL (tour_id can be null)
 type Course = { id: string; name: string; tour_id: string | null };
@@ -15,7 +22,6 @@ type Course = { id: string; name: string; tour_id: string | null };
 type Player = { id: string; name: string; start_handicap: number };
 
 // Tour membership row (join)
-// NOTE: Supabase nested select can come back as an object OR array depending on relationship config.
 type TourPlayerRow = {
   tour_id: string;
   player_id: string;
@@ -81,9 +87,8 @@ function normalizePlayerJoin(val: any): { id: string; name: string; start_handic
 
   const id = p.id != null ? String(p.id) : "";
   const name = p.name != null ? String(p.name) : "";
-  const sh = p.start_handicap ?? p.start_handicap ?? p.start_handicap; // harmless, but keep robust
+  const sh = p.start_handicap ?? p.start_handicap ?? p.start_handicap;
 
-  // start_handicap should be numeric; coerce safely
   const start_handicap = Number.isFinite(Number(sh)) ? Number(sh) : 0;
 
   if (!id) return null;
@@ -115,6 +120,11 @@ function fmtRuleTeams(s: TourGroupingSettings | null) {
   return `Best ${y} per hole, −1 per zero (all rounds)`;
 }
 
+function cleanText(s: string | null | undefined) {
+  const t = (s ?? "").trim();
+  return t.length ? t : null;
+}
+
 export default function TourPage() {
   const params = useParams<{ id: string }>();
   const tourId = params.id;
@@ -131,7 +141,7 @@ export default function TourPage() {
   const [tourGroups, setTourGroups] = useState<TourGroupRow[]>([]);
   const [tourGroupMembers, setTourGroupMembers] = useState<TourGroupMemberRow[]>([]);
 
-  // NEW: Event rule settings (read-only here)
+  // Event rule settings (read-only here)
   const [eventSettings, setEventSettings] = useState<TourGroupingSettings | null>(null);
 
   async function loadAll() {
@@ -139,10 +149,10 @@ export default function TourPage() {
     setError("");
 
     try {
-      // Tour
+      // Tour (now includes handicapping fields)
       const { data: tourData, error: tourErr } = await supabase
         .from("tours")
-        .select("id,name")
+        .select("id,name,rehandicapping_enabled,handicap_rules_summary,rehandicapping_rules_summary")
         .eq("id", tourId)
         .maybeSingle();
 
@@ -151,7 +161,7 @@ export default function TourPage() {
 
       setTour(tourData as Tour);
 
-      // NEW: load event settings row
+      // Event settings
       const { data: sData, error: sErr } = await supabase
         .from("tour_grouping_settings")
         .select(
@@ -163,7 +173,7 @@ export default function TourPage() {
       if (sErr) throw new Error(sErr.message);
       setEventSettings((sData ?? null) as TourGroupingSettings | null);
 
-      // Rounds (load EARLY so we can fetch the referenced course ids)
+      // Rounds
       const { data: roundData, error: roundErr } = await supabase
         .from("rounds")
         .select("id,tour_id,course_id,name,round_no,created_at")
@@ -175,11 +185,10 @@ export default function TourPage() {
       const roundList = (roundData ?? []) as Round[];
       setRounds(roundList);
 
-      // ✅ Courses: fetch by the course_ids used by these rounds (works for GLOBAL courses too)
+      // Courses by course_id (supports GLOBAL courses too)
       const courseIds = Array.from(new Set(roundList.map((r) => r.course_id).filter(Boolean))) as string[];
       if (courseIds.length) {
         const { data: cData, error: cErr } = await supabase.from("courses").select("id,name,tour_id").in("id", courseIds);
-
         if (cErr) throw new Error(cErr.message);
 
         const map: Record<string, Course> = {};
@@ -319,9 +328,33 @@ export default function TourPage() {
       </div>
     );
 
+  const handicapSummary =
+    cleanText(tour?.handicap_rules_summary) ??
+    "Handicap baseline not specified yet. (Set tours.handicap_rules_summary to describe the source + any adjustments.)";
+
+  const rehEnabled = tour?.rehandicapping_enabled === true;
+
+  const rehSummary = rehEnabled
+    ? cleanText(tour?.rehandicapping_rules_summary) ??
+      "Rehandicapping is enabled, but no summary is set yet. (Set tours.rehandicapping_rules_summary.)"
+    : "No rehandicapping.";
+
   return (
     <div style={{ padding: 16 }}>
       <h1 style={{ fontSize: 24, fontWeight: 700 }}>{tour?.name ?? "Tour"}</h1>
+
+      {/* NEW: Handicapping */}
+      <h2 style={{ marginTop: 18, fontSize: 18, fontWeight: 700 }}>Handicapping</h2>
+      <div style={{ marginTop: 8, color: "#333", lineHeight: 1.5 }}>
+        <div>
+          <strong>Baseline / rules:</strong> <span style={{ color: "#555" }}>{handicapSummary}</span>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <strong>Rehandicapping:</strong>{" "}
+          <span style={{ color: rehEnabled ? "#1b5e20" : "#555", fontWeight: 600 }}>{rehEnabled ? "Yes" : "No"}</span>
+        </div>
+        <div style={{ marginTop: 6, color: "#555" }}>{rehSummary}</div>
+      </div>
 
       {/* Players (hub) */}
       <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Players</h2>
@@ -344,14 +377,16 @@ export default function TourPage() {
         </ul>
       )}
 
-      {/* Events (NEW) */}
+      {/* Events */}
       <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Events</h2>
       <div style={{ marginTop: 8, color: "#333" }}>
         <div>
-          <strong>Individual</strong> — Stableford total &nbsp;·&nbsp; <span style={{ color: "#555" }}>{fmtRuleIndividual(eventSettings)}</span>
+          <strong>Individual</strong> — Stableford total &nbsp;·&nbsp;{" "}
+          <span style={{ color: "#555" }}>{fmtRuleIndividual(eventSettings)}</span>
         </div>
         <div style={{ marginTop: 6 }}>
-          <strong>Pairs</strong> — Better Ball Stableford &nbsp;·&nbsp; <span style={{ color: "#555" }}>{fmtRulePairs(eventSettings)}</span>
+          <strong>Pairs</strong> — Better Ball Stableford &nbsp;·&nbsp;{" "}
+          <span style={{ color: "#555" }}>{fmtRulePairs(eventSettings)}</span>
         </div>
         <div style={{ marginTop: 6 }}>
           <strong>Teams</strong> — {fmtRuleTeams(eventSettings)}
