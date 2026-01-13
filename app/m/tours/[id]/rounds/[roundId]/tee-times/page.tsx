@@ -4,11 +4,16 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
+type RoundRow = {
+  id: string;
+  created_at: string | null;
+  courses?: { name: string } | { name: string }[] | null;
+};
+
 type RoundGroupRow = {
   id: string;
-  round_id: string;
-  group_no: number | null;
-  tee_time: string | null; // returned as string by Supabase for time
+  group_no: number;
+  tee_time: string | null;
   start_hole: number | null;
 };
 
@@ -23,39 +28,58 @@ type RoundPlayerRow = {
   playing_handicap: number | string | null;
 };
 
-function playerName(p: any): string {
-  if (!p) return "Player";
-  if (Array.isArray(p)) return (p?.[0]?.name ?? "Player") as string;
-  return (p?.name ?? "Player") as string;
+function courseName(r: RoundRow | null) {
+  const c: any = r?.courses;
+  if (!c) return "";
+  if (Array.isArray(c)) return c?.[0]?.name ?? "";
+  return c?.name ?? "";
 }
 
-function toNum(v: any): number | null {
-  if (v === null || v === undefined) return null;
-  const n = typeof v === "number" ? v : Number(String(v).trim());
-  return Number.isFinite(n) ? n : null;
+function parseDate(s: string | null) {
+  if (!s) return null;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function fmtDate(d: Date | null) {
+  if (!d) return "";
+  return d.toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function ordinal(n: number) {
-  const mod100 = n % 100;
-  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
-  const mod10 = n % 10;
-  if (mod10 === 1) return `${n}st`;
-  if (mod10 === 2) return `${n}nd`;
-  if (mod10 === 3) return `${n}rd`;
+  const m100 = n % 100;
+  if (m100 >= 11 && m100 <= 13) return `${n}th`;
+  const m10 = n % 10;
+  if (m10 === 1) return `${n}st`;
+  if (m10 === 2) return `${n}nd`;
+  if (m10 === 3) return `${n}rd`;
   return `${n}th`;
 }
 
-function fmtTeeTime(t: string | null) {
+function fmtTime(t: string | null) {
   if (!t) return "";
-  // Supabase time often comes back as "HH:MM:SS" — trim seconds.
-  const s = t.trim();
-  if (/^\d{2}:\d{2}:\d{2}$/.test(s)) return s.slice(0, 5);
-  return s;
+  // Supabase returns HH:MM:SS → trim seconds
+  return t.length >= 5 ? t.slice(0, 5) : t;
+}
+
+function playerName(p: any) {
+  if (!p) return "Player";
+  if (Array.isArray(p)) return p?.[0]?.name ?? "Player";
+  return p?.name ?? "Player";
 }
 
 export default function MobileRoundTeeTimesPage() {
   const params = useParams<{ id: string; roundId: string }>();
-  const roundId = params?.roundId ?? "";
+  const tourId = params.id;
+  const roundId = params.roundId;
+
+  const [round, setRound] = useState<RoundRow | null>(null);
+  const [roundIndex, setRoundIndex] = useState<number | null>(null);
 
   const [groups, setGroups] = useState<RoundGroupRow[]>([]);
   const [members, setMembers] = useState<GroupPlayerRow[]>([]);
@@ -71,80 +95,85 @@ export default function MobileRoundTeeTimesPage() {
       setLoading(true);
       setErrorMsg("");
 
-      // 1) Load tee-time groups for this round
+      /** 1) Load all rounds (to compute Round X) */
+      const { data: allRounds } = await supabase
+        .from("rounds")
+        .select("id")
+        .eq("tour_id", tourId)
+        .order("created_at", { ascending: true });
+
+      if (!alive) return;
+
+      const idx =
+        (allRounds ?? []).findIndex((r: any) => r.id === roundId) + 1;
+      setRoundIndex(idx > 0 ? idx : null);
+
+      /** 2) Load this round (course + date) */
+      const { data: rData, error: rErr } = await supabase
+        .from("rounds")
+        .select("id,created_at,courses(name)")
+        .eq("id", roundId)
+        .single();
+
+      if (!alive) return;
+      if (rErr) {
+        setErrorMsg(rErr.message);
+        setLoading(false);
+        return;
+      }
+      setRound(rData as RoundRow);
+
+      /** 3) Load tee-time groups */
       const { data: gData, error: gErr } = await supabase
         .from("round_groups")
-        .select("id,round_id,group_no,tee_time,start_hole")
+        .select("id,group_no,tee_time,start_hole")
         .eq("round_id", roundId)
         .order("group_no", { ascending: true });
 
       if (!alive) return;
-
       if (gErr) {
         setErrorMsg(gErr.message);
-        setGroups([]);
-        setMembers([]);
-        setHcpByPlayer({});
         setLoading(false);
         return;
       }
+      setGroups((gData ?? []) as RoundGroupRow[]);
 
-      const gs = (gData ?? []) as RoundGroupRow[];
-      setGroups(gs);
+      const groupIds = (gData ?? []).map((g: any) => g.id);
 
-      const groupIds = gs.map((g) => g.id);
-
-      // 2) Load group membership + player names
+      /** 4) Group players */
       if (groupIds.length) {
-        const { data: mData, error: mErr } = await supabase
+        const { data: mData } = await supabase
           .from("round_group_players")
           .select("group_id,player_id,players(name)")
           .in("group_id", groupIds);
 
         if (!alive) return;
-
-        if (mErr) {
-          setErrorMsg(mErr.message);
-          setMembers([]);
-        } else {
-          setMembers((mData ?? []) as GroupPlayerRow[]);
-        }
-      } else {
-        setMembers([]);
+        setMembers((mData ?? []) as GroupPlayerRow[]);
       }
 
-      // 3) Load playing handicaps for this round
-      const { data: rpData, error: rpErr } = await supabase
+      /** 5) Playing handicaps */
+      const { data: rpData } = await supabase
         .from("round_players")
         .select("player_id,playing_handicap")
         .eq("round_id", roundId);
 
       if (!alive) return;
 
-      if (rpErr) {
-        setHcpByPlayer({});
-      } else {
-        const map: Record<string, number> = {};
-        for (const r of (rpData ?? []) as RoundPlayerRow[]) {
-          const n = toNum(r.playing_handicap);
-          if (n !== null) map[r.player_id] = n;
-        }
-        setHcpByPlayer(map);
+      const map: Record<string, number> = {};
+      for (const r of (rpData ?? []) as RoundPlayerRow[]) {
+        const n = Number(r.playing_handicap);
+        if (Number.isFinite(n)) map[r.player_id] = n;
       }
+      setHcpByPlayer(map);
 
       setLoading(false);
     }
 
-    if (roundId) load();
-    else {
-      setErrorMsg("Missing roundId in route.");
-      setLoading(false);
-    }
-
+    load();
     return () => {
       alive = false;
     };
-  }, [roundId]);
+  }, [tourId, roundId]);
 
   const membersByGroup = useMemo(() => {
     const map: Record<string, GroupPlayerRow[]> = {};
@@ -152,71 +181,75 @@ export default function MobileRoundTeeTimesPage() {
       if (!map[m.group_id]) map[m.group_id] = [];
       map[m.group_id].push(m);
     }
-    // keep stable order (DB order not guaranteed). If you have a position column, we can sort properly.
-    for (const gid of Object.keys(map)) {
-      map[gid].sort((a, b) => playerName(a.players).localeCompare(playerName(b.players)));
-    }
     return map;
   }, [members]);
 
+  const roundDate = fmtDate(parseDate(round?.created_at ?? null));
+  const course = courseName(round);
+
   return (
     <div className="min-h-dvh bg-white text-gray-900">
-      {/* Header row */}
+      {/* Header */}
       <div className="border-b bg-white">
-        <div className="mx-auto w-full max-w-md px-4 py-3">
+        <div className="mx-auto max-w-md px-4 py-3">
           <div className="text-base font-semibold">Tee times</div>
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-md px-4 pt-4 pb-28">
+      {/* Round summary */}
+      <div className="border-b bg-gray-50">
+        <div className="mx-auto max-w-md px-4 py-3 text-sm font-semibold text-gray-800">
+          {roundIndex ? `Round ${roundIndex}` : "Round"} · {roundDate} · {course}
+        </div>
+      </div>
+
+      <div className="mx-auto max-w-md px-4 pt-4 pb-28">
         {loading ? (
           <div className="space-y-3">
-            <div className="h-20 rounded-2xl bg-gray-100" />
-            <div className="h-20 rounded-2xl bg-gray-100" />
-            <div className="h-20 rounded-2xl bg-gray-100" />
+            <div className="h-24 rounded-xl bg-gray-100" />
+            <div className="h-24 rounded-xl bg-gray-100" />
           </div>
         ) : errorMsg ? (
           <div className="text-sm text-red-700">{errorMsg}</div>
         ) : groups.length === 0 ? (
-          <div className="text-sm text-gray-600">No tee times set for this round.</div>
+          <div className="text-sm text-gray-600">No tee times set.</div>
         ) : (
           <div className="space-y-3">
             {groups.map((g) => {
-              const groupNo = g.group_no ?? 0;
-              const tee = fmtTeeTime(g.tee_time);
-              const startHole = g.start_hole ? `Starting Hole: ${ordinal(g.start_hole)}` : "";
-              const title = tee ? `Group ${groupNo} — ${tee}` : `Group ${groupNo}`;
-
-              const m = membersByGroup[g.id] ?? [];
+              const title = `Group ${g.group_no}${
+                g.tee_time ? ` — ${fmtTime(g.tee_time)}` : ""
+              }`;
+              const startHole = g.start_hole
+                ? `Starting Hole: ${ordinal(g.start_hole)}`
+                : "";
 
               return (
-                <div key={g.id} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                <div
+                  key={g.id}
+                  className="rounded-2xl border border-gray-200 bg-white shadow-sm"
+                >
                   <div className="px-4 py-3 border-b border-gray-100">
-                    <div className="text-sm font-extrabold text-gray-900">{title}</div>
-                    {startHole ? (
-                      <div className="mt-1 text-xs font-semibold text-gray-600">{startHole}</div>
-                    ) : null}
-                  </div>
-
-                  <div className="px-4 py-3">
-                    {m.length === 0 ? (
-                      <div className="text-sm text-gray-600">No players in this group.</div>
-                    ) : (
-                      <div className="space-y-2">
-                        {m.map((mm) => {
-                          const name = playerName(mm.players);
-                          const hcp = hcpByPlayer[mm.player_id];
-                          const hcpText =
-                            typeof hcp === "number" && Number.isFinite(hcp) ? ` (${hcp})` : "";
-                          return (
-                            <div key={mm.player_id} className="text-sm font-semibold text-gray-900">
-                              {name}
-                              {hcpText}
-                            </div>
-                          );
-                        })}
+                    <div className="text-sm font-extrabold">{title}</div>
+                    {startHole && (
+                      <div className="mt-1 text-xs font-semibold text-gray-600">
+                        {startHole}
                       </div>
                     )}
+                  </div>
+
+                  <div className="px-4 py-3 space-y-2">
+                    {(membersByGroup[g.id] ?? []).map((m) => {
+                      const hcp = hcpByPlayer[m.player_id];
+                      return (
+                        <div
+                          key={m.player_id}
+                          className="text-sm font-semibold"
+                        >
+                          {playerName(m.players)}
+                          {Number.isFinite(hcp) ? ` (${hcp})` : ""}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );
