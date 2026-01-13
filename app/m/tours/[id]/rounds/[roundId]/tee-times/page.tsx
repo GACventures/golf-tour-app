@@ -63,8 +63,10 @@ function ordinal(n: number) {
 
 function fmtTime(t: string | null) {
   if (!t) return "";
-  // Supabase returns HH:MM:SS → trim seconds
-  return t.length >= 5 ? t.slice(0, 5) : t;
+  const s = String(t).trim();
+  // "HH:MM:SS" -> "HH:MM"
+  if (s.length >= 5) return s.slice(0, 5);
+  return s;
 }
 
 function playerName(p: any) {
@@ -95,7 +97,7 @@ export default function MobileRoundTeeTimesPage() {
       setLoading(true);
       setErrorMsg("");
 
-      /** 1) Load all rounds (to compute Round X) */
+      // Round number = order in tour
       const { data: allRounds } = await supabase
         .from("rounds")
         .select("id")
@@ -104,11 +106,10 @@ export default function MobileRoundTeeTimesPage() {
 
       if (!alive) return;
 
-      const idx =
-        (allRounds ?? []).findIndex((r: any) => r.id === roundId) + 1;
+      const idx = (allRounds ?? []).findIndex((r: any) => r.id === roundId) + 1;
       setRoundIndex(idx > 0 ? idx : null);
 
-      /** 2) Load this round (course + date) */
+      // Round header info (date + course)
       const { data: rData, error: rErr } = await supabase
         .from("rounds")
         .select("id,created_at,courses(name)")
@@ -123,7 +124,7 @@ export default function MobileRoundTeeTimesPage() {
       }
       setRound(rData as RoundRow);
 
-      /** 3) Load tee-time groups */
+      // Tee-time groups
       const { data: gData, error: gErr } = await supabase
         .from("round_groups")
         .select("id,group_no,tee_time,start_hole")
@@ -140,7 +141,7 @@ export default function MobileRoundTeeTimesPage() {
 
       const groupIds = (gData ?? []).map((g: any) => g.id);
 
-      /** 4) Group players */
+      // Group players
       if (groupIds.length) {
         const { data: mData } = await supabase
           .from("round_group_players")
@@ -149,9 +150,11 @@ export default function MobileRoundTeeTimesPage() {
 
         if (!alive) return;
         setMembers((mData ?? []) as GroupPlayerRow[]);
+      } else {
+        setMembers([]);
       }
 
-      /** 5) Playing handicaps */
+      // Playing handicaps
       const { data: rpData } = await supabase
         .from("round_players")
         .select("player_id,playing_handicap")
@@ -189,14 +192,12 @@ export default function MobileRoundTeeTimesPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900">
-      {/* Header */}
       <div className="border-b bg-white">
         <div className="mx-auto max-w-md px-4 py-3">
           <div className="text-base font-semibold">Tee times</div>
         </div>
       </div>
 
-      {/* Round summary */}
       <div className="border-b bg-gray-50">
         <div className="mx-auto max-w-md px-4 py-3 text-sm font-semibold text-gray-800">
           {roundIndex ? `Round ${roundIndex}` : "Round"} · {roundDate} · {course}
@@ -216,12 +217,10 @@ export default function MobileRoundTeeTimesPage() {
         ) : (
           <div className="space-y-3">
             {groups.map((g) => {
-              const title = `Group ${g.group_no}${
-                g.tee_time ? ` — ${fmtTime(g.tee_time)}` : ""
-              }`;
-              const startHole = g.start_hole
-                ? `Starting Hole: ${ordinal(g.start_hole)}`
-                : "";
+              const timeLabel = fmtTime(g.tee_time) || "TBD";
+              const title = `Group ${g.group_no} — ${timeLabel}`;
+              const startHole =
+                g.start_hole ? `Starting Hole: ${ordinal(g.start_hole)}` : "";
 
               return (
                 <div
@@ -230,21 +229,18 @@ export default function MobileRoundTeeTimesPage() {
                 >
                   <div className="px-4 py-3 border-b border-gray-100">
                     <div className="text-sm font-extrabold">{title}</div>
-                    {startHole && (
+                    {startHole ? (
                       <div className="mt-1 text-xs font-semibold text-gray-600">
                         {startHole}
                       </div>
-                    )}
+                    ) : null}
                   </div>
 
                   <div className="px-4 py-3 space-y-2">
                     {(membersByGroup[g.id] ?? []).map((m) => {
                       const hcp = hcpByPlayer[m.player_id];
                       return (
-                        <div
-                          key={m.player_id}
-                          className="text-sm font-semibold"
-                        >
+                        <div key={m.player_id} className="text-sm font-semibold">
                           {playerName(m.players)}
                           {Number.isFinite(hcp) ? ` (${hcp})` : ""}
                         </div>
