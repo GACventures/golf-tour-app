@@ -120,6 +120,24 @@ function cleanText(s: string | null | undefined) {
   return t.length ? t : null;
 }
 
+function isBlank(s: string | null | undefined) {
+  return !((s ?? "").trim().length);
+}
+
+/**
+ * Plain-English default summary based on the current Handicap Validation algorithm:
+ * - Each round: compute Stableford using that round's PH
+ * - Compute rounded average Stableford for the round
+ * - Next round PH adjusts by (avg - player)/3 (rounded half-up)
+ * - Clamp between ceil(SH/2) and SH + 3
+ * - If a player didn't play, PH carries forward unchanged
+ */
+const DEFAULT_REHANDICAP_SUMMARY =
+  "After each completed round, we recalculate the next round Playing Handicap (PH) from Stableford results. " +
+  "We take the rounded average Stableford score for the round, compare it to each player’s score, then adjust PH by one-third of the difference (rounded to the nearest whole number, with .5 rounding up). " +
+  "PH is capped so it cannot go higher than Starting Handicap + 3, and cannot go lower than ceil(Starting Handicap ÷ 2). " +
+  "If a player did not play a round, their PH carries forward unchanged.";
+
 export default function TourPage() {
   const params = useParams<{ id: string }>();
   const tourId = params.id;
@@ -136,7 +154,7 @@ export default function TourPage() {
   const [tourGroupMembers, setTourGroupMembers] = useState<TourGroupMemberRow[]>([]);
   const [eventSettings, setEventSettings] = useState<TourGroupingSettings | null>(null);
 
-  // Step C: edit controls state
+  // Edit controls state
   const [editingHcp, setEditingHcp] = useState(false);
   const [draftRehEnabled, setDraftRehEnabled] = useState(false);
   const [draftHandicapSummary, setDraftHandicapSummary] = useState("");
@@ -349,7 +367,6 @@ export default function TourPage() {
     setSaveMsg("Saved ✓");
     setEditingHcp(false);
 
-    // Refresh tour fields (and keep the rest of page intact)
     const { data: t2, error: t2Err } = await supabase
       .from("tours")
       .select("id,name,rehandicapping_enabled,handicap_rules_summary,rehandicapping_rules_summary")
@@ -388,7 +405,7 @@ export default function TourPage() {
   const readRehEnabled = tour?.rehandicapping_enabled === true;
 
   const readRehSummary = readRehEnabled
-    ? cleanText(tour?.rehandicapping_rules_summary) ?? "Rehandicapping enabled (no summary set)."
+    ? cleanText(tour?.rehandicapping_rules_summary) ?? DEFAULT_REHANDICAP_SUMMARY
     : "No rehandicapping.";
 
   return (
@@ -504,7 +521,7 @@ export default function TourPage() {
         </ul>
       )}
 
-      {/* Handicapping (BOTTOM, as requested) */}
+      {/* Handicapping (BOTTOM) */}
       <h2 style={{ marginTop: 36, fontSize: 18, fontWeight: 700 }}>Handicapping</h2>
 
       {!editingHcp ? (
@@ -569,7 +586,15 @@ export default function TourPage() {
               <input
                 type="checkbox"
                 checked={draftRehEnabled}
-                onChange={(e) => setDraftRehEnabled(e.target.checked)}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  setDraftRehEnabled(enabled);
+
+                  // Auto-fill default summary only when turning ON and the field is blank.
+                  if (enabled && isBlank(draftRehSummary)) {
+                    setDraftRehSummary(DEFAULT_REHANDICAP_SUMMARY);
+                  }
+                }}
               />
               Rehandicapping enabled
             </label>
@@ -582,7 +607,7 @@ export default function TourPage() {
             <textarea
               value={draftRehSummary}
               onChange={(e) => setDraftRehSummary(e.target.value)}
-              rows={4}
+              rows={5}
               disabled={!draftRehEnabled}
               style={{
                 width: "100%",
