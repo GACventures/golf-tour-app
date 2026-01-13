@@ -5,7 +5,9 @@ import { useParams, useSearchParams } from "next/navigation";
 
 import { supabase } from "@/lib/supabaseClient";
 import { netStablefordPointsForHole } from "@/lib/stableford";
-import SwipePager from "@/app/m/_components/SwipePager";
+
+// ✅ FIX: use relative import (avoids "@/app/..." alias issues in build)
+import SwipePager from "../../../../../../_components/SwipePager";
 
 type Tee = "M" | "F";
 type TabKey = "entry" | "summary";
@@ -287,7 +289,7 @@ export default function MobileScoreEntryPage() {
   const meTee = useMemo(() => teeForPlayer(meId), [meId, roundPlayers, playersById]);
   const buddyTee = useMemo(() => teeForPlayer(buddyId), [buddyId, roundPlayers, playersById]);
 
-  // ✅ these are playing handicaps from round_players
+  // playing handicaps from round_players
   const meHcp = useMemo(() => {
     const rp = roundPlayers.find((x) => x.player_id === meId);
     return Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp?.playing_handicap) : 0;
@@ -303,7 +305,6 @@ export default function MobileScoreEntryPage() {
     return holeInfoByNumberByTee[tee]?.[h] ?? { par: 0, si: 0 };
   }
 
-  // Entry-only: show BOTH tees for the current hole
   const holeInfoM = holeInfoByNumberByTee.M?.[hole] ?? { par: 0, si: 0 };
   const holeInfoF = holeInfoByNumberByTee.F?.[hole] ?? { par: 0, si: 0 };
 
@@ -436,7 +437,7 @@ export default function MobileScoreEntryPage() {
     }
   }
 
-  // ✅ Whole-page swipe: index is hole-1
+  // ✅ Whole-page swipe (Entry only): index is hole-1
   const swipeEnabled = tab === "entry";
   function onSwipeChange(nextIdx: number) {
     if (!swipeEnabled) return;
@@ -738,13 +739,18 @@ export default function MobileScoreEntryPage() {
       </div>
     );
   } else {
-    // Wrap the entire scoring surface in SwipePager
+    const swipeEnabled = tab === "entry";
+
     body = (
       <SwipePager
         index={hole - 1}
         count={18}
-        onChangeIndex={onSwipeChange}
-        durationMs={650} // slower, more obvious
+        onChangeIndex={(nextIdx) => {
+          if (!swipeEnabled) return;
+          const nextHole = clamp(nextIdx + 1, 1, 18);
+          if (nextHole !== hole) setHole(nextHole);
+        }}
+        durationMs={650}
         swipeThresholdPx={70}
       >
         <div className={`${navy} min-h-[100svh] text-white`}>
