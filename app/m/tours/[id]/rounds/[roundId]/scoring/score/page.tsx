@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from "next/navigation";
 
 import { supabase } from "@/lib/supabaseClient";
 import { netStablefordPointsForHole } from "@/lib/stableford";
+import SwipePager from "@/app/m/_components/SwipePager";
 
 type Tee = "M" | "F";
 type TabKey = "entry" | "summary";
@@ -84,11 +85,6 @@ function normalizeTee(v: any): Tee {
   return s === "F" ? "F" : "M";
 }
 
-type HoleFxState =
-  | { stage: "idle"; dir: "next" | "prev" | null }
-  | { stage: "out"; dir: "next" | "prev" }
-  | { stage: "in"; dir: "next" | "prev" };
-
 export default function MobileScoreEntryPage() {
   const params = useParams();
   const sp = useSearchParams();
@@ -125,39 +121,6 @@ export default function MobileScoreEntryPage() {
   const [summaryPid, setSummaryPid] = useState<string>("");
 
   const isLocked = round?.is_locked === true;
-
-  // ✅ FX state + timeouts
-  const [holeFx, setHoleFx] = useState<HoleFxState>({ stage: "idle", dir: null });
-  const fxTimerRef = useRef<number | null>(null);
-
-  function clearFxTimer() {
-    if (fxTimerRef.current) {
-      window.clearTimeout(fxTimerRef.current);
-      fxTimerRef.current = null;
-    }
-  }
-
-  // ✅ FX wrapper styles (slide + fade) — MUST run EVERY render
-  const fxStyle: React.CSSProperties = useMemo(() => {
-    const dist = 16; // px
-    const base = "transform 160ms ease-out, opacity 160ms ease-out";
-
-    if (holeFx.stage === "idle") {
-      return { transform: "translateX(0px)", opacity: 1, transition: base };
-    }
-
-    if (holeFx.stage === "out") {
-      const x = holeFx.dir === "next" ? -dist : dist;
-      return { transform: `translateX(${x}px)`, opacity: 0.35, transition: base };
-    }
-
-    if (holeFx.stage === "in") {
-      const x = holeFx.dir === "next" ? dist : -dist;
-      return { transform: `translateX(${x}px)`, opacity: 0.35, transition: base };
-    }
-
-    return { transform: "translateX(0px)", opacity: 1, transition: base };
-  }, [holeFx]);
 
   // --------- Load ----------
   useEffect(() => {
@@ -473,57 +436,13 @@ export default function MobileScoreEntryPage() {
     }
   }
 
-  // Swipe handling: left = next, right = prev (Entry tab only)
-  const swipeRef = useRef<{ x: number; y: number; t: number } | null>(null);
-
-  function animateHoleChange(dir: "next" | "prev") {
-    if (tab !== "entry") return;
-    if (holeFx.stage !== "idle") return;
-
-    const nextHole = clamp(hole + (dir === "next" ? 1 : -1), 1, 18);
-    if (nextHole === hole) return;
-
-    clearFxTimer();
-    setHoleFx({ stage: "out", dir });
-
-    fxTimerRef.current = window.setTimeout(() => {
-      setHole(nextHole);
-      setHoleFx({ stage: "in", dir });
-
-      fxTimerRef.current = window.setTimeout(() => {
-        setHoleFx({ stage: "idle", dir: null });
-        clearFxTimer();
-      }, 140);
-    }, 140);
+  // ✅ Whole-page swipe: index is hole-1
+  const swipeEnabled = tab === "entry";
+  function onSwipeChange(nextIdx: number) {
+    if (!swipeEnabled) return;
+    const nextHole = clamp(nextIdx + 1, 1, 18);
+    if (nextHole !== hole) setHole(nextHole);
   }
-
-  function onTouchStart(e: React.TouchEvent) {
-    const t = e.touches[0];
-    swipeRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
-  }
-
-  function onTouchEnd(e: React.TouchEvent) {
-    const start = swipeRef.current;
-    swipeRef.current = null;
-    if (!start) return;
-
-    const t = e.changedTouches[0];
-    const dx = t.clientX - start.x;
-    const dy = t.clientY - start.y;
-    const dt = Date.now() - start.t;
-
-    if (Math.abs(dy) > Math.abs(dx)) return;
-    if (dt > 700) return;
-
-    const threshold = 50;
-    if (dx <= -threshold) animateHoleChange("next");
-    if (dx >= threshold) animateHoleChange("prev");
-  }
-
-  useEffect(() => {
-    return () => clearFxTimer();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const dirty = isDirty();
 
@@ -571,11 +490,7 @@ export default function MobileScoreEntryPage() {
     const raw = scores[pid]?.[hole] ?? "";
     const pickup = raw === "P";
 
-    // ✅ Stableford points (NET) — shown in POINTS box
     const pts = pointsFor(pid, hole);
-
-    // ✅ Gross strokes — shown between − and +
-    // - blank treated as 0 for display (same as before)
     const grossDisplay = pickup ? "—" : raw && raw !== "P" ? raw : "0";
 
     const info = infoFor(pid, hole);
@@ -608,7 +523,6 @@ export default function MobileScoreEntryPage() {
               −
             </button>
 
-            {/* ✅ Center now shows GROSS strokes (not Stableford) */}
             <div className="text-center">
               <div className="text-5xl font-black text-slate-900 leading-none">{grossDisplay}</div>
               <div className="text-sm font-semibold text-slate-700 mt-1">strokes</div>
@@ -640,7 +554,6 @@ export default function MobileScoreEntryPage() {
               </div>
             </div>
 
-            {/* ✅ This box is now POINTS (net Stableford) */}
             <div>
               <div className="text-[11px] font-bold tracking-wide text-slate-700">POINTS</div>
               <div
@@ -825,110 +738,115 @@ export default function MobileScoreEntryPage() {
       </div>
     );
   } else {
+    // Wrap the entire scoring surface in SwipePager
     body = (
-      <div
-        className={`${navy} min-h-[100svh] text-white`}
-        onTouchStart={tab === "entry" ? onTouchStart : undefined}
-        onTouchEnd={tab === "entry" ? onTouchEnd : undefined}
+      <SwipePager
+        index={hole - 1}
+        count={18}
+        onChangeIndex={onSwipeChange}
+        durationMs={650} // slower, more obvious
+        swipeThresholdPx={70}
       >
-        {/* Top bar */}
-        <div className="px-4 pt-4 pb-2 flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <button
-              type="button"
-              className="flex items-center gap-2 text-xl font-bold"
-              onClick={() => {
-                const href = `/m/tours/${String((params as any)?.id ?? "")}/rounds/${roundId}/scoring?meId=${encodeURIComponent(
-                  meId
-                )}${buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""}`;
-                if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?"))
-                  window.location.href = href;
-              }}
-            >
-              <span className="text-2xl">‹</span>
-            </button>
-            <div className="leading-tight">
-              <div className="text-sm font-semibold">{round?.name ?? "Round"}</div>
-              <div className="text-xs opacity-75">{courseName}</div>
-              <div className="text-[11px] opacity-80">
-                {isLocked ? (
-                  <span className="text-red-300 font-semibold">Locked</span>
-                ) : (
-                  <span className="text-green-300 font-semibold">Open</span>
-                )}
+        <div className={`${navy} min-h-[100svh] text-white`}>
+          {/* Top bar */}
+          <div className="px-4 pt-4 pb-2 flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <button
+                type="button"
+                className="flex items-center gap-2 text-xl font-bold"
+                onClick={() => {
+                  const href = `/m/tours/${String((params as any)?.id ?? "")}/rounds/${roundId}/scoring?meId=${encodeURIComponent(
+                    meId
+                  )}${buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""}`;
+                  if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?"))
+                    window.location.href = href;
+                }}
+              >
+                <span className="text-2xl">‹</span>
+              </button>
+              <div className="leading-tight">
+                <div className="text-sm font-semibold">{round?.name ?? "Round"}</div>
+                <div className="text-xs opacity-75">{courseName}</div>
+                <div className="text-[11px] opacity-80">
+                  {isLocked ? (
+                    <span className="text-red-300 font-semibold">Locked</span>
+                  ) : (
+                    <span className="text-green-300 font-semibold">Open</span>
+                  )}
+                </div>
               </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={saveAll}
+                disabled={saving || isLocked}
+                className={`px-3 py-2 rounded-md text-sm font-bold text-white ${
+                  saving || isLocked ? "bg-slate-500" : "bg-sky-600"
+                }`}
+              >
+                {saving ? "Saving…" : isLocked ? "Locked" : "Save (Me)"}
+              </button>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={saveAll}
-              disabled={saving || isLocked}
-              className={`px-3 py-2 rounded-md text-sm font-bold text-white ${
-                saving || isLocked ? "bg-slate-500" : "bg-sky-600"
-              }`}
-            >
-              {saving ? "Saving…" : isLocked ? "Locked" : "Save (Me)"}
-            </button>
+          {/* Entry: hole box; Summary: player toggle */}
+          {tab === "entry" ? <HoleBoxEntryOnly /> : <SummaryPlayerToggleTop />}
+
+          {/* Tabs */}
+          <div className="px-4">
+            <div className="rounded-md border border-slate-600/60 overflow-hidden flex">
+              <button
+                type="button"
+                onClick={() => setTab("entry")}
+                className={`flex-1 py-2 text-sm font-semibold ${
+                  tab === "entry" ? "bg-slate-800 text-white" : "bg-slate-900 text-slate-200"
+                }`}
+              >
+                Entry
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("summary")}
+                className={`flex-1 py-2 text-sm font-semibold ${
+                  tab === "summary" ? "bg-sky-600 text-white" : "bg-slate-900 text-slate-200"
+                }`}
+              >
+                Summary
+              </button>
+            </div>
+          </div>
+
+          {/* Content */}
+          <div className="px-4 py-3 space-y-3">
+            {tab === "entry" ? (
+              <>
+                <PlayerCard pid={meId} name={meName} hcp={meHcp} tee={meTee} />
+                {buddyId ? <PlayerCard pid={buddyId} name={buddyName} hcp={buddyHcp} tee={buddyTee} /> : null}
+
+                <div className="text-xs opacity-80 text-center">
+                  Swipe <span className="font-semibold">left/right</span> to change hole.{" "}
+                  {dirty ? <span className="text-amber-300 font-semibold">Unsaved (Me)</span> : null}
+                  {savedMsg ? <span className="text-green-300 font-semibold"> {savedMsg}</span> : null}
+                  {saveErr ? <span className="text-red-300 font-semibold"> {saveErr}</span> : null}
+                </div>
+
+                <div className="text-[11px] opacity-70 text-center">
+                  Note: Buddy scores are for viewing/entry only and are not saved.
+                </div>
+
+                {errorMsg ? <div className="text-sm text-red-300">{errorMsg}</div> : null}
+              </>
+            ) : (
+              <>
+                <SummaryTable />
+                {errorMsg ? <div className="text-sm text-red-300">{errorMsg}</div> : null}
+              </>
+            )}
           </div>
         </div>
-
-        {/* Entry: hole box; Summary: player toggle */}
-        {tab === "entry" ? <HoleBoxEntryOnly /> : <SummaryPlayerToggleTop />}
-
-        {/* Tabs */}
-        <div className="px-4">
-          <div className="rounded-md border border-slate-600/60 overflow-hidden flex">
-            <button
-              type="button"
-              onClick={() => setTab("entry")}
-              className={`flex-1 py-2 text-sm font-semibold ${
-                tab === "entry" ? "bg-slate-800 text-white" : "bg-slate-900 text-slate-200"
-              }`}
-            >
-              Entry
-            </button>
-            <button
-              type="button"
-              onClick={() => setTab("summary")}
-              className={`flex-1 py-2 text-sm font-semibold ${
-                tab === "summary" ? "bg-sky-600 text-white" : "bg-slate-900 text-slate-200"
-              }`}
-            >
-              Summary
-            </button>
-          </div>
-        </div>
-
-        {/* Content with FX wrapper */}
-        <div className="px-4 py-3 space-y-3" style={fxStyle}>
-          {tab === "entry" ? (
-            <>
-              <PlayerCard pid={meId} name={meName} hcp={meHcp} tee={meTee} />
-              {buddyId ? <PlayerCard pid={buddyId} name={buddyName} hcp={buddyHcp} tee={buddyTee} /> : null}
-
-              <div className="text-xs opacity-80 text-center">
-                Swipe <span className="font-semibold">left/right</span> to change hole.{" "}
-                {dirty ? <span className="text-amber-300 font-semibold">Unsaved (Me)</span> : null}
-                {savedMsg ? <span className="text-green-300 font-semibold"> {savedMsg}</span> : null}
-                {saveErr ? <span className="text-red-300 font-semibold"> {saveErr}</span> : null}
-              </div>
-
-              <div className="text-[11px] opacity-70 text-center">
-                Note: Buddy scores are for viewing/entry only and are not saved.
-              </div>
-
-              {errorMsg ? <div className="text-sm text-red-300">{errorMsg}</div> : null}
-            </>
-          ) : (
-            <>
-              <SummaryTable />
-              {errorMsg ? <div className="text-sm text-red-300">{errorMsg}</div> : null}
-            </>
-          )}
-        </div>
-      </div>
+      </SwipePager>
     );
   }
 
