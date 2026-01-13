@@ -1,4 +1,3 @@
-// app/m/tours/[id]/layout.tsx
 "use client";
 
 import type { ReactNode } from "react";
@@ -45,7 +44,7 @@ export default function TourLayout({ children }: { children: ReactNode }) {
     };
   }, [tourId]);
 
-  const overviewHref = `/m/tours/${tourId}`;
+  const homeHref = `/m/tours/${tourId}`;
 
   return (
     <div className="min-h-dvh bg-white">
@@ -59,17 +58,17 @@ export default function TourLayout({ children }: { children: ReactNode }) {
             </div>
           </div>
 
-          {/* Right: Overview link */}
+          {/* Right: Home link */}
           <Link
-            href={overviewHref}
+            href={homeHref}
             className="rounded-lg px-2 py-1 text-sm font-semibold text-gray-800 hover:bg-gray-100 active:bg-gray-200"
           >
-            Overview
+            Home
           </Link>
         </div>
       </div>
 
-      {/* Content (pad for fixed bottom nav) */}
+      {/* Content */}
       <main className="mx-auto w-full max-w-md px-0 pb-20">
         {children}
       </main>
