@@ -2,8 +2,8 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { useParams, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import MobileNav from "./_components/MobileNav";
 
@@ -11,8 +11,9 @@ type Tour = { id: string; name: string };
 
 export default function TourLayout({ children }: { children: ReactNode }) {
   const params = useParams<{ id?: string }>();
-  const tourId = String(params?.id ?? "").trim();
+  const pathname = usePathname();
 
+  const tourId = String(params?.id ?? "").trim();
   const [tourName, setTourName] = useState<string>("");
 
   useEffect(() => {
@@ -46,32 +47,39 @@ export default function TourLayout({ children }: { children: ReactNode }) {
 
   const homeHref = `/m/tours/${tourId}`;
 
+  // Hide ONLY on the tour landing page (/m/tours/[id])
+  const hideTopBar = useMemo(() => {
+    if (!tourId) return false;
+    // pathname is usually exactly /m/tours/<id> (no trailing slash)
+    return pathname === `/m/tours/${tourId}`;
+  }, [pathname, tourId]);
+
   return (
     <div className="min-h-dvh bg-white">
-      {/* Top bar */}
-      <div className="sticky top-0 z-20 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-md items-center justify-between px-4 py-3">
-          {/* Left: Tour name */}
-          <div className="min-w-0">
-            <div className="truncate text-base font-semibold text-gray-900">
-              {tourName || "Tour"}
+      {/* Top bar (hidden on landing page only) */}
+      {!hideTopBar && (
+        <div className="sticky top-0 z-20 border-b bg-white/95 backdrop-blur">
+          <div className="mx-auto flex w-full max-w-md items-center justify-between px-4 py-3">
+            {/* Left: Tour name */}
+            <div className="min-w-0">
+              <div className="truncate text-base font-semibold text-gray-900">
+                {tourName || "Tour"}
+              </div>
             </div>
-          </div>
 
-          {/* Right: Home link */}
-          <Link
-            href={homeHref}
-            className="rounded-lg px-2 py-1 text-sm font-semibold text-gray-800 hover:bg-gray-100 active:bg-gray-200"
-          >
-            Home
-          </Link>
+            {/* Right: Home link */}
+            <Link
+              href={homeHref}
+              className="rounded-lg px-2 py-1 text-sm font-semibold text-gray-800 hover:bg-gray-100 active:bg-gray-200"
+            >
+              Home
+            </Link>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Content */}
-      <main className="mx-auto w-full max-w-md px-0 pb-20">
-        {children}
-      </main>
+      <main className="mx-auto w-full max-w-md px-0 pb-20">{children}</main>
 
       {/* Bottom nav */}
       <MobileNav />
