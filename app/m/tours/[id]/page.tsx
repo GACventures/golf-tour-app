@@ -1,4 +1,3 @@
-// app/m/tours/[id]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -8,16 +7,12 @@ import { supabase } from "@/lib/supabaseClient";
 type TourRow = {
   id: string;
   name: string | null;
-  start_date: string | null; // YYYY-MM-DD
-  end_date: string | null; // YYYY-MM-DD
+  start_date: string | null;
+  end_date: string | null;
   image_url?: string | null;
 };
 
-type RoundRow = {
-  id: string;
-  tour_id: string;
-  played_on: string | null; // YYYY-MM-DD
-};
+const DEFAULT_HERO = "/tours/tour-landing-hero-cartoon.webp";
 
 function parseDate(value: string | null): Date | null {
   if (!value) return null;
@@ -49,49 +44,36 @@ export default function MobileTourLandingPage() {
   const tourId = params?.id ?? "";
 
   const [tour, setTour] = useState<TourRow | null>(null);
-  const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
     let alive = true;
 
-    async function loadTourAndRounds() {
+    async function loadTour() {
       setLoading(true);
       setErrorMsg("");
 
-      try {
-        const [{ data: tData, error: tErr }, { data: rData, error: rErr }] = await Promise.all([
-          supabase
-            .from("tours")
-            .select("id, name, start_date, end_date, image_url")
-            .eq("id", tourId)
-            .single(),
-          supabase
-            .from("rounds")
-            .select("id, tour_id, played_on")
-            .eq("tour_id", tourId),
-        ]);
+      const { data, error } = await supabase
+        .from("tours")
+        .select("id, name, start_date, end_date, image_url")
+        .eq("id", tourId)
+        .single();
 
-        if (!alive) return;
+      if (!alive) return;
 
-        if (tErr) throw new Error(tErr.message);
-        if (rErr) throw new Error(rErr.message);
-
-        setTour(tData as TourRow);
-        setRounds((rData ?? []) as RoundRow[]);
-      } catch (e: any) {
-        if (!alive) return;
-        setErrorMsg(e?.message ?? "Failed to load tour.");
+      if (error) {
+        setErrorMsg(error.message);
         setTour(null);
-        setRounds([]);
-      } finally {
-        if (!alive) return;
         setLoading(false);
+        return;
       }
+
+      setTour(data as TourRow);
+      setLoading(false);
     }
 
-    if (tourId) loadTourAndRounds();
+    if (tourId) loadTour();
     else {
       setErrorMsg("Missing tour id in route.");
       setLoading(false);
@@ -103,40 +85,27 @@ export default function MobileTourLandingPage() {
   }, [tourId]);
 
   const title = tour?.name?.trim() || "Tour";
-  const heroImage = tour?.image_url?.trim() || "";
 
-  // Default dates from rounds.played_on if tour dates not set
-  const derived = useMemo(() => {
-    const played = rounds
-      .map((r) => (r.played_on ? String(r.played_on) : null))
-      .filter(Boolean) as string[];
+  // ✅ Always show a hero image (tour image_url if present, otherwise default)
+  const heroImage = (tour?.image_url?.trim() ? tour!.image_url!.trim() : DEFAULT_HERO) as string;
 
-    if (!played.length) return { start: null as string | null, end: null as string | null };
-
-    played.sort(); // ISO date strings sort correctly
-    return { start: played[0] ?? null, end: played[played.length - 1] ?? null };
-  }, [rounds]);
-
-  const effectiveStartStr = (tour?.start_date ?? "").trim() || derived.start;
-  const effectiveEndStr = (tour?.end_date ?? "").trim() || derived.end;
-
-  const start = useMemo(() => parseDate(effectiveStartStr ?? null), [effectiveStartStr]);
-  const end = useMemo(() => parseDate(effectiveEndStr ?? null), [effectiveEndStr]);
+  const start = useMemo(() => parseDate(tour?.start_date ?? null), [tour?.start_date]);
+  const end = useMemo(() => parseDate(tour?.end_date ?? null), [tour?.end_date]);
   const dateLabel = useMemo(() => formatTourDates(start, end), [start, end]);
 
   return (
     <div className="bg-black text-white">
       {/* HERO IMAGE */}
-      <div className="relative h-[72vh] w-full overflow-hidden">
-        {heroImage ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={heroImage} alt="" className="h-full w-full object-contain bg-black" />
-        ) : (
-          <div className="h-full w-full bg-gradient-to-br from-gray-200 to-gray-300" />
-        )}
+      <div className="relative h-[72vh] w-full overflow-hidden bg-black">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={heroImage}
+          alt=""
+          className="h-full w-full object-contain bg-black"
+        />
       </div>
 
-      {/* TEXT AREA */}
+      {/* TEXT AREA (no bracket/explanatory text) */}
       <div className="px-4 py-5">
         <div className="mx-auto max-w-md">
           {loading ? (
@@ -149,17 +118,9 @@ export default function MobileTourLandingPage() {
           ) : (
             <>
               <div className="text-2xl font-extrabold leading-tight">{title}</div>
-
               <div className="mt-1 text-sm font-semibold text-white/80">
                 {dateLabel || "Dates TBD"}
               </div>
-
-              {/* Optional hint when derived */}
-              {(!tour?.start_date || !tour?.end_date) && derived.start && derived.end ? (
-                <div className="mt-1 text-xs text-white/60">
-                  (Using dates from rounds)
-                </div>
-              ) : null}
             </>
           )}
         </div>
