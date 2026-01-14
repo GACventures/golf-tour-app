@@ -106,6 +106,19 @@ type EntityLeaderRow = {
   total: number;
 };
 
+type TourGroupingSettingsRow = {
+  tour_id: string;
+  default_team_best_m: number | null;
+
+  individual_mode: string | null; // "ALL" | "BEST_N"
+  individual_best_n: number | null;
+  individual_final_required: boolean | null;
+
+  pair_mode: string | null; // "ALL" | "BEST_Q"
+  pair_best_q: number | null;
+  pair_final_required: boolean | null;
+};
+
 function round2(n: number) {
   return Number.isFinite(n) ? Number(n.toFixed(2)) : 0;
 }
@@ -179,6 +192,16 @@ function rawScoreFor(strokes: number | null, pickup?: boolean | null) {
   return String(strokes);
 }
 
+function clampInt(n: any, min: number, max: number) {
+  const x = Math.floor(Number(n));
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
+function upper(s: any) {
+  return String(s ?? "").trim().toUpperCase();
+}
+
 export default function TourLeaderboardPage() {
   const params = useParams<{ id: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -195,12 +218,12 @@ export default function TourLeaderboardPage() {
 
   const [excludeIncomplete, setExcludeIncomplete] = useState(true);
 
-  // Individual best N rounds
+  // Individual best N rounds (UI state)
   const [useBestN, setUseBestN] = useState(false);
   const [bestN, setBestN] = useState(3);
   const [bestNMustIncludeFinal, setBestNMustIncludeFinal] = useState(false);
 
-  // Pair best N rounds
+  // Pair best N rounds (UI state)
   const [useBestNForPairs, setUseBestNForPairs] = useState(false);
   const [bestNPairs, setBestNPairs] = useState(3);
   const [bestNPairsMustIncludeFinal, setBestNPairsMustIncludeFinal] = useState(false);
@@ -209,6 +232,13 @@ export default function TourLeaderboardPage() {
   const [teamBestM, setTeamBestM] = useState<number>(2);
   const [savingTeamBestM, setSavingTeamBestM] = useState(false);
   const [teamBestMMsg, setTeamBestMMsg] = useState<string>("");
+
+  // ✅ NEW: save status for Individual + Pair settings
+  const [savingInd, setSavingInd] = useState(false);
+  const [indMsg, setIndMsg] = useState<string>("");
+
+  const [savingPair, setSavingPair] = useState(false);
+  const [pairMsg, setPairMsg] = useState<string>("");
 
   // Competition selection + diagnostics
   const tourCompetitions = useMemo(() => {
@@ -238,23 +268,61 @@ export default function TourLeaderboardPage() {
 
       try {
         // Tour
-        const { data: tour, error: tourErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
+        const { data: tour, error: tourErr } = await supabase
+          .from("tours")
+          .select("id,name")
+          .eq("id", tourId)
+          .single();
 
         if (cancelled) return;
         if (tourErr) throw tourErr;
         setTourName(String((tour as Tour).name ?? ""));
 
-        // team settings (M) - optional
+        // ✅ Load settings (team + individual + pair)
         {
           const { data: sData, error: sErr } = await supabase
             .from("tour_grouping_settings")
-            .select("default_team_best_m")
+            .select(
+              "tour_id, default_team_best_m, individual_mode, individual_best_n, individual_final_required, pair_mode, pair_best_q, pair_final_required"
+            )
             .eq("tour_id", tourId)
             .maybeSingle();
 
           if (!cancelled && !sErr) {
-            const m = Number((sData as any)?.default_team_best_m);
+            const s = (sData ?? null) as TourGroupingSettingsRow | null;
+
+            // Team best M
+            const m = Number(s?.default_team_best_m);
             if (Number.isFinite(m) && m >= 1 && m <= 10) setTeamBestM(m);
+
+            // Individual rule
+            const indMode = upper(s?.individual_mode || "ALL");
+            const indN = Number(s?.individual_best_n);
+            const indFinalReq = s?.individual_final_required === true;
+
+            if (indMode === "BEST_N" && Number.isFinite(indN) && indN > 0) {
+              setUseBestN(true);
+              setBestN(clampInt(indN, 1, 99));
+              setBestNMustIncludeFinal(indFinalReq);
+            } else {
+              setUseBestN(false);
+              // keep current bestN/bestNMustIncludeFinal values as user defaults
+              setBestNMustIncludeFinal(indFinalReq); // safe: reflects DB even when ALL
+            }
+
+            // Pair rule
+            const pairMode = upper(s?.pair_mode || "ALL");
+            const pairQ = Number(s?.pair_best_q);
+            const pairFinalReq = s?.pair_final_required === true;
+
+            if (pairMode === "BEST_Q" && Number.isFinite(pairQ) && pairQ > 0) {
+              setUseBestNForPairs(true);
+              setBestNPairs(clampInt(pairQ, 1, 99));
+              setBestNPairsMustIncludeFinal(pairFinalReq);
+            } else {
+              setUseBestNForPairs(false);
+              setBestNPairsMustIncludeFinal(pairFinalReq);
+            }
           }
         }
 
@@ -306,7 +374,10 @@ export default function TourLeaderboardPage() {
 
         // Pars
         if (courseIds.length) {
-          const { data: parsData, error: parsErr } = await supabase.from("pars").select("course_id,hole_number,par,stroke_index").in("course_id", courseIds);
+          const { data: parsData, error: parsErr } = await supabase
+            .from("pars")
+            .select("course_id,hole_number,par,stroke_index")
+            .in("course_id", courseIds);
 
           if (cancelled) return;
           if (parsErr) throw parsErr;
@@ -334,7 +405,10 @@ export default function TourLeaderboardPage() {
         );
 
         // Scores
-        const { data: scoreData, error: scoreErr } = await supabase.from("scores").select("round_id,player_id,hole_number,strokes,pickup").in("round_id", roundIds);
+        const { data: scoreData, error: scoreErr } = await supabase
+          .from("scores")
+          .select("round_id,player_id,hole_number,strokes,pickup")
+          .in("round_id", roundIds);
 
         if (cancelled) return;
         if (scoreErr) throw scoreErr;
@@ -542,7 +616,7 @@ export default function TourLeaderboardPage() {
 
         const hcp = rp ? rp.hcp : Number.isFinite(Number(pl.start_handicap)) ? Number(pl.start_handicap) : 0;
 
-        const holeInfo = courseHole[String(courseId)] ?? {};
+        const holeInfo = (courseHole as any)[String(courseId)] ?? {};
         let roundTotal = 0;
 
         for (let hole = 1; hole <= 18; hole++) {
@@ -580,7 +654,8 @@ export default function TourLeaderboardPage() {
   }, [players, roundHeaders, derived, useBestN, bestN, bestNMustIncludeFinal, roundIdsInOrder]);
 
   // ---------- ENTITY LEADERBOARD (PAIR/TEAM) ----------
-  const isGroupComp = selectedDef?.kind === "pair" || selectedDef?.kind === "team";
+  const selectedKind = selectedDef?.kind;
+  const isGroupComp = selectedKind === "pair" || selectedKind === "team";
 
   const entityLeaderboard = useMemo((): { rows: EntityLeaderRow[]; hasAny: boolean } => {
     if (!isGroupComp || !selectedDef) return { rows: [], hasAny: false };
@@ -602,7 +677,7 @@ export default function TourLeaderboardPage() {
 
       const hcp = rp ? rp.hcp : playerStartHcpById[playerId] ?? 0;
 
-      const info = courseHole[String(courseId)]?.[hole];
+      const info = (courseHole as any)[String(courseId)]?.[hole];
       if (!info) return 0;
 
       const raw = (scoreMap[roundId]?.[playerId]?.[hole] ?? "").trim().toUpperCase();
@@ -670,7 +745,7 @@ export default function TourLeaderboardPage() {
 
       let total = totalAllRounds;
 
-      // Best-N for pairs (optional)
+      // Best-Q for pairs (optional)
       if (selectedDef.kind === "pair" && useBestNForPairs) {
         total = bestNWithOptionalFinal({
           perRoundById: perRound,
@@ -711,7 +786,7 @@ export default function TourLeaderboardPage() {
       const { courseHole, rpByRound, scoreMap, playingIdsForRound } = derived;
 
       const tourRounds: TourRoundContextLocal[] = eligibleRounds.map((r) => {
-        const holeInfo = courseHole[String(r.course_id ?? "")] ?? {};
+        const holeInfo = (courseHole as any)[String(r.course_id ?? "")] ?? {};
         const parsByHole = Array.from({ length: 18 }, (_, i) => holeInfo[i + 1]?.par ?? 0);
         const strokeIndexByHole = Array.from({ length: 18 }, (_, i) => holeInfo[i + 1]?.si ?? 0);
 
@@ -775,7 +850,8 @@ export default function TourLeaderboardPage() {
         };
       });
 
-      const playedAny = (playerId: string) => tourRounds.some((tr) => derived.playingIdsForRound(tr.roundId).includes(playerId));
+      const playedAny = (playerId: string) =>
+        tourRounds.some((tr) => derived.playingIdsForRound(tr.roundId).includes(playerId));
       const anyRoundPlayersData = Object.keys(derived.rpByRound ?? {}).length > 0;
 
       const ctx: TourCompetitionContextLocal = {
@@ -807,7 +883,17 @@ export default function TourLeaderboardPage() {
         for (const k of Object.keys(stats)) keySet.add(k);
       }
 
-      const preferred = ["members", "holes_played", "points_total", "avg_points", "zero_count", "zero_pct", "four_plus_count", "four_plus_pct", "eclectic_total"];
+      const preferred = [
+        "members",
+        "holes_played",
+        "points_total",
+        "avg_points",
+        "zero_count",
+        "zero_pct",
+        "four_plus_count",
+        "four_plus_pct",
+        "eclectic_total",
+      ];
       const keys = Array.from(keySet);
       keys.sort((a, b) => {
         const ia = preferred.indexOf(a);
@@ -822,6 +908,61 @@ export default function TourLeaderboardPage() {
       return { compResult: null as any, compColumns: [] as string[] };
     }
   }, [selectedDef, eligibleRounds, players, derived, entityMembersById, entityLabelsById, entities, teamBestM]);
+
+  // ✅ Save helpers for settings that mobile reads
+  async function saveIndividualSettings() {
+    setIndMsg("");
+    setSavingInd(true);
+
+    const mode = useBestN ? "BEST_N" : "ALL";
+    const n = useBestN ? clampInt(bestN, 1, 99) : null;
+    const finalReq = bestNMustIncludeFinal === true;
+
+    const payload: any = {
+      tour_id: tourId,
+      individual_mode: mode,
+      individual_best_n: n,
+      individual_final_required: finalReq,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from("tour_grouping_settings").upsert(payload, { onConflict: "tour_id" });
+
+    setSavingInd(false);
+    if (error) {
+      setIndMsg(`Save failed: ${error.message}`);
+      return;
+    }
+    setIndMsg("Saved ✓");
+    setTimeout(() => setIndMsg(""), 1500);
+  }
+
+  async function savePairSettings() {
+    setPairMsg("");
+    setSavingPair(true);
+
+    const mode = useBestNForPairs ? "BEST_Q" : "ALL";
+    const q = useBestNForPairs ? clampInt(bestNPairs, 1, 99) : null;
+    const finalReq = bestNPairsMustIncludeFinal === true;
+
+    const payload: any = {
+      tour_id: tourId,
+      pair_mode: mode,
+      pair_best_q: q,
+      pair_final_required: finalReq,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from("tour_grouping_settings").upsert(payload, { onConflict: "tour_id" });
+
+    setSavingPair(false);
+    if (error) {
+      setPairMsg(`Save failed: ${error.message}`);
+      return;
+    }
+    setPairMsg("Saved ✓");
+    setTimeout(() => setPairMsg(""), 1500);
+  }
 
   async function saveTeamBestM(next: number) {
     setTeamBestMMsg("");
@@ -870,7 +1011,9 @@ export default function TourLeaderboardPage() {
           Rounds: <b>{rounds.length}</b> · Players: <b>{players.length}</b> · Scores rows: <b>{scores.length}</b> · round_players rows:{" "}
           <b>{roundPlayers.length}</b>
         </div>
-        <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>If “Exclude incomplete rounds” hides everything, check the per-round completeness below.</div>
+        <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>
+          If “Exclude incomplete rounds” hides everything, check the per-round completeness below.
+        </div>
 
         <div style={{ marginTop: 10, overflowX: "auto" }}>
           <table style={{ borderCollapse: "collapse", minWidth: 760, width: "100%" }}>
@@ -905,7 +1048,11 @@ export default function TourLeaderboardPage() {
                       <td style={tdRight}>{c.playingCount}</td>
                       <td style={tdRight}>{c.missing}</td>
                       <td style={tdLeft}>
-                        {c.complete ? <span style={{ color: "#2e7d32", fontWeight: 700 }}>Complete</span> : <span style={{ color: "#b23c17", fontWeight: 700 }}>Incomplete</span>}
+                        {c.complete ? (
+                          <span style={{ color: "#2e7d32", fontWeight: 700 }}>Complete</span>
+                        ) : (
+                          <span style={{ color: "#b23c17", fontWeight: 700 }}>Incomplete</span>
+                        )}
                         {!c.complete ? <div style={{ fontSize: 12, color: "#666" }}>{c.reason}</div> : null}
                       </td>
                     </tr>
@@ -924,7 +1071,7 @@ export default function TourLeaderboardPage() {
       </div>
 
       {/* Individual best-N */}
-      <div style={{ marginBottom: 16, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+      <div style={{ marginBottom: 10, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
         <label style={{ fontSize: 14 }}>
           <input type="checkbox" checked={useBestN} onChange={(e) => setUseBestN(e.target.checked)} style={{ marginRight: 6 }} />
           Individual: use best N rounds
@@ -934,15 +1081,102 @@ export default function TourLeaderboardPage() {
           <>
             <label style={{ fontSize: 14 }}>
               N:&nbsp;
-              <input type="number" min={1} max={50} value={bestN} onChange={(e) => setBestN(Math.max(1, Number(e.target.value) || 1))} style={{ width: 70, padding: 4 }} />
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={bestN}
+                onChange={(e) => setBestN(Math.max(1, Number(e.target.value) || 1))}
+                style={{ width: 70, padding: 4 }}
+              />
             </label>
 
             <label style={{ fontSize: 14 }}>
-              <input type="checkbox" checked={bestNMustIncludeFinal} onChange={(e) => setBestNMustIncludeFinal(e.target.checked)} style={{ marginRight: 6 }} />
+              <input
+                type="checkbox"
+                checked={bestNMustIncludeFinal}
+                onChange={(e) => setBestNMustIncludeFinal(e.target.checked)}
+                style={{ marginRight: 6 }}
+              />
               Must include final (if not played, uses best N−1)
             </label>
           </>
         )}
+
+        <button
+          type="button"
+          onClick={() => saveIndividualSettings()}
+          disabled={savingInd}
+          style={{
+            padding: "6px 10px",
+            borderRadius: 8,
+            border: "1px solid #ccc",
+            background: savingInd ? "#f7f7f7" : "white",
+          }}
+        >
+          {savingInd ? "Saving…" : "Save individual rule"}
+        </button>
+
+        {indMsg ? (
+          <div style={{ fontSize: 12, color: indMsg.startsWith("Save failed") ? "crimson" : "#2e7d32" }}>{indMsg}</div>
+        ) : null}
+      </div>
+
+      {/* Pair best-N */}
+      <div style={{ marginBottom: 16, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <label style={{ fontSize: 14 }}>
+          <input
+            type="checkbox"
+            checked={useBestNForPairs}
+            onChange={(e) => setUseBestNForPairs(e.target.checked)}
+            style={{ marginRight: 6 }}
+          />
+          Pairs: use best N rounds
+        </label>
+
+        {useBestNForPairs && (
+          <>
+            <label style={{ fontSize: 14 }}>
+              N:&nbsp;
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={bestNPairs}
+                onChange={(e) => setBestNPairs(Math.max(1, Number(e.target.value) || 1))}
+                style={{ width: 70, padding: 4 }}
+              />
+            </label>
+
+            <label style={{ fontSize: 14 }}>
+              <input
+                type="checkbox"
+                checked={bestNPairsMustIncludeFinal}
+                onChange={(e) => setBestNPairsMustIncludeFinal(e.target.checked)}
+                style={{ marginRight: 6 }}
+              />
+              Must include final (if not played, uses best N−1)
+            </label>
+          </>
+        )}
+
+        <button
+          type="button"
+          onClick={() => savePairSettings()}
+          disabled={savingPair}
+          style={{
+            padding: "6px 10px",
+            borderRadius: 8,
+            border: "1px solid #ccc",
+            background: savingPair ? "#f7f7f7" : "white",
+          }}
+        >
+          {savingPair ? "Saving…" : "Save pair rule"}
+        </button>
+
+        {pairMsg ? (
+          <div style={{ fontSize: 12, color: pairMsg.startsWith("Save failed") ? "crimson" : "#2e7d32" }}>{pairMsg}</div>
+        ) : null}
       </div>
 
       {/* Competitions */}
@@ -950,7 +1184,11 @@ export default function TourLeaderboardPage() {
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div style={{ fontSize: 16, fontWeight: 800 }}>Competitions</div>
 
-          <select value={selectedCompId} onChange={(e) => setSelectedCompId(e.target.value)} style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #ccc" }}>
+          <select
+            value={selectedCompId}
+            onChange={(e) => setSelectedCompId(e.target.value)}
+            style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #ccc" }}
+          >
             {tourCompetitions.length === 0 ? (
               <option value="(none)">No tour competitions found</option>
             ) : (
@@ -977,29 +1215,12 @@ export default function TourLeaderboardPage() {
           </div>
         ) : null}
 
-        {/* Pair best-N options */}
+        {/* Pair best-N options (only show inside pairs/team competitions area as well, but rules are above too) */}
         {selectedDef?.kind === "pair" && (
           <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #eee" }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Pair settings</div>
-            <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-              <label style={{ fontSize: 13 }}>
-                <input type="checkbox" checked={useBestNForPairs} onChange={(e) => setUseBestNForPairs(e.target.checked)} style={{ marginRight: 6 }} />
-                Use best N rounds for pairs
-              </label>
-
-              {useBestNForPairs && (
-                <>
-                  <label style={{ fontSize: 13 }}>
-                    N:&nbsp;
-                    <input type="number" min={1} max={50} value={bestNPairs} onChange={(e) => setBestNPairs(Math.max(1, Number(e.target.value) || 1))} style={{ width: 70, padding: 4 }} />
-                  </label>
-
-                  <label style={{ fontSize: 13 }}>
-                    <input type="checkbox" checked={bestNPairsMustIncludeFinal} onChange={(e) => setBestNPairsMustIncludeFinal(e.target.checked)} style={{ marginRight: 6 }} />
-                    Must include final (if not played, uses best N−1)
-                  </label>
-                </>
-              )}
+            <div style={{ fontSize: 12, color: "#666" }}>
+              Note: Pair rule persistence is controlled by the “Save pair rule” button above.
             </div>
           </div>
         )}
@@ -1011,19 +1232,35 @@ export default function TourLeaderboardPage() {
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <label style={{ fontSize: 13 }}>
                 Best M per hole:&nbsp;
-                <input type="number" min={1} max={10} value={teamBestM} onChange={(e) => setTeamBestM(Math.max(1, Math.min(10, Number(e.target.value) || 1)))} style={{ width: 70, padding: 4 }} />
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={teamBestM}
+                  onChange={(e) => setTeamBestM(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
+                  style={{ width: 70, padding: 4 }}
+                />
               </label>
 
               <button
                 type="button"
                 onClick={() => saveTeamBestM(teamBestM)}
                 disabled={savingTeamBestM}
-                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ccc", background: savingTeamBestM ? "#f7f7f7" : "white" }}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 8,
+                  border: "1px solid #ccc",
+                  background: savingTeamBestM ? "#f7f7f7" : "white",
+                }}
               >
                 {savingTeamBestM ? "Saving…" : "Save"}
               </button>
 
-              {teamBestMMsg && <div style={{ fontSize: 12, color: teamBestMMsg.startsWith("Save failed") ? "crimson" : "#2e7d32" }}>{teamBestMMsg}</div>}
+              {teamBestMMsg && (
+                <div style={{ fontSize: 12, color: teamBestMMsg.startsWith("Save failed") ? "crimson" : "#2e7d32" }}>
+                  {teamBestMMsg}
+                </div>
+              )}
             </div>
           </div>
         )}
