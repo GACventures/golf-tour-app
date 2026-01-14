@@ -10,33 +10,32 @@ import { supabase } from "@/lib/supabaseClient";
 type Tour = {
   id: string;
   name: string;
-  rehandicapping_enabled: boolean | null;
-  handicap_rules_summary: string | null;
-  rehandicapping_rules_summary: string | null;
+  start_date: string | null; // YYYY-MM-DD
+  end_date: string | null; // YYYY-MM-DD
 };
 
-// Courses are now often GLOBAL (tour_id can be null)
 type Course = { id: string; name: string; tour_id: string | null };
 
-// Global player library row (displayed via tour_players join)
-type Player = { id: string; name: string; start_handicap: number };
+type Player = { id: string; name: string; start_handicap: number | null };
 
-// Tour membership row (join)
 type TourPlayerRow = {
   tour_id: string;
   player_id: string;
-  starting_handicap: number | null;
-  players: { id: string; name: string; start_handicap: number } | null;
+  starting_handicap: number | null; // tour override
+  players: Player | Player[] | null; // global
 };
 
 type Round = {
   id: string;
   tour_id: string;
   course_id: string | null;
-  name: string;
+  name: string | null;
   round_no: number | null;
   created_at: string | null;
+  played_on: string | null; // date
 };
+
+type RoundGroup = { id: string; round_id: string; tee_time: string | null };
 
 type TourGroupRow = {
   id: string;
@@ -48,10 +47,7 @@ type TourGroupRow = {
   created_at?: string | null;
 };
 
-type TourGroupMemberRow = {
-  group_id: string;
-  player_id: string;
-};
+type TourGroupMemberRow = { group_id: string; player_id: string };
 
 type TourGroupingSettings = {
   tour_id: string;
@@ -67,27 +63,56 @@ type TourGroupingSettings = {
   pair_final_required: boolean;
 };
 
-function roundLabel(r: { id: string; name: string | null; round_no: number | null }) {
-  const nm = (r.name ?? "").trim();
-  if (r.round_no) return `Round ${r.round_no}${nm ? `: ${nm}` : ""}`;
-  if (nm) return nm;
-  return r.id;
-}
-
-function normalizePlayerJoin(val: any): { id: string; name: string; start_handicap: number } | null {
+function normalizePlayerJoin(val: any): Player | null {
   if (!val) return null;
-
   const p = Array.isArray(val) ? val[0] : val;
   if (!p) return null;
 
   const id = p.id != null ? String(p.id) : "";
   const name = p.name != null ? String(p.name) : "";
-  const sh = p.start_handicap ?? p.start_handicap ?? p.start_handicap;
-
-  const start_handicap = Number.isFinite(Number(sh)) ? Number(sh) : 0;
+  const sh = Number.isFinite(Number(p.start_handicap)) ? Number(p.start_handicap) : null;
 
   if (!id) return null;
-  return { id, name: name || "(missing player)", start_handicap };
+  return { id, name: name || "(missing player)", start_handicap: sh };
+}
+
+function clampIntOrNull(v: string): number | null {
+  const s = v.trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.floor(n));
+}
+
+function parseDateOnly(value: string | null): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function fmtDate(value: string | null) {
+  if (!value) return "TBD";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+// IMPORTANT: for rounds display — if played_on missing, show TBC (not created_at)
+function fmtRoundPlayedOn(played_on: string | null) {
+  if (!played_on) return "TBC";
+  const d = new Date(played_on);
+  if (Number.isNaN(d.getTime())) return String(played_on);
+  return d.toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function fmtRuleIndividual(s: TourGroupingSettings | null) {
@@ -115,29 +140,6 @@ function fmtRuleTeams(s: TourGroupingSettings | null) {
   return `Best ${y} per hole, −1 per zero (all rounds)`;
 }
 
-function cleanText(s: string | null | undefined) {
-  const t = (s ?? "").trim();
-  return t.length ? t : null;
-}
-
-function isBlank(s: string | null | undefined) {
-  return !((s ?? "").trim().length);
-}
-
-/**
- * Plain-English default summary based on the current Handicap Validation algorithm:
- * - Each round: compute Stableford using that round's PH
- * - Compute rounded average Stableford for the round
- * - Next round PH adjusts by (avg - player)/3 (rounded half-up)
- * - Clamp between ceil(SH/2) and SH + 3
- * - If a player didn't play, PH carries forward unchanged
- */
-const DEFAULT_REHANDICAP_SUMMARY =
-  "After each completed round, we recalculate the next round Playing Handicap (PH) from Stableford results. " +
-  "We take the rounded average Stableford score for the round, compare it to each player’s score, then adjust PH by one-third of the difference (rounded to the nearest whole number, with .5 rounding up). " +
-  "PH is capped so it cannot go higher than Starting Handicap + 3, and cannot go lower than ceil(Starting Handicap ÷ 2). " +
-  "If a player did not play a round, their PH carries forward unchanged.";
-
 export default function TourPage() {
   const params = useParams<{ id: string }>();
   const tourId = params.id;
@@ -149,35 +151,42 @@ export default function TourPage() {
   const [coursesById, setCoursesById] = useState<Record<string, Course>>({});
   const [tourPlayers, setTourPlayers] = useState<TourPlayerRow[]>([]);
   const [rounds, setRounds] = useState<Round[]>([]);
+  const [roundTeeTimeByRoundId, setRoundTeeTimeByRoundId] = useState<Record<string, string>>({});
 
   const [tourGroups, setTourGroups] = useState<TourGroupRow[]>([]);
   const [tourGroupMembers, setTourGroupMembers] = useState<TourGroupMemberRow[]>([]);
   const [eventSettings, setEventSettings] = useState<TourGroupingSettings | null>(null);
 
-  // Edit controls state
-  const [editingHcp, setEditingHcp] = useState(false);
-  const [draftRehEnabled, setDraftRehEnabled] = useState(false);
-  const [draftHandicapSummary, setDraftHandicapSummary] = useState("");
-  const [draftRehSummary, setDraftRehSummary] = useState("");
-  const [savingHcp, setSavingHcp] = useState(false);
-  const [saveMsg, setSaveMsg] = useState("");
+  // Rename tour UI state
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [nameSaving, setNameSaving] = useState(false);
+  const [nameMsg, setNameMsg] = useState<string>("");
 
-  function syncDraftFromTour(t: Tour | null) {
-    setDraftRehEnabled(t?.rehandicapping_enabled === true);
-    setDraftHandicapSummary(t?.handicap_rules_summary ?? "");
-    setDraftRehSummary(t?.rehandicapping_rules_summary ?? "");
-  }
+  // NEW: Tour dates editing
+  const [editingDates, setEditingDates] = useState(false);
+  const [startDateDraft, setStartDateDraft] = useState<string>(""); // YYYY-MM-DD or ""
+  const [endDateDraft, setEndDateDraft] = useState<string>(""); // YYYY-MM-DD or ""
+  const [datesSaving, setDatesSaving] = useState(false);
+  const [datesMsg, setDatesMsg] = useState<string>("");
+
+  // Starting handicaps
+  const [hcpDraftByPlayerId, setHcpDraftByPlayerId] = useState<Record<string, string>>({});
+  const [hcpSaving, setHcpSaving] = useState(false);
+  const [hcpMsg, setHcpMsg] = useState<string>("");
 
   async function loadAll() {
     setLoading(true);
     setError("");
-    setSaveMsg("");
+    setNameMsg("");
+    setDatesMsg("");
+    setHcpMsg("");
 
     try {
-      // Tour (includes handicapping fields)
+      // Tour (include start/end dates)
       const { data: tourData, error: tourErr } = await supabase
         .from("tours")
-        .select("id,name,rehandicapping_enabled,handicap_rules_summary,rehandicapping_rules_summary")
+        .select("id,name,start_date,end_date")
         .eq("id", tourId)
         .maybeSingle();
 
@@ -186,9 +195,11 @@ export default function TourPage() {
 
       const t = tourData as Tour;
       setTour(t);
-      syncDraftFromTour(t);
+      setNameDraft(t.name ?? "");
+      setStartDateDraft(t.start_date ?? "");
+      setEndDateDraft(t.end_date ?? "");
 
-      // Event settings
+      // Settings
       const { data: sData, error: sErr } = await supabase
         .from("tour_grouping_settings")
         .select(
@@ -200,10 +211,10 @@ export default function TourPage() {
       if (sErr) throw new Error(sErr.message);
       setEventSettings((sData ?? null) as TourGroupingSettings | null);
 
-      // Rounds
+      // Rounds (need played_on)
       const { data: roundData, error: roundErr } = await supabase
         .from("rounds")
-        .select("id,tour_id,course_id,name,round_no,created_at")
+        .select("id,tour_id,course_id,name,round_no,created_at,played_on")
         .eq("tour_id", tourId)
         .order("created_at", { ascending: true });
 
@@ -212,7 +223,7 @@ export default function TourPage() {
       const roundList = (roundData ?? []) as Round[];
       setRounds(roundList);
 
-      // Courses by course_id (supports GLOBAL courses too)
+      // Courses referenced by rounds
       const courseIds = Array.from(new Set(roundList.map((r) => r.course_id).filter(Boolean))) as string[];
       if (courseIds.length) {
         const { data: cData, error: cErr } = await supabase.from("courses").select("id,name,tour_id").in("id", courseIds);
@@ -228,7 +239,29 @@ export default function TourPage() {
         setCoursesById({});
       }
 
-      // Tour players via join table
+      // Tee times: earliest from round_groups
+      const roundIds = roundList.map((r) => r.id);
+      if (roundIds.length) {
+        const { data: rgData, error: rgErr } = await supabase
+          .from("round_groups")
+          .select("id,round_id,tee_time")
+          .in("round_id", roundIds);
+
+        if (rgErr) throw new Error(rgErr.message);
+
+        const earliest: Record<string, string> = {};
+        for (const row of (rgData ?? []) as any[]) {
+          const rid = String(row.round_id);
+          const tt = row.tee_time ? String(row.tee_time) : "";
+          if (!tt) continue;
+          if (!earliest[rid] || tt < earliest[rid]) earliest[rid] = tt;
+        }
+        setRoundTeeTimeByRoundId(earliest);
+      } else {
+        setRoundTeeTimeByRoundId({});
+      }
+
+      // Tour players
       const { data: tpData, error: tpErr } = await supabase
         .from("tour_players")
         .select("tour_id,player_id,starting_handicap, players(id,name,start_handicap)")
@@ -241,7 +274,11 @@ export default function TourPage() {
         const playerObj = normalizePlayerJoin(row.players);
 
         const starting_handicap =
-          row.starting_handicap == null ? null : Number.isFinite(Number(row.starting_handicap)) ? Number(row.starting_handicap) : null;
+          row.starting_handicap == null
+            ? null
+            : Number.isFinite(Number(row.starting_handicap))
+            ? Number(row.starting_handicap)
+            : null;
 
         return {
           tour_id: String(row.tour_id),
@@ -252,6 +289,26 @@ export default function TourPage() {
       });
 
       setTourPlayers(normalizedTP);
+
+      // init drafts (prefer tour override if present, else global)
+      const draft: Record<string, string> = {};
+      for (const r of normalizedTP) {
+        const p = normalizePlayerJoin(r.players);
+        if (!p) continue;
+
+        const tourVal = r.starting_handicap;
+        const globalVal = p.start_handicap;
+
+        const effective =
+          tourVal !== null && tourVal !== undefined
+            ? tourVal
+            : globalVal !== null && globalVal !== undefined
+            ? globalVal
+            : 0;
+
+        draft[p.id] = String(effective);
+      }
+      setHcpDraftByPlayerId(draft);
 
       // Pairs/Teams groups (tour scope)
       const { data: gData, error: gErr } = await supabase
@@ -295,14 +352,31 @@ export default function TourPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tourId]);
 
-  const playersInThisTour: Player[] = useMemo(() => {
+  const playersInThisTour = useMemo(() => {
     return (tourPlayers ?? [])
-      .map((r) => ({
-        id: r.players?.id ?? "",
-        name: r.players?.name ?? "(missing player)",
-        start_handicap: r.starting_handicap ?? 0,
-      }))
-      .filter((p) => !!p.id);
+      .map((r) => {
+        const p = normalizePlayerJoin(r.players);
+        if (!p) return null;
+
+        const global = Number.isFinite(Number(p.start_handicap)) ? Number(p.start_handicap) : 0;
+        const override = r.starting_handicap;
+        const effective = override !== null && override !== undefined ? override : global;
+
+        return {
+          id: p.id,
+          name: p.name,
+          globalStart: global,
+          overrideStart: override,
+          effectiveStart: effective,
+        };
+      })
+      .filter(Boolean) as Array<{
+      id: string;
+      name: string;
+      globalStart: number;
+      overrideStart: number | null;
+      effectiveStart: number;
+    }>;
   }, [tourPlayers]);
 
   const playerNameById = useMemo(() => {
@@ -345,47 +419,148 @@ export default function TourPage() {
     return ids.map((pid) => playerNameById.get(pid) ?? pid).join(g.type === "pair" ? " / " : ", ");
   }
 
-  async function saveHandicappingEdits() {
-    if (!tour) return;
-    setSavingHcp(true);
-    setSaveMsg("");
+  // --- Tour date suggestion defaults ---
+  const suggestedTourStartEnd = useMemo(() => {
+    const played = rounds
+      .map((r) => r.played_on)
+      .filter(Boolean)
+      .map((s) => String(s));
 
-    const payload: any = {
-      rehandicapping_enabled: draftRehEnabled,
-      handicap_rules_summary: cleanText(draftHandicapSummary),
-      rehandicapping_rules_summary: draftRehEnabled ? cleanText(draftRehSummary) : null,
-    };
+    if (!played.length) return { start: null as string | null, end: null as string | null };
 
-    const { error: upErr } = await supabase.from("tours").update(payload).eq("id", tour.id);
+    // ISO date strings compare lexicographically correctly
+    played.sort();
+    return { start: played[0] ?? null, end: played[played.length - 1] ?? null };
+  }, [rounds]);
 
-    if (upErr) {
-      setSaveMsg(`Save failed: ${upErr.message}`);
-      setSavingHcp(false);
+  const effectiveTourStart = (tour?.start_date ?? "").trim() || suggestedTourStartEnd.start;
+  const effectiveTourEnd = (tour?.end_date ?? "").trim() || suggestedTourStartEnd.end;
+
+  const tourDatesLabel = useMemo(() => {
+    if (!effectiveTourStart && !effectiveTourEnd) return "TBD";
+    if (effectiveTourStart && effectiveTourEnd) {
+      if (effectiveTourStart === effectiveTourEnd) return fmtDate(effectiveTourStart);
+      return `${fmtDate(effectiveTourStart)} – ${fmtDate(effectiveTourEnd)}`;
+    }
+    if (effectiveTourStart) return fmtDate(effectiveTourStart);
+    return fmtDate(effectiveTourEnd);
+  }, [effectiveTourStart, effectiveTourEnd]);
+
+  async function saveTourName() {
+    setNameMsg("");
+    const next = nameDraft.trim();
+    if (!next) {
+      setNameMsg("Name cannot be blank.");
       return;
     }
+    if (!tourId) return;
 
-    setSaveMsg("Saved ✓");
-    setEditingHcp(false);
+    setNameSaving(true);
+    try {
+      const { error: upErr } = await supabase.from("tours").update({ name: next }).eq("id", tourId);
+      if (upErr) throw new Error(upErr.message);
 
-    const { data: t2, error: t2Err } = await supabase
-      .from("tours")
-      .select("id,name,rehandicapping_enabled,handicap_rules_summary,rehandicapping_rules_summary")
-      .eq("id", tour.id)
-      .maybeSingle();
-
-    if (!t2Err && t2) {
-      const tt = t2 as Tour;
-      setTour(tt);
-      syncDraftFromTour(tt);
+      setTour((prev) => (prev ? { ...prev, name: next } : prev));
+      setEditingName(false);
+      setNameMsg("Saved ✓");
+    } catch (e: any) {
+      setNameMsg(e?.message ?? "Failed to save.");
+    } finally {
+      setNameSaving(false);
     }
-
-    setSavingHcp(false);
   }
 
-  function cancelHandicappingEdits() {
-    setEditingHcp(false);
-    setSaveMsg("");
-    syncDraftFromTour(tour);
+  function cancelEditName() {
+    setEditingName(false);
+    setNameMsg("");
+    setNameDraft(tour?.name ?? "");
+  }
+
+  async function saveTourDates() {
+    setDatesMsg("");
+    if (!tourId) return;
+
+    const s = startDateDraft.trim() || null;
+    const e = endDateDraft.trim() || null;
+
+    // If both set, ensure order
+    if (s && e) {
+      const sd = parseDateOnly(s);
+      const ed = parseDateOnly(e);
+      if (!sd || !ed) {
+        setDatesMsg("Please enter valid dates.");
+        return;
+      }
+      if (sd.getTime() > ed.getTime()) {
+        setDatesMsg("Start date must be on/before end date.");
+        return;
+      }
+    } else {
+      // validate whichever exists
+      if (s && !parseDateOnly(s)) {
+        setDatesMsg("Start date is invalid.");
+        return;
+      }
+      if (e && !parseDateOnly(e)) {
+        setDatesMsg("End date is invalid.");
+        return;
+      }
+    }
+
+    setDatesSaving(true);
+    try {
+      const { error: upErr } = await supabase.from("tours").update({ start_date: s, end_date: e }).eq("id", tourId);
+      if (upErr) throw new Error(upErr.message);
+
+      setTour((prev) => (prev ? { ...prev, start_date: s, end_date: e } : prev));
+      setEditingDates(false);
+      setDatesMsg("Saved ✓");
+    } catch (ex: any) {
+      setDatesMsg(ex?.message ?? "Failed to save dates.");
+    } finally {
+      setDatesSaving(false);
+    }
+  }
+
+  function cancelEditDates() {
+    setEditingDates(false);
+    setDatesMsg("");
+    setStartDateDraft(tour?.start_date ?? "");
+    setEndDateDraft(tour?.end_date ?? "");
+  }
+
+  async function saveStartingHandicaps() {
+    setHcpMsg("");
+    if (!tourId) return;
+
+    setHcpSaving(true);
+    try {
+      // Store NULL when equals global, so default uses global
+      const payload = playersInThisTour.map((p) => {
+        const draftStr = hcpDraftByPlayerId[p.id] ?? "";
+        const draft = clampIntOrNull(draftStr);
+
+        if (draft === null) {
+          return { tour_id: tourId, player_id: p.id, starting_handicap: null };
+        }
+        if (draft === p.globalStart) {
+          return { tour_id: tourId, player_id: p.id, starting_handicap: null };
+        }
+        return { tour_id: tourId, player_id: p.id, starting_handicap: draft };
+      });
+
+      const { error: upErr } = await supabase.from("tour_players").upsert(payload, {
+        onConflict: "tour_id,player_id",
+      });
+      if (upErr) throw new Error(upErr.message);
+
+      setHcpMsg("Saved ✓");
+      await loadAll();
+    } catch (e: any) {
+      setHcpMsg(e?.message ?? "Failed to save starting handicaps.");
+    } finally {
+      setHcpSaving(false);
+    }
   }
 
   if (loading) return <div style={{ padding: 16 }}>Loading tour…</div>;
@@ -398,39 +573,211 @@ export default function TourPage() {
       </div>
     );
 
-  const readHandicapSummary =
-    cleanText(tour?.handicap_rules_summary) ??
-    "Not specified yet. (Set tours.handicap_rules_summary to describe baseline handicap source + any adjustments.)";
-
-  const readRehEnabled = tour?.rehandicapping_enabled === true;
-
-  const readRehSummary = readRehEnabled
-    ? cleanText(tour?.rehandicapping_rules_summary) ?? DEFAULT_REHANDICAP_SUMMARY
-    : "No rehandicapping.";
-
   return (
     <div style={{ padding: 16 }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700 }}>{tour?.name ?? "Tour"}</h1>
+      {/* Title row + edit */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        {!editingName ? (
+          <div>
+            <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>{tour?.name ?? "Tour"}</h1>
 
-      {/* Players (hub) */}
-      <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Players</h2>
-      <div style={{ marginTop: 8, color: "#333" }}>
-        Total: <strong>{playersInThisTour.length}</strong>
+            {/* Tour dates summary + edit */}
+            <div style={{ marginTop: 6, color: "#444", fontSize: 13, fontWeight: 700 }}>
+              Dates: <span style={{ fontWeight: 800 }}>{tourDatesLabel}</span>
+              {!tour?.start_date || !tour?.end_date ? (
+                <span style={{ marginLeft: 8, fontWeight: 600, color: "#666" }}>
+                  (default based on rounds)
+                </span>
+              ) : null}
+            </div>
+
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setNameDraft(tour?.name ?? "");
+                  setEditingName(true);
+                  setNameMsg("");
+                }}
+                style={btnThin}
+              >
+                Edit name
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setStartDateDraft(tour?.start_date ?? (suggestedTourStartEnd.start ?? ""));
+                  setEndDateDraft(tour?.end_date ?? (suggestedTourStartEnd.end ?? ""));
+                  setEditingDates(true);
+                  setDatesMsg("");
+                }}
+                style={btnThin}
+              >
+                Edit dates
+              </button>
+
+              {(nameMsg || datesMsg) && (
+                <span
+                  style={{
+                    marginLeft: 6,
+                    fontSize: 12,
+                    color: (nameMsg + datesMsg).startsWith("Saved") ? "#2e7d32" : "crimson",
+                  }}
+                >
+                  {nameMsg || datesMsg}
+                </span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div style={{ width: "min(520px, 100%)" }}>
+            <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Edit tour name</h1>
+
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                placeholder="Tour name"
+                style={inputWide}
+                disabled={nameSaving}
+              />
+              <button type="button" onClick={() => void saveTourName()} disabled={nameSaving} style={btnPrimary(nameSaving)}>
+                {nameSaving ? "Saving…" : "Save"}
+              </button>
+              <button type="button" onClick={cancelEditName} disabled={nameSaving} style={btnThin}>
+                Cancel
+              </button>
+            </div>
+
+            {nameMsg && (
+              <div style={{ marginTop: 8, fontSize: 12, color: nameMsg.startsWith("Saved") ? "#2e7d32" : "crimson" }}>
+                {nameMsg}
+              </div>
+            )}
+          </div>
+        )}
+
+        {editingDates ? (
+          <div style={{ width: "min(560px, 100%)" }}>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Edit tour dates</h2>
+            <div style={{ marginTop: 8, fontSize: 12, color: "#666" }}>
+              Suggested default:{" "}
+              <strong>
+                {suggestedTourStartEnd.start ? fmtDate(suggestedTourStartEnd.start) : "TBD"}
+              </strong>{" "}
+              {" – "}
+              <strong>
+                {suggestedTourStartEnd.end ? fmtDate(suggestedTourStartEnd.end) : "TBD"}
+              </strong>
+            </div>
+
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
+              <div>
+                <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Start date</div>
+                <input
+                  type="date"
+                  value={startDateDraft}
+                  onChange={(e) => setStartDateDraft(e.target.value)}
+                  style={inputDate}
+                  disabled={datesSaving}
+                />
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>End date</div>
+                <input
+                  type="date"
+                  value={endDateDraft}
+                  onChange={(e) => setEndDateDraft(e.target.value)}
+                  style={inputDate}
+                  disabled={datesSaving}
+                />
+              </div>
+
+              <button type="button" onClick={() => void saveTourDates()} disabled={datesSaving} style={btnPrimary(datesSaving)}>
+                {datesSaving ? "Saving…" : "Save dates"}
+              </button>
+              <button type="button" onClick={cancelEditDates} disabled={datesSaving} style={btnThin}>
+                Cancel
+              </button>
+            </div>
+
+            {datesMsg && (
+              <div style={{ marginTop: 8, fontSize: 12, color: datesMsg.startsWith("Saved") ? "#2e7d32" : "crimson" }}>
+                {datesMsg}
+              </div>
+            )}
+          </div>
+        ) : null}
       </div>
-      <div style={{ marginTop: 8 }}>
+
+      {/* Players */}
+      <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Players</h2>
+
+      <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ color: "#333" }}>
+          Total: <strong>{playersInThisTour.length}</strong>
+        </div>
+
         <Link href={`/tours/${tourId}/players`}>Manage players (this tour) →</Link>
+
+        <button
+          type="button"
+          onClick={() => void saveStartingHandicaps()}
+          disabled={hcpSaving || playersInThisTour.length === 0}
+          style={btnThin}
+        >
+          {hcpSaving ? "Saving…" : "Save starting handicaps"}
+        </button>
+
+        {hcpMsg && <div style={{ fontSize: 12, color: hcpMsg.startsWith("Saved") ? "#2e7d32" : "crimson" }}>{hcpMsg}</div>}
       </div>
 
       {playersInThisTour.length === 0 ? (
         <div style={{ marginTop: 8, color: "#555" }}>No players yet.</div>
       ) : (
-        <ul style={{ marginTop: 8 }}>
-          {playersInThisTour.map((p) => (
-            <li key={p.id}>
-              {p.name} <span style={{ color: "#777" }}>(starting hcp: {p.start_handicap})</span>
-            </li>
-          ))}
-        </ul>
+        <div style={{ marginTop: 10, overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", minWidth: 760, width: "100%" }}>
+            <thead>
+              <tr>
+                <th style={thLeft}>Player</th>
+                <th style={thRight}>Global start</th>
+                <th style={thRight}>Tour start (editable)</th>
+                <th style={thRight}>Effective</th>
+              </tr>
+            </thead>
+            <tbody>
+              {playersInThisTour.map((p) => {
+                const draft = hcpDraftByPlayerId[p.id] ?? String(p.effectiveStart);
+                const draftNum = clampIntOrNull(draft);
+                const effective = draftNum === null ? p.globalStart : draftNum;
+                const isOverride = draftNum !== null && draftNum !== p.globalStart;
+
+                return (
+                  <tr key={p.id}>
+                    <td style={tdLeft}>
+                      <div style={{ fontWeight: 700 }}>{p.name}</div>
+                      <div style={{ fontSize: 12, color: "#666" }}>{isOverride ? "Using tour override" : "Using global"}</div>
+                    </td>
+                    <td style={tdRight}>{p.globalStart}</td>
+                    <td style={tdRight}>
+                      <input
+                        value={draft}
+                        onChange={(e) => setHcpDraftByPlayerId((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                        placeholder={`${p.globalStart}`}
+                        style={inputSmallRight}
+                        disabled={hcpSaving}
+                      />
+                      <div style={{ fontSize: 11, color: "#777", marginTop: 4 }}>Blank = global</div>
+                    </td>
+                    <td style={tdRight}>{effective}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {/* Events */}
@@ -497,172 +844,136 @@ export default function TourPage() {
 
       {/* Rounds */}
       <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Rounds</h2>
-      <div style={{ marginTop: 8, color: "#333" }}>
-        Total: <strong>{rounds.length}</strong>
-      </div>
-      <div style={{ marginTop: 8 }}>
+      <div style={{ marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ color: "#333" }}>
+          Total: <strong>{rounds.length}</strong>
+        </div>
         <Link href={`/tours/${tourId}/rounds`}>Manage rounds →</Link>
       </div>
 
       {rounds.length === 0 ? (
         <div style={{ marginTop: 8, color: "#555" }}>No rounds yet.</div>
       ) : (
-        <ul style={{ marginTop: 8 }}>
-          {rounds.map((r) => {
-            const courseName = r.course_id ? coursesById[r.course_id]?.name : null;
+        <div style={{ marginTop: 10, overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", minWidth: 860, width: "100%" }}>
+            <thead>
+              <tr>
+                <th style={thLeft}>Round</th>
+                <th style={thLeft}>Course</th>
+                <th style={thLeft}>Date</th>
+                <th style={thLeft}>Tee time</th>
+                <th style={thLeft}>Links</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rounds.map((r, idx) => {
+                const roundNo = r.round_no ?? idx + 1;
+                const courseName = r.course_id ? coursesById[r.course_id]?.name : null;
+                const dateLabel = fmtRoundPlayedOn(r.played_on); // <-- TBC if null
+                const tee = roundTeeTimeByRoundId[r.id] ?? "—";
 
-            return (
-              <li key={r.id} style={{ marginBottom: 6 }}>
-                <strong>{roundLabel(r)}</strong> — {courseName ?? (r.course_id ?? "(no course)")} |{" "}
-                <Link href={`/rounds/${r.id}`}>Open</Link>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                return (
+                  <tr key={r.id}>
+                    <td style={tdLeft}>
+                      <div style={{ fontWeight: 800 }}>Round {roundNo}</div>
+                      {r.name?.trim() ? <div style={{ fontSize: 12, color: "#666" }}>{r.name.trim()}</div> : null}
+                    </td>
+                    <td style={tdLeft}>{courseName ?? (r.course_id ?? "—")}</td>
+                    <td style={tdLeft}>{dateLabel}</td>
+                    <td style={tdLeft}>{tee}</td>
+                    <td style={tdLeft}>
+                      <Link href={`/rounds/${r.id}`}>Open</Link>
+                      <span style={{ color: "#bbb" }}> · </span>
+                      <Link href={`/rounds/${r.id}/groups`}>Groupings</Link>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
 
-      {/* Handicapping (BOTTOM) */}
-      <h2 style={{ marginTop: 36, fontSize: 18, fontWeight: 700 }}>Handicapping</h2>
-
-      {!editingHcp ? (
-        <div style={{ marginTop: 8, color: "#333", lineHeight: 1.5 }}>
-          <div>
-            <strong>Baseline / rules:</strong> <span style={{ color: "#555" }}>{readHandicapSummary}</span>
+          <div style={{ marginTop: 8, fontSize: 12, color: "#666" }}>
+            Date shows <strong>TBC</strong> unless <code>rounds.played_on</code> is set.
           </div>
-
-          <div style={{ marginTop: 10 }}>
-            <strong>Rehandicapping:</strong>{" "}
-            <span style={{ color: readRehEnabled ? "#1b5e20" : "#555", fontWeight: 700 }}>
-              {readRehEnabled ? "Yes" : "No"}
-            </span>
-          </div>
-
-          <div style={{ marginTop: 6, color: "#555" }}>{readRehSummary}</div>
-
-          <button
-            type="button"
-            onClick={() => {
-              syncDraftFromTour(tour);
-              setEditingHcp(true);
-              setSaveMsg("");
-            }}
-            style={{
-              marginTop: 12,
-              padding: "8px 10px",
-              borderRadius: 10,
-              border: "1px solid #ccc",
-              background: "white",
-              cursor: "pointer",
-            }}
-          >
-            Edit handicapping →
-          </button>
-
-          {saveMsg && (
-            <div style={{ marginTop: 8, fontSize: 12, color: saveMsg.startsWith("Save failed") ? "crimson" : "#2e7d32" }}>
-              {saveMsg}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div style={{ marginTop: 12, maxWidth: 820 }}>
-          <div style={{ fontSize: 13, color: "#555", marginBottom: 8 }}>
-            This edits display-only tour metadata (does not recalculate any scores).
-          </div>
-
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Baseline handicapping rules</div>
-            <textarea
-              value={draftHandicapSummary}
-              onChange={(e) => setDraftHandicapSummary(e.target.value)}
-              rows={3}
-              style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
-              placeholder="e.g. Baseline handicap: tour_players.starting_handicap. Adjustments: …"
-            />
-          </div>
-
-          <div style={{ marginTop: 12 }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
-              <input
-                type="checkbox"
-                checked={draftRehEnabled}
-                onChange={(e) => {
-                  const enabled = e.target.checked;
-                  setDraftRehEnabled(enabled);
-
-                  // Auto-fill default summary only when turning ON and the field is blank.
-                  if (enabled && isBlank(draftRehSummary)) {
-                    setDraftRehSummary(DEFAULT_REHANDICAP_SUMMARY);
-                  }
-                }}
-              />
-              Rehandicapping enabled
-            </label>
-          </div>
-
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontWeight: 700, marginBottom: 6, color: draftRehEnabled ? "#111" : "#777" }}>
-              Rehandicapping rules summary
-            </div>
-            <textarea
-              value={draftRehSummary}
-              onChange={(e) => setDraftRehSummary(e.target.value)}
-              rows={5}
-              disabled={!draftRehEnabled}
-              style={{
-                width: "100%",
-                padding: 10,
-                borderRadius: 10,
-                border: "1px solid #ccc",
-                background: draftRehEnabled ? "white" : "#f7f7f7",
-              }}
-              placeholder={
-                draftRehEnabled
-                  ? "Short summary shown on overview when rehandicapping = Yes"
-                  : "Enable rehandicapping to edit this"
-              }
-            />
-          </div>
-
-          <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={saveHandicappingEdits}
-              disabled={savingHcp}
-              style={{
-                padding: "8px 10px",
-                borderRadius: 10,
-                border: "1px solid #2e7d32",
-                background: savingHcp ? "#f7f7f7" : "white",
-                cursor: savingHcp ? "default" : "pointer",
-              }}
-            >
-              {savingHcp ? "Saving…" : "Save"}
-            </button>
-
-            <button
-              type="button"
-              onClick={cancelHandicappingEdits}
-              disabled={savingHcp}
-              style={{
-                padding: "8px 10px",
-                borderRadius: 10,
-                border: "1px solid #ccc",
-                background: "white",
-                cursor: savingHcp ? "default" : "pointer",
-              }}
-            >
-              Cancel
-            </button>
-
-            {saveMsg && (
-              <div style={{ fontSize: 12, color: saveMsg.startsWith("Save failed") ? "crimson" : "#2e7d32" }}>
-                {saveMsg}
-              </div>
-            )}
+          <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
+            Tee time shown is the earliest tee time from round groups (if any).
           </div>
         </div>
       )}
     </div>
   );
 }
+
+const btnThin: React.CSSProperties = {
+  padding: "6px 10px",
+  borderRadius: 10,
+  border: "1px solid #ddd",
+  background: "white",
+  cursor: "pointer",
+  fontSize: 13,
+  fontWeight: 700,
+};
+
+function btnPrimary(disabled: boolean): React.CSSProperties {
+  return {
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid #111",
+    background: disabled ? "#f5f5f5" : "#111",
+    color: disabled ? "#111" : "white",
+    cursor: disabled ? "default" : "pointer",
+    fontSize: 14,
+    fontWeight: 800,
+  };
+}
+
+const inputWide: React.CSSProperties = {
+  flex: "1 1 280px",
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid #ccc",
+  fontSize: 14,
+};
+
+const inputDate: React.CSSProperties = {
+  padding: "9px 10px",
+  borderRadius: 10,
+  border: "1px solid #ccc",
+  fontSize: 14,
+};
+
+const inputSmallRight: React.CSSProperties = {
+  width: 90,
+  padding: "6px 8px",
+  borderRadius: 10,
+  border: "1px solid #ccc",
+  textAlign: "right",
+};
+
+const thLeft: React.CSSProperties = {
+  textAlign: "left",
+  padding: "10px 8px",
+  borderBottom: "1px solid #ddd",
+  whiteSpace: "nowrap",
+};
+
+const thRight: React.CSSProperties = {
+  textAlign: "right",
+  padding: "10px 8px",
+  borderBottom: "1px solid #ddd",
+  whiteSpace: "nowrap",
+};
+
+const tdLeft: React.CSSProperties = {
+  textAlign: "left",
+  padding: "10px 8px",
+  borderBottom: "1px solid #eee",
+  verticalAlign: "top",
+};
+
+const tdRight: React.CSSProperties = {
+  textAlign: "right",
+  padding: "10px 8px",
+  borderBottom: "1px solid #eee",
+  verticalAlign: "top",
+};
