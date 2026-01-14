@@ -19,8 +19,8 @@ type RoundRow = {
   created_at?: string | null;
 };
 
-// ✅ PlayerRow is “players in this tour” derived from tour_players join
-type PlayerRow = { id: string; name: string; start_handicap: number | null };
+// ✅ PlayerRow derived from tour_players join (includes gender for tee)
+type PlayerRow = { id: string; name: string; start_handicap: number | null; gender: string | null };
 
 type RoundPlayerRow = {
   round_id: string;
@@ -99,6 +99,7 @@ function buildGroupSizes(nPlayers: number): number[] {
     for (let i = 0; i < remaining / 4; i++) sizes.push(4);
     return sizes;
   }
+
   // fallback
   sizes.push(3);
   let rem = nPlayers - 3;
@@ -262,6 +263,13 @@ function rawScoreFor(strokes: number | null, pickup?: boolean | null) {
   return String(strokes);
 }
 
+// ✅ Convert players.gender -> tee used by round_players.tee (NOT NULL)
+function teeFromGender(gender: string | null | undefined): "M" | "F" {
+  const g = String(gender ?? "").trim().toUpperCase();
+  if (g === "F" || g === "FEMALE" || g === "W" || g === "WOMAN" || g === "WOMEN") return "F";
+  return "M";
+}
+
 export default function TourTeeTimesPage() {
   const params = useParams<{ id: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -297,6 +305,13 @@ export default function TourTeeTimesPage() {
   const playerHcpById = useMemo(() => {
     const m = new Map<string, number>();
     for (const p of players) m.set(p.id, Number.isFinite(Number(p.start_handicap)) ? Number(p.start_handicap) : 0);
+    return m;
+  }, [players]);
+
+  // ✅ NEW: tee per player from players.gender (for round_players.tee NOT NULL)
+  const playerTeeById = useMemo(() => {
+    const m = new Map<string, "M" | "F">();
+    for (const p of players) m.set(p.id, teeFromGender(p.gender));
     return m;
   }, [players]);
 
@@ -376,10 +391,10 @@ export default function TourTeeTimesPage() {
         return next;
       });
 
-      // ✅ players in tour from tour_players join
+      // ✅ players in tour from tour_players join (include gender)
       const { data: tpData, error: tpErr } = await supabase
         .from("tour_players")
-        .select("player_id, starting_handicap, players(id,name)")
+        .select("player_id, starting_handicap, players(id,name,gender)")
         .eq("tour_id", tourId)
         .order("name", { ascending: true, foreignTable: "players" });
 
@@ -390,6 +405,7 @@ export default function TourTeeTimesPage() {
           id: String(r.players?.id ?? r.player_id),
           name: String(r.players?.name ?? "(missing name)"),
           start_handicap: Number.isFinite(Number(r.starting_handicap)) ? Number(r.starting_handicap) : null,
+          gender: (r.players?.gender ?? null) as string | null,
         }))
         .filter((p) => !!p.id);
 
@@ -539,10 +555,7 @@ export default function TourTeeTimesPage() {
       notes: note,
     }));
 
-    const { data: insertedGroups, error: insGErr } = await supabase
-      .from("round_groups")
-      .insert(groupRows)
-      .select("id,group_no");
+    const { data: insertedGroups, error: insGErr } = await supabase.from("round_groups").insert(groupRows).select("id,group_no");
     if (insGErr) throw insGErr;
 
     const idByNo = new Map<number, string>();
@@ -568,10 +581,7 @@ export default function TourTeeTimesPage() {
 
   async function fetchPastGroupsUpTo(roundIds: string[]) {
     if (!roundIds.length) return [];
-    const { data, error } = await supabase
-      .from("round_group_players")
-      .select("round_id,group_id,player_id")
-      .in("round_id", roundIds);
+    const { data, error } = await supabase.from("round_group_players").select("round_id,group_id,player_id").in("round_id", roundIds);
     if (error) throw error;
 
     const byRoundGroup = new Map<string, string[]>();
@@ -590,7 +600,7 @@ export default function TourTeeTimesPage() {
     return (data ?? []).length > 0;
   }
 
-  // ✅ Step 3: ensure round_players rows exist, and set handicap ONLY on insert (never overwrite existing)
+  // ✅ Step 3: ensure round_players rows exist, and set handicap + tee ONLY on insert (never overwrite existing)
   async function ensureRoundPlayers(roundId: string, playerIds: string[]) {
     const ids = Array.from(new Set(playerIds)).filter(Boolean);
     if (!ids.length) return;
@@ -612,6 +622,7 @@ export default function TourTeeTimesPage() {
       player_id: pid,
       playing: true,
       playing_handicap: playerHcpById.get(pid) ?? 0,
+      tee: playerTeeById.get(pid) ?? "M", // ✅ FIX: round_players.tee is NOT NULL
     }));
 
     const { error: insErr } = await supabase.from("round_players").insert(rows);
@@ -624,10 +635,7 @@ export default function TourTeeTimesPage() {
 
     const courseIds = Array.from(new Set(eligibleRounds.map((r) => r.course_id as string)));
 
-    const { data: parsData, error: pErr } = await supabase
-      .from("pars")
-      .select("course_id,hole_number,par,stroke_index")
-      .in("course_id", courseIds);
+    const { data: parsData, error: pErr } = await supabase.from("pars").select("course_id,hole_number,par,stroke_index").in("course_id", courseIds);
     if (pErr) throw pErr;
 
     const parsByCourseHole = new Map<string, Map<number, { par: number; si: number }>>();
@@ -777,9 +785,7 @@ export default function TourTeeTimesPage() {
       } else {
         const ready = await penultimateHasAnyScores(penultimate.id);
         if (!ready) {
-          setInfoMsg(
-            "Generated Round 1 + middle rounds. Final round NOT generated yet (no scores found for penultimate round)."
-          );
+          setInfoMsg("Generated Round 1 + middle rounds. Final round NOT generated yet (no scores found for penultimate round).");
         } else {
           const finalIds = playerIdsForRound(last.id);
           await ensureRoundPlayers(last.id, finalIds);
@@ -866,8 +872,7 @@ export default function TourTeeTimesPage() {
         <h1 className="text-2xl font-semibold">Tee-time groupings</h1>
         <div className="text-sm text-gray-600">{tour?.name ?? tourId}</div>
         <div className="mt-1 text-xs text-gray-500">
-          This page manages <span className="font-medium">round_groups</span> (tee-time groupings). Pairs/Teams for
-          competitions live on the separate “Pairs &amp; Teams” page.
+          This page manages <span className="font-medium">round_groups</span> (tee-time groupings). Pairs/Teams for competitions live on the separate “Pairs &amp; Teams” page.
         </div>
       </header>
 
@@ -890,13 +895,8 @@ export default function TourTeeTimesPage() {
         </div>
       </div>
 
-      {infoMsg ? (
-        <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900">{infoMsg}</div>
-      ) : null}
-
-      {pairWarn ? (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">{pairWarn}</div>
-      ) : null}
+      {infoMsg ? <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900">{infoMsg}</div> : null}
+      {pairWarn ? <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">{pairWarn}</div> : null}
 
       <section className="rounded-2xl border p-4 space-y-2 bg-white">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -957,7 +957,6 @@ export default function TourTeeTimesPage() {
                         {label ? <span className="text-xs rounded-full border px-2 py-0.5 opacity-80">{label}</span> : null}
                       </div>
 
-                      {/* ✅ Removed noisy UUID display; keep created time */}
                       <div className="text-xs opacity-60">{r.created_at ? <>Created: {fmtTs(r.created_at)}</> : null}</div>
 
                       <div className="mt-1 text-sm">
@@ -970,7 +969,6 @@ export default function TourTeeTimesPage() {
                         </Link>
                       </div>
 
-                      {/* Round number editor */}
                       <div className="mt-3 rounded-lg border bg-yellow-50 p-2">
                         <div className="text-xs font-semibold">Round number (sorting key)</div>
                         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
@@ -994,11 +992,7 @@ export default function TourTeeTimesPage() {
                             {saving ? "Saving…" : "Save"}
                           </button>
 
-                          {err ? (
-                            <span className="text-xs text-red-700">{err}</span>
-                          ) : (
-                            <span className="text-xs opacity-70">Blank clears</span>
-                          )}
+                          {err ? <span className="text-xs text-red-700">{err}</span> : <span className="text-xs opacity-70">Blank clears</span>}
                         </div>
                       </div>
                     </div>
