@@ -16,44 +16,30 @@ type Round = {
   created_at: string | null;
   course_id: string | null;
 
-  played_on: string | null; // YYYY-MM-DD
-  tee_time: string | null; // HH:MM:SS (or HH:MM)
+  // NEW(used here)
+  played_on: string | null; // date string (YYYY-MM-DD)
+  tee_time: string | null; // optional text, e.g. "08:10"
 };
 
 type Course = { id: string; name: string };
 
 function todayISODate() {
+  // YYYY-MM-DD
   const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
-function fmtPlayedOn(played_on: string | null) {
-  if (!played_on) return "—";
-  const [y, m, d] = played_on.split("-").map((x) => Number(x));
-  if (!y || !m || !d) return played_on;
-  const dt = new Date(y, m - 1, d);
-  return dt.toLocaleDateString(undefined, {
-    weekday: "short",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
+function fmtRoundDisplayName(r: Round, idx: number) {
+  const nm = (r.name ?? "").trim();
+  return nm ? nm : `Round ${idx + 1}`;
 }
 
-function fmtTeeTime(t: string | null) {
-  if (!t) return "";
-  const parts = String(t).split(":");
-  if (parts.length >= 2) return `${parts[0]}:${parts[1]}`;
-  return String(t);
-}
-
-function normalizeTimeInputToPgTime(value: string) {
-  const v = value.trim();
-  if (!v) return null;
-  return v; // Postgres accepts HH:MM or HH:MM:SS
+function safeCourseName(courseNameById: Record<string, string>, course_id: string | null) {
+  if (!course_id) return "—";
+  return courseNameById[course_id] ?? course_id;
 }
 
 export default function TourRoundsPage() {
@@ -67,22 +53,20 @@ export default function TourRoundsPage() {
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
-  const [saving, setSaving] = useState(false);
 
   // Add-round form
+  const [savingAdd, setSavingAdd] = useState(false);
   const [newRoundName, setNewRoundName] = useState<string>("");
   const [selectedCourseId, setSelectedCourseId] = useState<string>("");
-  const [playedOn, setPlayedOn] = useState<string>(todayISODate()); // required
-  const [teeTime, setTeeTime] = useState<string>(""); // optional
 
-  // Edit mode per-round
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editPlayedOn, setEditPlayedOn] = useState<string>("");
-  const [editTeeTime, setEditTeeTime] = useState<string>("");
+  // NEW: required played_on + optional tee_time on create
+  const [newPlayedOn, setNewPlayedOn] = useState<string>(todayISODate());
+  const [newTeeTime, setNewTeeTime] = useState<string>("");
 
-  // Delete confirmation
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [deleteConfirmText, setDeleteConfirmText] = useState<string>("");
+  // Inline edit state (per round)
+  const [editByRoundId, setEditByRoundId] = useState<Record<string, { played_on: string; tee_time: string }>>({});
+  const [savingRoundId, setSavingRoundId] = useState<string | null>(null);
+  const [deletingRoundId, setDeletingRoundId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -98,8 +82,6 @@ export default function TourRoundsPage() {
             .from("rounds")
             .select("id,tour_id,name,created_at,course_id,played_on,tee_time")
             .eq("tour_id", tourId)
-            .order("played_on", { ascending: true })
-            .order("tee_time", { ascending: true })
             .order("created_at", { ascending: true }),
           supabase.from("courses").select("id,name").order("name", { ascending: true }),
         ]);
@@ -119,7 +101,18 @@ export default function TourRoundsPage() {
       setCourses(cs);
       setCourseNameById(map);
 
+      // Default selection if not set
       if (!selectedCourseId && cs.length) setSelectedCourseId(cs[0].id);
+
+      // Seed edit state for rounds (so inputs are controlled)
+      const nextEdit: Record<string, { played_on: string; tee_time: string }> = {};
+      for (const r of rs) {
+        nextEdit[r.id] = {
+          played_on: r.played_on ?? "",
+          tee_time: r.tee_time ?? "",
+        };
+      }
+      setEditByRoundId(nextEdit);
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Unknown error");
     } finally {
@@ -140,148 +133,122 @@ export default function TourRoundsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tourId]);
 
-  const sortedRounds = useMemo(() => {
-    const arr = [...rounds];
-    arr.sort((a, b) => {
-      const da = a.played_on ?? "";
-      const db = b.played_on ?? "";
-      if (da !== db) return da.localeCompare(db);
-
-      const ta = a.tee_time ?? "";
-      const tb = b.tee_time ?? "";
-      if (ta !== tb) return ta.localeCompare(tb);
-
-      const ca = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const cb = b.created_at ? new Date(b.created_at).getTime() : 0;
-      if (ca !== cb) return ca - cb;
-
-      return a.id.localeCompare(b.id);
-    });
-    return arr;
-  }, [rounds]);
-
   const canAdd = useMemo(() => {
-    return !saving && Boolean(selectedCourseId) && Boolean(playedOn);
-  }, [saving, selectedCourseId, playedOn]);
+    // played_on is required
+    return !savingAdd && Boolean(selectedCourseId) && Boolean(newPlayedOn);
+  }, [savingAdd, selectedCourseId, newPlayedOn]);
 
   async function addRound() {
     setErrorMsg("");
     if (!canAdd) return;
 
-    setSaving(true);
+    setSavingAdd(true);
     try {
-      const fallbackName = `Round ${sortedRounds.length + 1}`;
-      const finalName = newRoundName.trim() ? newRoundName.trim() : fallbackName;
+      // NOTE: If your DB enforces rounds.name NOT NULL, we must provide a value.
+      // Your schema shows name is nullable, but you got a NOT NULL constraint error earlier.
+      // So we ALWAYS provide a fallback name.
+      const fallbackName = `Round ${rounds.length + 1}`;
+      const nameToUse = newRoundName.trim() ? newRoundName.trim() : fallbackName;
 
       const payload: any = {
         tour_id: tourId,
         course_id: selectedCourseId,
-        name: finalName,
-        played_on: playedOn,
+        name: nameToUse,
+        played_on: newPlayedOn, // required
       };
 
-      const normalizedTime = normalizeTimeInputToPgTime(teeTime);
-      if (normalizedTime) payload.tee_time = normalizedTime;
+      const tt = newTeeTime.trim();
+      if (tt) payload.tee_time = tt;
 
       const { error } = await supabase.from("rounds").insert(payload);
       if (error) throw new Error(error.message);
 
       setNewRoundName("");
-      setTeeTime("");
+      setNewTeeTime("");
+      // keep date (often adding multiple rounds same day)
       await load();
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Unknown error");
     } finally {
-      setSaving(false);
+      setSavingAdd(false);
     }
   }
 
-  function beginEdit(r: Round) {
-    setErrorMsg("");
-    setEditingId(r.id);
-    setEditPlayedOn(r.played_on ?? todayISODate());
-    setEditTeeTime(fmtTeeTime(r.tee_time)); // put HH:MM into the input
+  function updateEdit(roundId: string, patch: Partial<{ played_on: string; tee_time: string }>) {
+    setEditByRoundId((prev) => ({
+      ...prev,
+      [roundId]: {
+        played_on: prev[roundId]?.played_on ?? "",
+        tee_time: prev[roundId]?.tee_time ?? "",
+        ...patch,
+      },
+    }));
   }
 
-  function cancelEdit() {
-    setEditingId(null);
-    setEditPlayedOn("");
-    setEditTeeTime("");
-  }
-
-  async function saveEdit(roundId: string) {
+  async function saveRoundMeta(roundId: string) {
     setErrorMsg("");
-    if (!editPlayedOn) {
-      setErrorMsg("Played on is required.");
+    const ed = editByRoundId[roundId];
+    if (!ed) return;
+
+    // played_on required
+    const played_on = (ed.played_on ?? "").trim();
+    if (!played_on) {
+      setErrorMsg("Played-on date is required.");
       return;
     }
 
-    setSaving(true);
+    setSavingRoundId(roundId);
     try {
-      const payload: any = {
-        played_on: editPlayedOn,
-      };
+      const tee_time = (ed.tee_time ?? "").trim();
 
-      const normalized = normalizeTimeInputToPgTime(editTeeTime);
-      // if user clears time, store NULL
-      payload.tee_time = normalized ? normalized : null;
+      const payload: any = {
+        played_on,
+        tee_time: tee_time || null,
+      };
 
       const { error } = await supabase.from("rounds").update(payload).eq("id", roundId);
       if (error) throw new Error(error.message);
 
-      cancelEdit();
       await load();
     } catch (e: any) {
-      setErrorMsg(e?.message ?? "Unknown error");
+      setErrorMsg(e?.message ?? "Failed to save round.");
     } finally {
-      setSaving(false);
+      setSavingRoundId(null);
     }
-  }
-
-  function beginDelete(roundId: string) {
-    setErrorMsg("");
-    setDeletingId(roundId);
-    setDeleteConfirmText("");
-  }
-
-  function cancelDelete() {
-    setDeletingId(null);
-    setDeleteConfirmText("");
   }
 
   async function deleteRoundCascade(roundId: string) {
     setErrorMsg("");
-    setSaving(true);
 
+    const ok = window.confirm(
+      "Delete this round?\n\nThis will delete scores, round players, groups and tee time group members for this round.\nThis cannot be undone."
+    );
+    if (!ok) return;
+
+    setDeletingRoundId(roundId);
     try {
-      // Guard: typed confirmation
-      if (deleteConfirmText.trim().toUpperCase() !== "DELETE") {
-        throw new Error('Type DELETE to confirm.');
-      }
-
       // Delete children first (order matters with FK constraints).
-      // If you add more round-dependent tables later, add them here.
-      const steps: Array<Promise<any>> = [
-        supabase.from("scores").delete().eq("round_id", roundId),
-        supabase.from("round_group_players").delete().eq("round_id", roundId),
-        supabase.from("round_groups").delete().eq("round_id", roundId),
-        supabase.from("round_players").delete().eq("round_id", roundId),
-      ];
 
-      for (const p of steps) {
-        const res = await p;
-        if (res.error) throw new Error(res.error.message);
-      }
+      const del1 = await supabase.from("scores").delete().eq("round_id", roundId);
+      if (del1.error) throw new Error(del1.error.message);
 
-      const { error: delErr } = await supabase.from("rounds").delete().eq("id", roundId);
-      if (delErr) throw new Error(delErr.message);
+      const del2 = await supabase.from("round_group_players").delete().eq("round_id", roundId);
+      if (del2.error) throw new Error(del2.error.message);
 
-      cancelDelete();
+      const del3 = await supabase.from("round_groups").delete().eq("round_id", roundId);
+      if (del3.error) throw new Error(del3.error.message);
+
+      const del4 = await supabase.from("round_players").delete().eq("round_id", roundId);
+      if (del4.error) throw new Error(del4.error.message);
+
+      const del5 = await supabase.from("rounds").delete().eq("id", roundId);
+      if (del5.error) throw new Error(del5.error.message);
+
       await load();
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Failed to delete round.");
     } finally {
-      setSaving(false);
+      setDeletingRoundId(null);
     }
   }
 
@@ -289,6 +256,22 @@ export default function TourRoundsPage() {
     return (
       <main className="mx-auto max-w-5xl p-4 space-y-4">
         <div className="text-sm opacity-70">Loading…</div>
+      </main>
+    );
+  }
+
+  if (errorMsg) {
+    return (
+      <main className="mx-auto max-w-5xl p-4 space-y-4">
+        <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-900">
+          <div className="font-semibold">Error</div>
+          <div className="mt-1 whitespace-pre-wrap">{errorMsg}</div>
+        </div>
+        <div className="text-sm">
+          <Link className="underline" href="/tours">
+            Back to tours
+          </Link>
+        </div>
       </main>
     );
   }
@@ -325,13 +308,6 @@ export default function TourRoundsPage() {
         </div>
       </header>
 
-      {errorMsg ? (
-        <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-900">
-          <div className="font-semibold">Error</div>
-          <div className="mt-1">{errorMsg}</div>
-        </div>
-      ) : null}
-
       {/* Add round */}
       <section className="rounded-2xl border bg-white p-4 space-y-3">
         <div className="text-lg font-semibold">Add a round</div>
@@ -343,8 +319,9 @@ export default function TourRoundsPage() {
               className="w-full rounded-xl border px-3 py-2 text-sm"
               value={newRoundName}
               onChange={(e) => setNewRoundName(e.target.value)}
-              placeholder={`e.g. Round ${sortedRounds.length + 1} (auto-filled if blank)`}
+              placeholder={`e.g. Round ${rounds.length + 1}`}
             />
+            <div className="mt-1 text-xs opacity-60">If blank, a default will be used (required by DB).</div>
           </div>
 
           <div>
@@ -360,167 +337,113 @@ export default function TourRoundsPage() {
                 </option>
               ))}
             </select>
+            <div className="mt-1 text-xs opacity-60">Courses come from the global Courses list.</div>
           </div>
 
           <div>
             <div className="text-sm opacity-70 mb-1">Played on (required)</div>
             <input
-              type="date"
               className="w-full rounded-xl border px-3 py-2 text-sm"
-              value={playedOn}
-              onChange={(e) => setPlayedOn(e.target.value)}
-              required
+              type="date"
+              value={newPlayedOn}
+              onChange={(e) => setNewPlayedOn(e.target.value)}
             />
           </div>
 
           <div>
             <div className="text-sm opacity-70 mb-1">Tee time (optional)</div>
-            <input type="time" className="w-full rounded-xl border px-3 py-2 text-sm" value={teeTime} onChange={(e) => setTeeTime(e.target.value)} />
+            <input
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+              value={newTeeTime}
+              onChange={(e) => setNewTeeTime(e.target.value)}
+              placeholder="e.g. 08:10"
+            />
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" disabled={!canAdd} onClick={() => void addRound()}>
-            {saving ? "Adding…" : "Add round"}
+        <div className="flex items-center justify-end">
+          <button
+            className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+            disabled={!canAdd}
+            onClick={() => void addRound()}
+          >
+            {savingAdd ? "Adding…" : "Add round"}
           </button>
         </div>
       </section>
 
       {/* Rounds list */}
       <section className="rounded-2xl border bg-white">
-        {sortedRounds.length === 0 ? (
+        {rounds.length === 0 ? (
           <div className="p-4 text-sm opacity-70">No rounds yet.</div>
         ) : (
           <ul className="divide-y">
-            {sortedRounds.map((r, idx) => {
-              const name = (r.name ?? "").trim() || `Round ${idx + 1}`;
-              const courseLabel = r.course_id ? courseNameById[r.course_id] ?? r.course_id : "—";
-              const dateLabel = fmtPlayedOn(r.played_on);
-              const timeLabel = fmtTeeTime(r.tee_time);
-
-              const isEditing = editingId === r.id;
-              const isDeleting = deletingId === r.id;
+            {rounds.map((r, idx) => {
+              const ed = editByRoundId[r.id] ?? { played_on: r.played_on ?? "", tee_time: r.tee_time ?? "" };
+              const isSaving = savingRoundId === r.id;
+              const isDeleting = deletingRoundId === r.id;
 
               return (
-                <li key={r.id} className="p-3 space-y-2">
+                <li key={r.id} className="p-3">
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
-                      <div className="font-medium truncate">{name}</div>
-                      <div className="text-xs opacity-70">
-                        {dateLabel}
-                        {timeLabel ? ` · ${timeLabel}` : ""}
-                        {" · "}Course: {courseLabel}
+                      <div className="font-medium truncate">{fmtRoundDisplayName(r, idx)}</div>
+                      <div className="text-xs opacity-70 mt-1">
+                        Course: {safeCourseName(courseNameById, r.course_id)}
                       </div>
 
-                      <div className="mt-2 flex items-center gap-3 text-sm">
-                        <Link className="underline" href={`/rounds/${r.id}`}>
-                          Scores
-                        </Link>
-                        <Link className="underline" href={`/rounds/${r.id}/groups`}>
-                          Groupings
-                        </Link>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      {!isEditing ? (
-                        <button
-                          className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-                          disabled={saving}
-                          onClick={() => beginEdit(r)}
-                        >
-                          Edit date/time
-                        </button>
-                      ) : (
-                        <button className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" disabled={saving} onClick={cancelEdit}>
-                          Cancel
-                        </button>
-                      )}
-
-                      {!isDeleting ? (
-                        <button
-                          className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900 hover:bg-red-100 disabled:opacity-50"
-                          disabled={saving}
-                          onClick={() => beginDelete(r.id)}
-                        >
-                          Delete
-                        </button>
-                      ) : (
-                        <button
-                          className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-                          disabled={saving}
-                          onClick={cancelDelete}
-                        >
-                          Close
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {isEditing ? (
-                    <div className="rounded-2xl border bg-gray-50 p-3 space-y-3">
-                      <div className="text-sm font-semibold">Edit round date/time</div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <div>
-                          <div className="text-sm opacity-70 mb-1">Played on</div>
+                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 max-w-xl">
+                        <label className="text-xs">
+                          <div className="opacity-70 mb-1">Played on</div>
                           <input
                             type="date"
                             className="w-full rounded-xl border px-3 py-2 text-sm"
-                            value={editPlayedOn}
-                            onChange={(e) => setEditPlayedOn(e.target.value)}
-                            required
+                            value={ed.played_on}
+                            onChange={(e) => updateEdit(r.id, { played_on: e.target.value })}
                           />
-                        </div>
+                        </label>
 
-                        <div>
-                          <div className="text-sm opacity-70 mb-1">Tee time</div>
+                        <label className="text-xs">
+                          <div className="opacity-70 mb-1">Tee time</div>
                           <input
-                            type="time"
                             className="w-full rounded-xl border px-3 py-2 text-sm"
-                            value={editTeeTime}
-                            onChange={(e) => setEditTeeTime(e.target.value)}
+                            value={ed.tee_time}
+                            onChange={(e) => updateEdit(r.id, { tee_time: e.target.value })}
+                            placeholder="e.g. 08:10"
                           />
-                          <div className="mt-1 text-xs opacity-60">Clear the time to store it as blank.</div>
-                        </div>
+                        </label>
 
-                        <div className="flex items-end">
+                        <div className="flex items-end gap-2">
                           <button
-                            className="rounded-xl bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
-                            disabled={saving || !editPlayedOn}
-                            onClick={() => void saveEdit(r.id)}
+                            className="w-full rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                            disabled={isSaving || isDeleting}
+                            onClick={() => void saveRoundMeta(r.id)}
+                            title="Save played-on date and tee time"
                           >
-                            {saving ? "Saving…" : "Save"}
+                            {isSaving ? "Saving…" : "Save"}
                           </button>
                         </div>
                       </div>
                     </div>
-                  ) : null}
 
-                  {isDeleting ? (
-                    <div className="rounded-2xl border border-red-200 bg-red-50 p-3 space-y-2">
-                      <div className="text-sm font-semibold text-red-900">Delete this round?</div>
-                      <div className="text-sm text-red-900/80">
-                        This will delete the round and its dependent data (scores, round players, groupings). Type <strong>DELETE</strong> to confirm.
-                      </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <Link className="text-sm underline" href={`/rounds/${r.id}`}>
+                        Scores
+                      </Link>
+                      <Link className="text-sm underline" href={`/rounds/${r.id}/groups`}>
+                        Groupings
+                      </Link>
 
-                      <div className="flex flex-wrap items-center gap-2">
-                        <input
-                          className="rounded-xl border px-3 py-2 text-sm"
-                          value={deleteConfirmText}
-                          onChange={(e) => setDeleteConfirmText(e.target.value)}
-                          placeholder="Type DELETE"
-                        />
-                        <button
-                          className="rounded-xl bg-red-700 px-4 py-2 text-sm text-white disabled:opacity-50"
-                          disabled={saving || deleteConfirmText.trim().toUpperCase() !== "DELETE"}
-                          onClick={() => void deleteRoundCascade(r.id)}
-                        >
-                          {saving ? "Deleting…" : "Confirm delete"}
-                        </button>
-                      </div>
+                      <button
+                        className="text-sm underline text-red-700 disabled:opacity-50"
+                        disabled={isSaving || isDeleting}
+                        onClick={() => void deleteRoundCascade(r.id)}
+                        title="Delete this round and its dependent data"
+                      >
+                        {isDeleting ? "Deleting…" : "Delete"}
+                      </button>
                     </div>
-                  ) : null}
+                  </div>
                 </li>
               );
             })}
