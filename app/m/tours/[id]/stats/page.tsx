@@ -1,4 +1,3 @@
-// app/m/tours/[id]/stats/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -330,11 +329,10 @@ export default function MobileTourStatsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Simple header (no redundant overview button) */}
+      {/* Simple header (tour name removed) */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">Stats</div>
-          <div className="truncate text-sm text-gray-500">{tour?.name ?? ""}</div>
         </div>
       </div>
 
@@ -380,10 +378,16 @@ export default function MobileTourStatsPage() {
                       Holes
                     </th>
 
-                    <th className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700" colSpan={5}>
+                    <th
+                      className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700"
+                      colSpan={5}
+                    >
                       Gross outcomes (%)
                     </th>
-                    <th className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700" colSpan={5}>
+                    <th
+                      className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700"
+                      colSpan={5}
+                    >
                       Net outcomes (%)
                     </th>
                   </tr>
@@ -414,12 +418,18 @@ export default function MobileTourStatsPage() {
                     </th>
 
                     {["E+", "B", "Par", "Bog", "D+"].map((h) => (
-                      <th key={`g-${h}`} className="border-b border-gray-200 px-3 py-2 text-right text-[11px] font-semibold text-gray-500">
+                      <th
+                        key={`g-${h}`}
+                        className="border-b border-gray-200 px-3 py-2 text-right text-[11px] font-semibold text-gray-500"
+                      >
                         {h}
                       </th>
                     ))}
                     {["E+", "B", "Par", "Bog", "D+"].map((h) => (
-                      <th key={`n-${h}`} className="border-b border-gray-200 px-3 py-2 text-right text-[11px] font-semibold text-gray-500">
+                      <th
+                        key={`n-${h}`}
+                        className="border-b border-gray-200 px-3 py-2 text-right text-[11px] font-semibold text-gray-500"
+                      >
                         {h}
                       </th>
                     ))}
@@ -455,11 +465,21 @@ export default function MobileTourStatsPage() {
                           {r.name}
                         </td>
 
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.roundsPlayedCompleted)}</td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmt(r.stats.rounds.avgStableford, 1)}</td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.bestStableford)}</td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.worstStableford)}</td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmt(r.stats.rounds.stdDevStableford, 2)}</td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmtInt(r.stats.rounds.roundsPlayedCompleted)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmt(r.stats.rounds.avgStableford, 1)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmtInt(r.stats.rounds.bestStableford)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmtInt(r.stats.rounds.worstStableford)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmt(r.stats.rounds.stdDevStableford, 2)}
+                        </td>
 
                         <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(holesPlayed)}</td>
 
@@ -482,8 +502,8 @@ export default function MobileTourStatsPage() {
             </div>
 
             <div className="mt-3 text-xs text-gray-600">
-              Rds (18) = completed rounds (18 scored holes). Outcomes are percentages of <span className="font-semibold">all scored holes</span>.
-              Pickups (P) count as Double+.
+              Rds (18) = completed rounds (18 scored holes). Outcomes are percentages of{" "}
+              <span className="font-semibold">all scored holes</span>. Pickups (P) count as Double+.
             </div>
           </>
         )}
