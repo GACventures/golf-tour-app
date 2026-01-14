@@ -1,14 +1,19 @@
 import { netStablefordPointsForHole } from "@/lib/stableford";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-type Round = { id: string; tour_id: string; course_id: string | null; created_at: string | null };
+type Round = {
+  id: string;
+  tour_id: string;
+  course_id: string;
+  created_at: string | null;
+};
 
 type ParRow = {
   course_id: string;
   hole_number: number;
   par: number;
   stroke_index: number;
-  tee: string; // "M" | "F" (or other values if you ever add them)
+  tee: string; // "M" | "F"
 };
 
 type ScoreRow = {
@@ -16,7 +21,7 @@ type ScoreRow = {
   player_id: string;
   hole_number: number;
   strokes: number | null;
-  pickup?: boolean | null;
+  pickup?: boolean;
 };
 
 type RoundPlayerRow = {
@@ -27,19 +32,23 @@ type RoundPlayerRow = {
   tee: string; // NOT NULL in your schema
 };
 
-type TourPlayerRow = {
+type TourPlayerJoinRow = {
+  tour_id: string;
   player_id: string;
-  starting_handicap: number;
-  players?: { gender: string | null; name?: string | null } | null;
+  starting_handicap: number | null; // from tour_players
+  players: {
+    id: string;
+    name: string;
+    gender: string | null; // players.gender
+    start_handicap: number | null; // players.start_handicap
+  } | null;
 };
 
 function roundHalfUp(x: number): number {
-  // .5 rounds up (works for negatives too)
   return x >= 0 ? Math.floor(x + 0.5) : Math.ceil(x - 0.5);
 }
 
 function ceilHalfStart(sh: number): number {
-  // MIN = ceil(SH/2)
   return Math.ceil(sh / 2);
 }
 
@@ -47,11 +56,15 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
 }
 
-function normalizeTeeFromGender(gender: string | null | undefined): "M" | "F" {
-  const g = String(gender ?? "").trim().toLowerCase();
-  if (!g) return "M"; // safe default
-  if (g === "f" || g === "female" || g.startsWith("f")) return "F";
-  return "M";
+function toTeeFromGender(gender: string | null | undefined): "M" | "F" {
+  const g = String(gender ?? "").trim().toUpperCase();
+  // Treat anything starting with F as F, otherwise default M
+  return g.startsWith("F") ? "F" : "M";
+}
+
+function numOrNull(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 function rawScoreString(s: ScoreRow): string {
@@ -69,7 +82,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
 }): Promise<{ ok: true; updated: number } | { ok: false; error: string }> {
   const { supabase, tourId, onlyIfRoundCompleteId } = opts;
 
-  // 1) Load rounds
+  // 1) load rounds
   const { data: roundsData, error: roundsErr } = await supabase
     .from("rounds")
     .select("id,tour_id,course_id,created_at")
@@ -77,38 +90,48 @@ export async function recalcAndSaveTourHandicaps(opts: {
     .order("created_at", { ascending: true });
 
   if (roundsErr) return { ok: false, error: roundsErr.message };
-
   const rounds = (roundsData ?? []) as Round[];
   if (rounds.length === 0) return { ok: true, updated: 0 };
 
   const roundIds = rounds.map((r) => r.id);
-  const courseIds = Array.from(new Set(rounds.map((r) => r.course_id).filter(Boolean))) as string[];
+  const courseIds = Array.from(new Set(rounds.map((r) => r.course_id)));
 
-  // 2) Load tour players (starting handicap comes from tour_players) + gender from players
+  // 2) load tour players (global players) + starting handicap sources + gender
   const { data: tpData, error: tpErr } = await supabase
     .from("tour_players")
-    .select("player_id, starting_handicap, players(gender,name)")
+    .select("tour_id,player_id,starting_handicap,players(id,name,gender,start_handicap)")
     .eq("tour_id", tourId);
 
   if (tpErr) return { ok: false, error: tpErr.message };
 
-  const tourPlayers = (tpData ?? []) as any as TourPlayerRow[];
-  const playerIds = tourPlayers.map((x) => String(x.player_id)).filter(Boolean);
+  const tp = (tpData ?? []) as TourPlayerJoinRow[];
 
-  if (playerIds.length === 0) return { ok: true, updated: 0 };
+  const playerIds: string[] = [];
+  const playerTeeById = new Map<string, "M" | "F">();
+  const startingHcpById = new Map<string, number>();
 
-  const startingHcpByPlayer: Record<string, number> = {};
-  const teeByPlayer: Record<string, "M" | "F"> = {};
-  for (const row of tourPlayers) {
-    const pid = String(row.player_id);
-    const sh = Number.isFinite(Number(row.starting_handicap)) ? Number(row.starting_handicap) : 0;
-    startingHcpByPlayer[pid] = Math.max(0, Math.floor(sh));
+  for (const row of tp) {
+    const pid = String(row.players?.id ?? row.player_id);
+    if (!pid) continue;
 
-    const gender = row.players?.gender ?? null;
-    teeByPlayer[pid] = normalizeTeeFromGender(gender);
+    playerIds.push(pid);
+
+    const tee = toTeeFromGender(row.players?.gender ?? null);
+    playerTeeById.set(pid, tee);
+
+    // ✅ IMPORTANT: prefer tour_players.starting_handicap, else players.start_handicap
+    const fromTourPlayers = numOrNull(row.starting_handicap);
+    const fromPlayers = numOrNull(row.players?.start_handicap);
+
+    const sh = (fromTourPlayers ?? fromPlayers ?? 0);
+    // keep integer, non-negative
+    startingHcpById.set(pid, Math.max(0, Math.floor(sh)));
   }
 
-  // 3) Load pars (tee-specific)
+  // If no tour_players rows, nothing to do
+  if (playerIds.length === 0) return { ok: true, updated: 0 };
+
+  // 3) pars (tee-specific)
   const { data: parsData, error: parsErr } = await supabase
     .from("pars")
     .select("course_id,hole_number,par,stroke_index,tee")
@@ -117,18 +140,17 @@ export async function recalcAndSaveTourHandicaps(opts: {
   if (parsErr) return { ok: false, error: parsErr.message };
   const pars = (parsData ?? []) as ParRow[];
 
-  // course -> tee -> hole -> {par, si}
+  // Build course -> tee -> hole -> {par, si}
   const courseTeeHole: Record<string, Record<string, Record<number, { par: number; si: number }>>> = {};
   for (const p of pars) {
     const cid = String(p.course_id);
-    const tee = String(p.tee);
-    const hole = Number(p.hole_number);
+    const tee = String(p.tee).trim().toUpperCase() || "M";
     if (!courseTeeHole[cid]) courseTeeHole[cid] = {};
     if (!courseTeeHole[cid][tee]) courseTeeHole[cid][tee] = {};
-    courseTeeHole[cid][tee][hole] = { par: Number(p.par), si: Number(p.stroke_index) };
+    courseTeeHole[cid][tee][p.hole_number] = { par: p.par, si: p.stroke_index };
   }
 
-  // 4) Load round_players (include tee because NOT NULL)
+  // 4) round_players
   const { data: rpData, error: rpErr } = await supabase
     .from("round_players")
     .select("round_id,player_id,playing,playing_handicap,tee")
@@ -136,9 +158,9 @@ export async function recalcAndSaveTourHandicaps(opts: {
     .in("player_id", playerIds);
 
   if (rpErr) return { ok: false, error: rpErr.message };
-  const roundPlayers = (rpData ?? []) as any as RoundPlayerRow[];
+  const roundPlayers = (rpData ?? []) as RoundPlayerRow[];
 
-  // 5) Load scores
+  // 5) scores
   const { data: scoresData, error: scoresErr } = await supabase
     .from("scores")
     .select("round_id,player_id,hole_number,strokes,pickup")
@@ -181,23 +203,26 @@ export async function recalcAndSaveTourHandicaps(opts: {
     }
   }
 
-  // Compute sequentially; stop at first incomplete round (keeps PH stable beyond it)
+  // Compute sequentially; stop at first incomplete round
   const phByRoundPlayer: Record<string, Record<string, number>> = {};
 
-  // init Round 1 PH = tour_players.starting_handicap
+  // init Round 1 PH = Starting Handicap
   const r1 = rounds[0];
   phByRoundPlayer[r1.id] = {};
-  for (const pid of playerIds) phByRoundPlayer[r1.id][pid] = startingHcpByPlayer[pid] ?? 0;
+  for (const pid of playerIds) phByRoundPlayer[r1.id][pid] = startingHcpById.get(pid) ?? 0;
 
-  function stablefordTotal(roundId: string, courseId: string, playerId: string, ph: number): number {
-    const tee = teeByPlayer[playerId] ?? "M";
+  const stablefordTotal = (roundId: string, courseId: string, playerId: string, ph: number): number => {
+    let total = 0;
+
+    const tee = playerTeeById.get(playerId) ?? "M";
     const holeInfo = courseTeeHole[courseId]?.[tee];
+
     if (!holeInfo) return 0;
 
-    let total = 0;
     for (let hole = 1; hole <= 18; hole++) {
       const info = holeInfo[hole];
       if (!info) continue;
+
       const raw = scoreMap[roundId]?.[playerId]?.[hole] ?? "";
       total += netStablefordPointsForHole({
         rawScore: raw,
@@ -206,38 +231,27 @@ export async function recalcAndSaveTourHandicaps(opts: {
         playingHandicap: ph,
       });
     }
+
     return total;
-  }
+  };
 
   for (let i = 0; i < rounds.length; i++) {
     const r = rounds[i];
     const next = rounds[i + 1] ?? null;
 
-    if (!r.course_id) {
-      // If no course, we can't calculate stableford; just carry forward
-      if (next) {
-        phByRoundPlayer[next.id] = {};
-        for (const pid of playerIds) {
-          const prevPH = phByRoundPlayer[r.id]?.[pid] ?? startingHcpByPlayer[pid] ?? 0;
-          phByRoundPlayer[next.id][pid] = prevPH;
-        }
-      }
-      continue;
-    }
-
-    // ensure current PH map exists (carry forward if missing)
+    // carry forward if missing
     if (!phByRoundPlayer[r.id]) {
       phByRoundPlayer[r.id] = {};
       const prev = rounds[i - 1];
       for (const pid of playerIds) {
-        phByRoundPlayer[r.id][pid] = phByRoundPlayer[prev.id]?.[pid] ?? startingHcpByPlayer[pid] ?? 0;
+        phByRoundPlayer[r.id][pid] = phByRoundPlayer[prev.id]?.[pid] ?? (startingHcpById.get(pid) ?? 0);
       }
     }
 
-    // if this round incomplete, stop updating beyond it
+    // stop at first incomplete round
     if (!isRoundComplete(r.id)) break;
 
-    // compute scores for players who played
+    // scores for players who played
     const playedScores: number[] = [];
     const scoreByPlayer: Record<string, number | null> = {};
 
@@ -247,20 +261,23 @@ export async function recalcAndSaveTourHandicaps(opts: {
         scoreByPlayer[pid] = null;
         continue;
       }
-      const ph = phByRoundPlayer[r.id][pid] ?? (startingHcpByPlayer[pid] ?? 0);
-      const sc = stablefordTotal(r.id, String(r.course_id), pid, ph);
+
+      const ph = phByRoundPlayer[r.id][pid];
+      const sc = stablefordTotal(r.id, r.course_id, pid, ph);
+
       scoreByPlayer[pid] = sc;
       playedScores.push(sc);
     }
 
     const avgRounded =
-      playedScores.length > 0 ? roundHalfUp(playedScores.reduce((s, v) => s + v, 0) / playedScores.length) : null;
+      playedScores.length > 0
+        ? roundHalfUp(playedScores.reduce((s, v) => s + v, 0) / playedScores.length)
+        : null;
 
     if (next) {
       phByRoundPlayer[next.id] = {};
-
       for (const pid of playerIds) {
-        const prevPH = phByRoundPlayer[r.id][pid] ?? (startingHcpByPlayer[pid] ?? 0);
+        const prevPH = phByRoundPlayer[r.id][pid];
         const playedPrev = playingMap[r.id]?.[pid] === true;
 
         if (!playedPrev || avgRounded === null) {
@@ -274,11 +291,10 @@ export async function recalcAndSaveTourHandicaps(opts: {
           continue;
         }
 
-        // Rehandicap rule
         const diff = (avgRounded - prevScore) / 3;
         const raw = roundHalfUp(prevPH + diff);
 
-        const sh = startingHcpByPlayer[pid] ?? 0;
+        const sh = startingHcpById.get(pid) ?? 0;
         const max = sh + 3;
         const min = ceilHalfStart(sh);
 
@@ -287,18 +303,20 @@ export async function recalcAndSaveTourHandicaps(opts: {
     }
   }
 
-  // Upsert payload for round_players (preserve playing flag, and ALWAYS include tee because NOT NULL)
-  // If a row is missing tee for any reason, we derive it from player gender.
+  // ✅ Upsert payload for existing round_players rows:
+  //    - preserve playing
+  //    - set playing_handicap
+  //    - ensure tee is populated (NOT NULL)
   const payload = roundPlayers.map((rp) => {
+    const tee = (rp.tee ?? "").trim().toUpperCase() || (playerTeeById.get(rp.player_id) ?? "M");
     const ph = phByRoundPlayer[rp.round_id]?.[rp.player_id];
-    const tee = (rp.tee && String(rp.tee).trim()) || teeByPlayer[rp.player_id] || "M";
 
     return {
       round_id: rp.round_id,
       player_id: rp.player_id,
       playing: rp.playing,
-      playing_handicap: Number.isFinite(ph as any) ? (ph as number) : rp.playing_handicap ?? 0,
       tee,
+      playing_handicap: Number.isFinite(ph as any) ? ph : (rp.playing_handicap ?? 0),
     };
   });
 
