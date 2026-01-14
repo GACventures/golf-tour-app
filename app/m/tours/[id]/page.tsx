@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -83,29 +84,29 @@ export default function MobileTourLandingPage() {
   }, [tourId]);
 
   const title = tour?.name?.trim() || "Tour";
-  const heroImage = tour?.image_url?.trim() || "";
+
+  // 🔑 FORCE shared hero image (Golden Path + Kiwi Madness)
+  // If you later want per-tour images again, just switch back to tour?.image_url
+  const heroImage = "/tours/tour-landing-hero-cartoon.webp";
 
   const start = useMemo(() => parseDate(tour?.start_date ?? null), [tour?.start_date]);
   const end = useMemo(() => parseDate(tour?.end_date ?? null), [tour?.end_date]);
   const dateLabel = useMemo(() => formatTourDates(start, end), [start, end]);
 
   return (
-    <div className="bg-black text-white">
-      {/* HERO IMAGE (takes most of screen, but not all) */}
-      <div className="relative h-[72vh] w-full overflow-hidden">
-        {heroImage ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={heroImage}
-            alt=""
-            className="h-full w-full object-contain bg-black"
-          />
-        ) : (
-          <div className="h-full w-full bg-gradient-to-br from-gray-200 to-gray-300" />
-        )}
+    <div className="bg-black text-white min-h-dvh">
+      {/* HERO IMAGE */}
+      <div className="relative h-[72vh] w-full overflow-hidden bg-black">
+        <Image
+          src={heroImage}
+          alt="Tour landing hero"
+          fill
+          priority
+          className="object-contain"
+        />
       </div>
 
-      {/* TEXT AREA (always visible, no scroll needed) */}
+      {/* TEXT AREA */}
       <div className="px-4 py-5">
         <div className="mx-auto max-w-md">
           {loading ? (
