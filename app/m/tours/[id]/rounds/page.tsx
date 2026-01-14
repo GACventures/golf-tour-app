@@ -10,7 +10,7 @@ type RoundRow = {
   tour_id: string;
   course_id: string | null;
 
-  // These may or may not exist in DB; we keep them optional
+  // May or may not exist in DB; keep optional so UI logic can use them when present
   round_date?: string | null;
   played_on?: string | null;
 
@@ -35,7 +35,6 @@ function normalizeMode(raw: string | null): Mode {
 }
 
 function pickBestRoundDateISO(r: RoundRow): string | null {
-  // Priority: round_date -> played_on -> created_at
   return (r.round_date ?? null) || (r.played_on ?? null) || (r.created_at ?? null) || null;
 }
 
@@ -43,7 +42,6 @@ function parseDateForDisplay(s: string | null): Date | null {
   if (!s) return null;
 
   const raw = String(s).trim();
-  // If it's date-only ("YYYY-MM-DD"), force an ISO timestamp so JS parses consistently.
   const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
   const iso = isDateOnly ? `${raw}T00:00:00.000Z` : raw;
 
@@ -63,13 +61,10 @@ function fmtAuMelbourneDate(d: Date | null): string {
   }).formatToParts(d);
 
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  // "Tue 13 Jan 2026"
   return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`.replace(/\s+/g, " ");
 }
 
 function isMissingColumnError(msg: string, column: string) {
-  // Typical Supabase/Postgres message: 'column rounds.round_date does not exist'
-  // Sometimes without table prefix: 'column "round_date" does not exist'
   const m = msg.toLowerCase();
   const c = column.toLowerCase();
   return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
@@ -91,7 +86,7 @@ export default function MobileRoundsHubPage() {
     let alive = true;
 
     async function fetchRounds(selectCols: string) {
-      return await supabase
+      return supabase
         .from("rounds")
         .select(selectCols)
         .eq("tour_id", tourId)
@@ -102,33 +97,65 @@ export default function MobileRoundsHubPage() {
       setLoading(true);
       setErrorMsg("");
 
-      // Try the best case first (round_date + played_on)
       const baseCols = "id,tour_id,course_id,created_at,name,courses(name)";
-      const try1Cols = `${baseCols},round_date,played_on`;
+      const cols1 = `${baseCols},round_date,played_on`;
+      const cols2 = `${baseCols},played_on`;
 
-      let res = await fetchRounds(try1Cols);
+      let rows: RoundRow[] = [];
 
-      // If round_date column missing, retry without it (and still try played_on)
-      if (res.error && isMissingColumnError(res.error.message, "round_date")) {
-        const try2Cols = `${baseCols},played_on`;
-        res = await fetchRounds(try2Cols);
-      }
-
-      // If played_on column missing too, retry with only created_at fallback
-      if (res.error && isMissingColumnError(res.error.message, "played_on")) {
-        res = await fetchRounds(baseCols);
-      }
+      // Attempt 1: round_date + played_on
+      const r1 = await fetchRounds(cols1);
 
       if (!alive) return;
 
-      if (res.error) {
-        setErrorMsg(res.error.message);
+      if (!r1.error) {
+        rows = (r1.data ?? []) as unknown as RoundRow[];
+        setRounds(rows);
+        setLoading(false);
+        return;
+      }
+
+      // If round_date missing, retry without it (still try played_on)
+      if (isMissingColumnError(r1.error.message, "round_date")) {
+        const r2 = await fetchRounds(cols2);
+
+        if (!alive) return;
+
+        if (!r2.error) {
+          rows = (r2.data ?? []) as unknown as RoundRow[];
+          setRounds(rows);
+          setLoading(false);
+          return;
+        }
+
+        // If played_on missing too, retry base only
+        if (isMissingColumnError(r2.error.message, "played_on")) {
+          const r3 = await fetchRounds(baseCols);
+
+          if (!alive) return;
+
+          if (!r3.error) {
+            rows = (r3.data ?? []) as unknown as RoundRow[];
+            setRounds(rows);
+            setLoading(false);
+            return;
+          }
+
+          setErrorMsg(r3.error.message);
+          setRounds([]);
+          setLoading(false);
+          return;
+        }
+
+        setErrorMsg(r2.error.message);
         setRounds([]);
         setLoading(false);
         return;
       }
 
-      setRounds((res.data ?? []) as RoundRow[]);
+      // Some other error
+      setErrorMsg(r1.error.message);
+      setRounds([]);
       setLoading(false);
     }
 
@@ -146,7 +173,6 @@ export default function MobileRoundsHubPage() {
   const sorted = useMemo(() => {
     const arr = [...rounds];
     arr.sort((a, b) => {
-      // Keep existing ordering behaviour (created_at), but robust
       const da = parseDateForDisplay(a.created_at)?.getTime() ?? 0;
       const db = parseDateForDisplay(b.created_at)?.getTime() ?? 0;
       if (da !== db) return da - db;
