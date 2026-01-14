@@ -10,10 +10,8 @@ type RoundRow = {
   tour_id: string;
   course_id: string | null;
 
-  // May or may not exist in DB; keep optional so UI logic can use them when present
   round_date?: string | null;
   played_on?: string | null;
-
   created_at: string | null;
 
   name?: string | null;
@@ -31,27 +29,25 @@ function getCourseName(r: RoundRow) {
 
 function normalizeMode(raw: string | null): Mode {
   if (raw === "tee-times" || raw === "score" || raw === "results") return raw;
-  return "score";
+  // DEFAULT = tee-times (black)
+  return "tee-times";
 }
 
 function pickBestRoundDateISO(r: RoundRow): string | null {
-  return (r.round_date ?? null) || (r.played_on ?? null) || (r.created_at ?? null) || null;
+  return r.round_date ?? r.played_on ?? r.created_at ?? null;
 }
 
 function parseDateForDisplay(s: string | null): Date | null {
   if (!s) return null;
-
   const raw = String(s).trim();
   const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
   const iso = isDateOnly ? `${raw}T00:00:00.000Z` : raw;
-
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function fmtAuMelbourneDate(d: Date | null): string {
   if (!d) return "";
-
   const parts = new Intl.DateTimeFormat("en-AU", {
     timeZone: "Australia/Melbourne",
     weekday: "short",
@@ -103,9 +99,7 @@ export default function MobileRoundsHubPage() {
 
       let rows: RoundRow[] = [];
 
-      // Attempt 1: round_date + played_on
       const r1 = await fetchRounds(cols1);
-
       if (!alive) return;
 
       if (!r1.error) {
@@ -115,10 +109,8 @@ export default function MobileRoundsHubPage() {
         return;
       }
 
-      // If round_date missing, retry without it (still try played_on)
       if (isMissingColumnError(r1.error.message, "round_date")) {
         const r2 = await fetchRounds(cols2);
-
         if (!alive) return;
 
         if (!r2.error) {
@@ -128,10 +120,8 @@ export default function MobileRoundsHubPage() {
           return;
         }
 
-        // If played_on missing too, retry base only
         if (isMissingColumnError(r2.error.message, "played_on")) {
           const r3 = await fetchRounds(baseCols);
-
           if (!alive) return;
 
           if (!r3.error) {
@@ -142,19 +132,13 @@ export default function MobileRoundsHubPage() {
           }
 
           setErrorMsg(r3.error.message);
-          setRounds([]);
-          setLoading(false);
-          return;
+        } else {
+          setErrorMsg(r2.error.message);
         }
-
-        setErrorMsg(r2.error.message);
-        setRounds([]);
-        setLoading(false);
-        return;
+      } else {
+        setErrorMsg(r1.error.message);
       }
 
-      // Some other error
-      setErrorMsg(r1.error.message);
       setRounds([]);
       setLoading(false);
     }
@@ -206,14 +190,12 @@ export default function MobileRoundsHubPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900">
-      {/* Header row */}
       <div className="border-b bg-white">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold">Rounds</div>
         </div>
       </div>
 
-      {/* Mode buttons */}
       <div className="mx-auto w-full max-w-md px-4 pt-4">
         <div className="flex gap-2">
           <button
@@ -237,7 +219,6 @@ export default function MobileRoundsHubPage() {
         </div>
       </div>
 
-      {/* Rounds list */}
       <div className="mx-auto w-full max-w-md px-4 pt-4 pb-28">
         {loading ? (
           <div className="space-y-3">
