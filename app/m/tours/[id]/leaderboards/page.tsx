@@ -23,7 +23,13 @@ type RoundRow = {
   tour_id: string;
   name: string | null;
   round_no: number | null;
+
+  // Date fields (may not exist in schema yet)
+  round_date?: string | null;
+  played_on?: string | null;
+
   created_at: string | null;
+
   course_id: string | null;
   courses?: CourseRel | CourseRel[] | null;
 };
@@ -129,16 +135,38 @@ function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
   return Number.isFinite(n) ? String(n) : "";
 }
 
-function formatDate(iso: string | null | undefined) {
-  if (!iso) return "";
+function isMissingColumnError(msg: string, column: string) {
+  const m = String(msg ?? "").toLowerCase();
+  const c = column.toLowerCase();
+  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
+}
+
+function pickBestRoundDateISO(r: RoundRow): string | null {
+  return (r.round_date ?? null) || (r.played_on ?? null) || (r.created_at ?? null) || null;
+}
+
+function parseDateForDisplay(s: string | null | undefined): Date | null {
+  if (!s) return null;
+  const raw = String(s).trim();
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+  const iso = isDateOnly ? `${raw}T00:00:00.000Z` : raw;
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-AU", {
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatDateAuMelbourne(iso: string | null | undefined) {
+  const d = parseDateForDisplay(iso);
+  if (!d) return "";
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
     weekday: "short",
     day: "2-digit",
     month: "short",
     year: "numeric",
-  });
+  }).formatToParts(d);
+
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`.replace(/\s+/g, " ");
 }
 
 function clampInt(n: number, min: number, max: number) {
@@ -304,16 +332,55 @@ export default function MobileLeaderboardsPage() {
           setTeamRule({ bestY: clampInt(y, 1, 99) });
         }
 
-        // Rounds (include course name)
-        const { data: rData, error: rErr } = await supabase
+        // Rounds (include course name) — schema tolerant for round_date/played_on
+        const baseRoundCols = "id,tour_id,name,round_no,created_at,course_id,courses(name)";
+        const cols1 = `${baseRoundCols},round_date,played_on`;
+        const cols2 = `${baseRoundCols},played_on`;
+
+        let rr: RoundRow[] = [];
+
+        const r1 = await supabase
           .from("rounds")
-          .select("id,tour_id,name,round_no,created_at,course_id,courses(name)")
+          .select(cols1)
           .eq("tour_id", tourId)
           .order("round_no", { ascending: true, nullsFirst: false })
           .order("created_at", { ascending: true });
-        if (rErr) throw rErr;
 
-        const rr = (rData ?? []) as RoundRow[];
+        if (!alive) return;
+
+        if (!r1.error) {
+          rr = (r1.data ?? []) as unknown as RoundRow[];
+        } else if (isMissingColumnError(r1.error.message, "round_date")) {
+          const r2 = await supabase
+            .from("rounds")
+            .select(cols2)
+            .eq("tour_id", tourId)
+            .order("round_no", { ascending: true, nullsFirst: false })
+            .order("created_at", { ascending: true });
+
+          if (!alive) return;
+
+          if (!r2.error) {
+            rr = (r2.data ?? []) as unknown as RoundRow[];
+          } else if (isMissingColumnError(r2.error.message, "played_on")) {
+            const r3 = await supabase
+              .from("rounds")
+              .select(baseRoundCols)
+              .eq("tour_id", tourId)
+              .order("round_no", { ascending: true, nullsFirst: false })
+              .order("created_at", { ascending: true });
+
+            if (!alive) return;
+
+            if (r3.error) throw r3.error;
+            rr = (r3.data ?? []) as unknown as RoundRow[];
+          } else {
+            throw r2.error;
+          }
+        } else {
+          throw r1.error;
+        }
+
         if (!alive) return;
         setRounds(rr);
 
@@ -1118,7 +1185,9 @@ export default function MobileLeaderboardsPage() {
                 {sortedRounds.map((r, idx) => {
                   const isFinal = r.id === finalRoundId;
                   const lab = roundLabel(r, idx, isFinal);
-                  const dt = formatDate(r.created_at);
+
+                  const bestIso = pickBestRoundDateISO(r);
+                  const dt = formatDateAuMelbourne(bestIso);
 
                   const courseName = safeName(asSingle(r.courses)?.name, "(course)");
                   return (
