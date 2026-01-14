@@ -9,7 +9,12 @@ type RoundRow = {
   id: string;
   tour_id: string;
   course_id: string | null;
+
+  // Date fields (priority order: round_date -> played_on -> created_at)
+  round_date: string | null;
+  played_on: string | null;
   created_at: string | null;
+
   name?: string | null;
   courses?: { name: string } | { name: string }[] | null;
 };
@@ -23,25 +28,44 @@ function getCourseName(r: RoundRow) {
   return c?.name ?? "Course";
 }
 
-function parseISODate(s: string | null): Date | null {
+function normalizeMode(raw: string | null): Mode {
+  if (raw === "tee-times" || raw === "score" || raw === "results") return raw;
+  return "score";
+}
+
+function pickBestRoundDateISO(r: RoundRow): string | null {
+  return r.round_date ?? r.played_on ?? r.created_at ?? null;
+}
+
+function parseDateForDisplay(s: string | null): Date | null {
   if (!s) return null;
-  const d = new Date(s);
+
+  const raw = String(s).trim();
+  // If it's date-only ("YYYY-MM-DD"), force an ISO timestamp so JS parses consistently.
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+  const iso = isDateOnly ? `${raw}T00:00:00.000Z` : raw;
+
+  const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function fmtDate(d: Date | null) {
+function fmtAuMelbourneDate(d: Date | null): string {
   if (!d) return "";
-  return d.toLocaleDateString(undefined, {
+
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
     weekday: "short",
     day: "2-digit",
     month: "short",
     year: "numeric",
-  });
-}
+  }).formatToParts(d);
 
-function normalizeMode(raw: string | null): Mode {
-  if (raw === "tee-times" || raw === "score" || raw === "results") return raw;
-  return "score";
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  // "Tue 13 Jan 2026"
+  return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`.replace(
+    /\s+/g,
+    " "
+  );
 }
 
 export default function MobileRoundsHubPage() {
@@ -65,7 +89,7 @@ export default function MobileRoundsHubPage() {
 
       const { data, error } = await supabase
         .from("rounds")
-        .select("id,tour_id,course_id,created_at,name,courses(name)")
+        .select("id,tour_id,course_id,round_date,played_on,created_at,name,courses(name)")
         .eq("tour_id", tourId)
         .order("created_at", { ascending: true });
 
@@ -96,8 +120,9 @@ export default function MobileRoundsHubPage() {
   const sorted = useMemo(() => {
     const arr = [...rounds];
     arr.sort((a, b) => {
-      const da = parseISODate(a.created_at)?.getTime() ?? 0;
-      const db = parseISODate(b.created_at)?.getTime() ?? 0;
+      // Keep existing ordering behaviour (created_at), but make it robust
+      const da = parseDateForDisplay(a.created_at)?.getTime() ?? 0;
+      const db = parseDateForDisplay(b.created_at)?.getTime() ?? 0;
       if (da !== db) return da - db;
       return a.id.localeCompare(b.id);
     });
@@ -116,8 +141,8 @@ export default function MobileRoundsHubPage() {
       mode === "tee-times"
         ? `${base}/tee-times`
         : mode === "results"
-          ? `${base}/results`
-          : `${base}/scoring`;
+        ? `${base}/results`
+        : `${base}/scoring`;
 
     router.push(href);
   }
@@ -129,7 +154,7 @@ export default function MobileRoundsHubPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900">
-      {/* Inner header row (under the top bar line) */}
+      {/* Header row */}
       <div className="border-b bg-white">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold">Rounds</div>
@@ -140,21 +165,18 @@ export default function MobileRoundsHubPage() {
       <div className="mx-auto w-full max-w-md px-4 pt-4">
         <div className="flex gap-2">
           <button
-            type="button"
             className={`${pillBase} ${mode === "tee-times" ? pillActive : pillIdle}`}
             onClick={() => setMode("tee-times")}
           >
             Tee times
           </button>
           <button
-            type="button"
             className={`${pillBase} ${mode === "score" ? pillActive : pillIdle}`}
             onClick={() => setMode("score")}
           >
             Score
           </button>
           <button
-            type="button"
             className={`${pillBase} ${mode === "results" ? pillActive : pillIdle}`}
             onClick={() => setMode("results")}
           >
@@ -178,19 +200,21 @@ export default function MobileRoundsHubPage() {
         ) : (
           <div className="space-y-2">
             {sorted.map((r, idx) => {
-              const label = `R${idx + 1}`;
-              const d = fmtDate(parseISODate(r.created_at));
+              const label = `Round ${idx + 1}`;
+              const best = pickBestRoundDateISO(r);
+              const d = fmtAuMelbourneDate(parseDateForDisplay(best));
               const course = getCourseName(r);
 
               return (
                 <button
                   key={r.id}
-                  type="button"
                   className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-left shadow-sm active:bg-gray-50"
                   onClick={() => openRound(r.id)}
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-extrabold text-gray-900">{label}</div>
+                    <div className="text-sm font-extrabold text-gray-900">
+                      {label}
+                    </div>
                     <div className="text-xs font-semibold text-gray-600 whitespace-nowrap">
                       {d || "—"}
                     </div>
@@ -203,6 +227,10 @@ export default function MobileRoundsHubPage() {
             })}
           </div>
         )}
+
+        <div className="mt-3 text-[11px] text-gray-400">
+          Dates shown in Australia/Melbourne.
+        </div>
       </div>
     </div>
   );
