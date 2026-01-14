@@ -10,9 +10,10 @@ type RoundRow = {
   tour_id: string;
   course_id: string | null;
 
-  // Date fields (priority order: round_date -> played_on -> created_at)
-  round_date: string | null;
-  played_on: string | null;
+  // These may or may not exist in DB; we keep them optional
+  round_date?: string | null;
+  played_on?: string | null;
+
   created_at: string | null;
 
   name?: string | null;
@@ -34,7 +35,8 @@ function normalizeMode(raw: string | null): Mode {
 }
 
 function pickBestRoundDateISO(r: RoundRow): string | null {
-  return r.round_date ?? r.played_on ?? r.created_at ?? null;
+  // Priority: round_date -> played_on -> created_at
+  return (r.round_date ?? null) || (r.played_on ?? null) || (r.created_at ?? null) || null;
 }
 
 function parseDateForDisplay(s: string | null): Date | null {
@@ -62,10 +64,15 @@ function fmtAuMelbourneDate(d: Date | null): string {
 
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
   // "Tue 13 Jan 2026"
-  return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`.replace(
-    /\s+/g,
-    " "
-  );
+  return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`.replace(/\s+/g, " ");
+}
+
+function isMissingColumnError(msg: string, column: string) {
+  // Typical Supabase/Postgres message: 'column rounds.round_date does not exist'
+  // Sometimes without table prefix: 'column "round_date" does not exist'
+  const m = msg.toLowerCase();
+  const c = column.toLowerCase();
+  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
 }
 
 export default function MobileRoundsHubPage() {
@@ -83,26 +90,45 @@ export default function MobileRoundsHubPage() {
   useEffect(() => {
     let alive = true;
 
+    async function fetchRounds(selectCols: string) {
+      return await supabase
+        .from("rounds")
+        .select(selectCols)
+        .eq("tour_id", tourId)
+        .order("created_at", { ascending: true });
+    }
+
     async function loadRounds() {
       setLoading(true);
       setErrorMsg("");
 
-      const { data, error } = await supabase
-        .from("rounds")
-        .select("id,tour_id,course_id,round_date,played_on,created_at,name,courses(name)")
-        .eq("tour_id", tourId)
-        .order("created_at", { ascending: true });
+      // Try the best case first (round_date + played_on)
+      const baseCols = "id,tour_id,course_id,created_at,name,courses(name)";
+      const try1Cols = `${baseCols},round_date,played_on`;
+
+      let res = await fetchRounds(try1Cols);
+
+      // If round_date column missing, retry without it (and still try played_on)
+      if (res.error && isMissingColumnError(res.error.message, "round_date")) {
+        const try2Cols = `${baseCols},played_on`;
+        res = await fetchRounds(try2Cols);
+      }
+
+      // If played_on column missing too, retry with only created_at fallback
+      if (res.error && isMissingColumnError(res.error.message, "played_on")) {
+        res = await fetchRounds(baseCols);
+      }
 
       if (!alive) return;
 
-      if (error) {
-        setErrorMsg(error.message);
+      if (res.error) {
+        setErrorMsg(res.error.message);
         setRounds([]);
         setLoading(false);
         return;
       }
 
-      setRounds((data ?? []) as RoundRow[]);
+      setRounds((res.data ?? []) as RoundRow[]);
       setLoading(false);
     }
 
@@ -120,7 +146,7 @@ export default function MobileRoundsHubPage() {
   const sorted = useMemo(() => {
     const arr = [...rounds];
     arr.sort((a, b) => {
-      // Keep existing ordering behaviour (created_at), but make it robust
+      // Keep existing ordering behaviour (created_at), but robust
       const da = parseDateForDisplay(a.created_at)?.getTime() ?? 0;
       const db = parseDateForDisplay(b.created_at)?.getTime() ?? 0;
       if (da !== db) return da - db;
@@ -212,9 +238,7 @@ export default function MobileRoundsHubPage() {
                   onClick={() => openRound(r.id)}
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-extrabold text-gray-900">
-                      {label}
-                    </div>
+                    <div className="text-sm font-extrabold text-gray-900">{label}</div>
                     <div className="text-xs font-semibold text-gray-600 whitespace-nowrap">
                       {d || "—"}
                     </div>
