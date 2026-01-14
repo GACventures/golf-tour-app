@@ -9,10 +9,6 @@ export default function MobileMorePage() {
 
   const tourId = (params?.id as string) || "";
 
-  function goBack() {
-    router.push(`/m/tours/${tourId}`);
-  }
-
   const topBtnBase =
     "w-full h-12 rounded-2xl border text-sm font-semibold flex items-center justify-center shadow-sm active:scale-[0.99] active:bg-gray-50 transition";
   const topBtnPrimary = "border-gray-900 bg-gray-900 text-white active:bg-gray-900";
@@ -23,19 +19,8 @@ export default function MobileMorePage() {
     <div className="min-h-dvh bg-white text-gray-900">
       {/* Header */}
       <div className="sticky top-0 z-10 bg-white border-b border-gray-200">
-        <div className="h-12 px-3 flex items-center">
-          <button
-            type="button"
-            onClick={goBack}
-            className="w-10 h-10 -ml-1 flex items-center justify-center rounded-full active:bg-gray-100"
-            aria-label="Back"
-          >
-            <span className="text-2xl leading-none">‹</span>
-          </button>
-
-          <div className="flex-1 text-center font-semibold">More</div>
-
-          <div className="w-10 h-10" />
+        <div className="h-12 px-4 flex items-center">
+          <div className="text-base font-semibold">More</div>
         </div>
       </div>
 
@@ -68,7 +53,7 @@ export default function MobileMorePage() {
           </a>
         </div>
 
-        {/* Existing placeholder content */}
+        {/* Placeholder content */}
         <div className="rounded-2xl border border-gray-200 p-4 shadow-sm">
           <div className="text-sm text-gray-600">
             Placeholder page: <span className="font-medium">More</span>
