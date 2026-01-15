@@ -1,6 +1,9 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
+import { useMemo, useState } from "react";
+
+type MoreTab = "details" | "rehandicapping" | "blank";
 
 export default function MobileMorePage() {
   const params = useParams();
@@ -8,42 +11,65 @@ export default function MobileMorePage() {
 
   const tourId = (params?.id as string) || "";
 
-  const cardBtn =
-    "w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-left shadow-sm active:bg-gray-50";
+  // Left starts active (black)
+  const [active, setActive] = useState<MoreTab>("details");
+
+  const pillBase =
+    "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
+  const pillActive = "border-gray-900 bg-gray-900 text-white";
+  const pillIdle = "border-gray-200 bg-white text-gray-900";
+
+  const items = useMemo(
+    () =>
+      [
+        { key: "details" as const, label: "Tour details", href: `/m/tours/${tourId}/details`, disabled: false },
+        {
+          key: "rehandicapping" as const,
+          label: "Rehandicapping",
+          href: `/m/tours/${tourId}/more/rehandicapping`,
+          disabled: false,
+        },
+        { key: "blank" as const, label: "(blank)", href: "", disabled: true },
+      ] as const,
+    [tourId]
+  );
+
+  function onPick(key: MoreTab) {
+    setActive(key);
+
+    const item = items.find((x) => x.key === key);
+    if (!item || item.disabled) return;
+
+    router.push(item.href);
+  }
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Header: keep “More” where it is */}
+      {/* Header (keep “More” where it is) */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-sm font-semibold text-gray-900">More</div>
         </div>
       </div>
 
-      {/* Second line under header, buttons underneath */}
-      <main className="mx-auto w-full max-w-md px-4 py-4">
-        <div className="space-y-2">
-          <button type="button" className={cardBtn} onClick={() => router.push(`/m/tours/${tourId}/details`)}>
-            <div className="text-sm font-semibold text-gray-900">Tour details</div>
-          </button>
-
-          <button
-            type="button"
-            className={cardBtn}
-            onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}
-          >
-            <div className="text-sm font-semibold text-gray-900">Rehandicapping</div>
-          </button>
-
-          <button
-            type="button"
-            className={`${cardBtn} text-gray-400 cursor-not-allowed`}
-            disabled
-            aria-disabled="true"
-            title="Coming soon"
-          >
-            <div className="text-sm font-semibold">(blank)</div>
-          </button>
+      {/* Second line under header + 3-pill row */}
+      <main className="mx-auto w-full max-w-md px-4 pt-4">
+        <div className="flex gap-2">
+          {items.map((it) => (
+            <button
+              key={it.key}
+              type="button"
+              onClick={() => onPick(it.key)}
+              disabled={it.disabled}
+              aria-disabled={it.disabled ? "true" : undefined}
+              title={it.disabled ? "Coming soon" : undefined}
+              className={`${pillBase} ${
+                active === it.key ? pillActive : pillIdle
+              } ${it.disabled ? "opacity-50 cursor-not-allowed" : ""}`}
+            >
+              {it.label}
+            </button>
+          ))}
         </div>
       </main>
     </div>
