@@ -500,14 +500,13 @@ export default function MobileScoreEntryPage() {
         if (error) throw error;
       }
 
-      // ✅ Trigger rehandicap recalculation for the tour (updates NEXT rounds' PH)
+      // ✅ Trigger rehandicap recalculation for the tour
       try {
         const tourId = await fetchTourIdForRound(roundId);
         if (tourId) {
           const res = await recalcAndSaveTourHandicaps({
             supabase,
             tourId,
-            onlyIfRoundCompleteId: roundId,
           });
 
           if (!res.ok) {
