@@ -6,9 +6,8 @@ import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import MobileNav from "../../_components/MobileNav";
 
-// ⬇️ Adjust this import path if your file lives somewhere else.
-// Use the grep command in the git block below to find it.
-import { recalcAndSaveTourHandicaps } from "@/lib/rehandicapping/recalcAndSaveTourHandicaps";
+// ✅ Updated import path per your note: lib/handicaps/recalc...
+import { recalcAndSaveTourHandicaps } from "@/lib/handicaps/recalcAndSaveTourHandicaps";
 
 type Tour = { id: string; name: string };
 
@@ -40,8 +39,6 @@ function toNullableNumber(v: string): number | null {
   if (!s) return null;
   const n = Number(s);
   if (!Number.isFinite(n)) return null;
-
-  // keep it consistent with other handicap handling (ints, >=0)
   return Math.max(0, Math.floor(n));
 }
 
@@ -161,9 +158,9 @@ export default function MobileTourAdminStartingHandicapsPage() {
       });
       if (upErr) throw upErr;
 
-      // 2) Recalculate + save per-round playing handicaps using the rehandicapping engine.
-      //    This updates Round 1 PH immediately and advances future rounds according to your rule
-      //    (stopping at the first incomplete round), and safely upserts tee to avoid NOT NULL issues.
+      // 2) Recalc + save per-round playing handicaps using your rehandicapping engine.
+      //    This ensures Round 1 picks up the new starting handicap,
+      //    and later rounds get recalculated according to the rule.
       const recalcRes = await recalcAndSaveTourHandicaps({ supabase, tourId });
       if (!recalcRes.ok) throw new Error(recalcRes.error);
 
