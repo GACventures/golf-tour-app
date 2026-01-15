@@ -13,6 +13,9 @@ type RoundRow = {
   round_no: number | null;
   course_id: string | null;
   courses?: { name: string } | null;
+
+  // ✅ correct round date column
+  played_on: string | null;
 };
 
 type ScoreRow = {
@@ -71,7 +74,7 @@ type Shade = "ace" | "eagle" | "birdie" | "par" | "bogey" | "dbogey" | "none";
 
 /**
  * Blue palette (distinct shades)
- * (DO NOT CHANGE — user wants these preserved)
+ * (DO NOT CHANGE — keep scorebox colours)
  */
 const BLUE_ACE = "#082B5C";
 const BLUE_EAGLE = "#1757D6";
@@ -199,7 +202,8 @@ export default function MobileRoundPlayerResultPage() {
       try {
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
-          .select("id,tour_id,name,created_at,round_no,course_id,courses(name)")
+          // ✅ include played_on
+          .select("id,tour_id,name,created_at,played_on,round_no,course_id,courses(name)")
           .eq("id", roundId)
           .eq("tour_id", tourId)
           .single();
@@ -326,12 +330,13 @@ export default function MobileRoundPlayerResultPage() {
     return `${rname || roundNo}${courseName}`;
   }, [round]);
 
-  const dateText = useMemo(() => formatDate(round?.created_at), [round]);
+  // ✅ Correct date: played_on
+  const dateText = useMemo(() => formatDate(round?.played_on ?? null), [round?.played_on]);
 
   function ScoreBox({ shade, label }: { shade: Shade; label: string | number }) {
     const isBlue = shade === "ace" || shade === "eagle" || shade === "birdie";
 
-    // ✅ Keep exact box colours/logic (unchanged)
+    // keep scorebox colours unchanged
     const base = "min-w-[28px] px-1.5 py-0.5 rounded text-center text-sm font-extrabold";
 
     const className =
@@ -351,7 +356,6 @@ export default function MobileRoundPlayerResultPage() {
   }
 
   return (
-    // ✅ Remove dark background: light theme page wrapper
     <div className="bg-white text-slate-900 min-h-dvh">
       <main className="mx-auto w-full max-w-md px-4 py-4 pb-24">
         <div className="flex items-start justify-between gap-3">
@@ -386,7 +390,6 @@ export default function MobileRoundPlayerResultPage() {
                 </div>
               </div>
 
-              {/* Keep this points card white (unchanged look) */}
               <div className="rounded-2xl bg-white text-gray-900 px-4 py-3 text-center shadow-sm border border-slate-200">
                 <div className="text-4xl font-extrabold">{computed.total.pts}</div>
                 <div className="text-sm font-extrabold tracking-wide">POINTS</div>
@@ -477,7 +480,7 @@ export default function MobileRoundPlayerResultPage() {
               </div>
             </div>
 
-            {/* Legend (same colours, just readable on white) */}
+            {/* Legend */}
             <div className="mt-4 flex flex-wrap gap-2">
               <div className="rounded-md px-3 py-2 text-sm font-bold border border-slate-300 bg-slate-50 text-slate-900">
                 Ace/Albatross{" "}
