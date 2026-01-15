@@ -1,4 +1,3 @@
-// app/m/tours/[id]/more/rehandicapping/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -71,13 +70,6 @@ function normalizePlayerJoin(val: any): PlayerRow | null {
 function fmtRoundLabel(r: RoundRow, idx: number) {
   if (Number.isFinite(Number(r.round_no)) && Number(r.round_no) > 0) return `R${Number(r.round_no)}`;
   return `R${idx + 1}`;
-}
-
-function fmtDateShort(value: string | null) {
-  if (!value) return "TBC";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
 }
 
 export default function MobileTourRehandicappingPage() {
@@ -284,9 +276,6 @@ export default function MobileTourRehandicappingPage() {
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b">
                 <div className="text-sm font-semibold text-gray-900">Playing handicap by round</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  Values come from <span className="font-medium">round_players.playing_handicap</span>. If missing, we show your tour/global starting handicap as a fallback.
-                </div>
               </div>
 
               {players.length === 0 ? (
@@ -308,8 +297,7 @@ export default function MobileTourRehandicappingPage() {
                             className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap"
                             title={r.name ?? ""}
                           >
-                            {fmtRoundLabel(r, idx)}{" "}
-                            <span className="text-[11px] font-medium text-gray-500">({fmtDateShort(r.played_on)})</span>
+                            {fmtRoundLabel(r, idx)}
                           </th>
                         ))}
 
@@ -330,7 +318,11 @@ export default function MobileTourRehandicappingPage() {
 
                             {roundsSorted.map((r) => {
                               const v = hcpByRoundPlayer[r.id]?.[p.id];
-                              const display = Number.isFinite(Number(v)) ? String(v) : startFallback == null ? "—" : `${startFallback}*`;
+                              const display = Number.isFinite(Number(v))
+                                ? String(v)
+                                : startFallback == null
+                                ? "—"
+                                : `${startFallback}*`;
                               return (
                                 <td key={r.id} className="px-3 py-2 text-right text-sm tabular-nums text-gray-900">
                                   {display}
