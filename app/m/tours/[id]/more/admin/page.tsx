@@ -20,6 +20,8 @@ type TourPlayerRow = {
   players: PlayerRow | PlayerRow[] | null;
 };
 
+type RoundIdRow = { id: string };
+
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
@@ -54,8 +56,8 @@ export default function MobileTourAdminStartingHandicapsPage() {
     Array<{
       player_id: string;
       name: string;
-      starting_handicap: number | null;
-      input: string;
+      starting_handicap: number | null; // last saved value we loaded/committed
+      input: string; // editable text
       dirty: boolean;
     }>
   >([]);
@@ -123,11 +125,8 @@ export default function MobileTourAdminStartingHandicapsPage() {
     setRows((prev) =>
       prev.map((r) => {
         if (r.player_id !== playerId) return r;
-        return {
-          ...r,
-          input: next,
-          dirty: next.trim() !== (r.starting_handicap == null ? "" : String(r.starting_handicap)),
-        };
+        const base = r.starting_handicap == null ? "" : String(r.starting_handicap);
+        return { ...r, input: next, dirty: next.trim() !== base };
       })
     );
   }
@@ -152,15 +151,32 @@ export default function MobileTourAdminStartingHandicapsPage() {
         return;
       }
 
-      // Upsert on (tour_id, player_id) is the common pattern for tour_players.
-      // If your table does not have that unique constraint, this will error (we’ll handle it).
+      // 1) Save tour-level starting handicap
       const { error: upErr } = await supabase.from("tour_players").upsert(updates, {
         onConflict: "tour_id,player_id",
       });
-
       if (upErr) throw upErr;
 
-      // Refresh local state to mark clean
+      // 2) Propagate to per-round playing handicaps for ALL rounds in this tour
+      //    We only UPDATE existing round_players rows to avoid tee NOT NULL insert issues.
+      const { data: rData, error: rErr } = await supabase.from("rounds").select("id").eq("tour_id", tourId);
+      if (rErr) throw rErr;
+
+      const roundIds = ((rData ?? []) as RoundIdRow[]).map((r) => String(r.id)).filter(Boolean);
+
+      if (roundIds.length > 0) {
+        for (const u of updates) {
+          const { error: rpErr } = await supabase
+            .from("round_players")
+            .update({ playing_handicap: u.starting_handicap })
+            .eq("player_id", u.player_id)
+            .in("round_id", roundIds);
+
+          if (rpErr) throw rpErr;
+        }
+      }
+
+      // Mark clean locally
       setRows((prev) =>
         prev.map((r) => {
           const u = updates.find((x) => x.player_id === r.player_id);
@@ -174,7 +190,9 @@ export default function MobileTourAdminStartingHandicapsPage() {
         })
       );
 
-      setSaveMsg(`Saved ${updates.length} change${updates.length === 1 ? "" : "s"}.`);
+      setSaveMsg(
+        `Saved ${updates.length} change${updates.length === 1 ? "" : "s"} (and overwrote per-round handicaps for all rounds in this tour).`
+      );
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Save failed.");
     } finally {
@@ -237,7 +255,9 @@ export default function MobileTourAdminStartingHandicapsPage() {
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b">
                 <div className="text-sm font-semibold text-gray-900">Tour starting handicaps</div>
-                <div className="mt-1 text-xs text-gray-600">Edit the tour-specific starting handicap for each player.</div>
+                <div className="mt-1 text-xs text-gray-600">
+                  Saves tour_players.starting_handicap and overwrites round_players.playing_handicap for all rounds in this tour.
+                </div>
               </div>
 
               {rows.length === 0 ? (
