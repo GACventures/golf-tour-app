@@ -220,7 +220,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
     playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
   })) as RoundPlayerRow[];
 
-  // Map existing rp rows for preservation / ensuring we can upsert all
   const rpKey = (rid: string, pid: string) => `${rid}::${pid}`;
   const rpByKey = new Map<string, RoundPlayerRow>();
   for (const rp of roundPlayers) rpByKey.set(rpKey(rp.round_id, rp.player_id), rp);
@@ -246,25 +245,21 @@ export async function recalcAndSaveTourHandicaps(opts: {
     scoreMap[rid][pid][hole] = rawScoreString(s);
   }
 
-  // playing map
+  // playing map (defaults false if no round_players row)
   const playingMap: Record<string, Record<string, boolean>> = {};
-  for (const p of players) {
-    for (const r of rounds) {
-      if (!playingMap[r.id]) playingMap[r.id] = {};
+  for (const r of rounds) {
+    playingMap[r.id] = {};
+    for (const p of players) {
       const existing = rpByKey.get(rpKey(r.id, p.id));
       playingMap[r.id][p.id] = existing?.playing === true;
     }
   }
 
-  function isRoundComplete(roundId: string): boolean {
-    const playingPlayers = players.filter((pl) => playingMap[roundId]?.[pl.id] === true);
-    if (playingPlayers.length === 0) return false;
-
-    for (const pl of playingPlayers) {
-      for (let hole = 1; hole <= 18; hole++) {
-        const raw = scoreMap[roundId]?.[pl.id]?.[hole] ?? "";
-        if (!raw) return false;
-      }
+  // ✅ Per-player completion: we only require that THIS player has 18 holes, not the whole field.
+  function isPlayerComplete(roundId: string, playerId: string): boolean {
+    for (let hole = 1; hole <= 18; hole++) {
+      const raw = scoreMap[roundId]?.[playerId]?.[hole] ?? "";
+      if (!raw) return false;
     }
     return true;
   }
@@ -307,12 +302,13 @@ export async function recalcAndSaveTourHandicaps(opts: {
     return total;
   };
 
-  // sequential recalculation; stop at first incomplete round
+  // ✅ sequential recalculation, but never “break” just because others haven’t finished.
+  // We adjust only players who have completed cards in that round.
   for (let i = 0; i < rounds.length; i++) {
     const r = rounds[i];
     const next = rounds[i + 1] ?? null;
 
-    // ensure current PH map exists (carry forward)
+    // ensure current PH exists (carry forward)
     if (!phByRoundPlayer[r.id]) {
       phByRoundPlayer[r.id] = {};
       const prev = rounds[i - 1];
@@ -321,56 +317,55 @@ export async function recalcAndSaveTourHandicaps(opts: {
       }
     }
 
-    // If no course, we can't compute stableford reliably → stop forward calc
-    if (!r.course_id) break;
+    // if no next round, nothing to compute forward
+    if (!next) continue;
 
-    // ✅ only recalc forward from completed rounds (prevents changing next PH based on partial scores)
-    if (!isRoundComplete(r.id)) break;
+    // always initialize next with carry-forward
+    phByRoundPlayer[next.id] = phByRoundPlayer[next.id] ?? {};
+    for (const p of players) {
+      phByRoundPlayer[next.id][p.id] = phByRoundPlayer[r.id][p.id];
+    }
 
-    const playedScores: number[] = [];
-    const scoreByPlayer: Record<string, number | null> = {};
+    // If no course for this round, we can’t compute scores -> just carry forward
+    if (!r.course_id) continue;
 
+    // build list of completed players who are marked playing
+    const completed: string[] = [];
     for (const p of players) {
       const played = playingMap[r.id]?.[p.id] === true;
-      if (!played) {
-        scoreByPlayer[p.id] = null;
-        continue;
-      }
-      const ph = phByRoundPlayer[r.id][p.id];
-      const sc = stablefordTotal(r.id, r.course_id, p.id, ph);
-      scoreByPlayer[p.id] = sc;
+      if (!played) continue;
+      if (isPlayerComplete(r.id, p.id)) completed.push(p.id);
+    }
+
+    // if nobody complete, no adjustment yet
+    if (completed.length === 0) continue;
+
+    // compute stableford scores for completed players using THEIR PH for this round
+    const scoresByPlayer: Record<string, number> = {};
+    const playedScores: number[] = [];
+
+    for (const pid of completed) {
+      const ph = phByRoundPlayer[r.id][pid];
+      const sc = stablefordTotal(r.id, r.course_id, pid, ph);
+      scoresByPlayer[pid] = sc;
       playedScores.push(sc);
     }
 
-    const avgRounded =
-      playedScores.length > 0 ? roundHalfUp(playedScores.reduce((s, v) => s + v, 0) / playedScores.length) : null;
+    const avgRounded = roundHalfUp(playedScores.reduce((s, v) => s + v, 0) / playedScores.length);
 
-    if (next) {
-      phByRoundPlayer[next.id] = {};
-      for (const p of players) {
-        const prevPH = phByRoundPlayer[r.id][p.id];
-        const playedPrev = playingMap[r.id]?.[p.id] === true;
+    // adjust next PH for completed players only; others stay carry-forward
+    for (const pid of completed) {
+      const prevPH = phByRoundPlayer[r.id][pid];
+      const prevScore = scoresByPlayer[pid];
 
-        if (!playedPrev || avgRounded === null) {
-          phByRoundPlayer[next.id][p.id] = prevPH;
-          continue;
-        }
+      const diff = (avgRounded - prevScore) / 3;
+      const raw = roundHalfUp(prevPH + diff);
 
-        const prevScore = scoreByPlayer[p.id];
-        if (prevScore === null) {
-          phByRoundPlayer[next.id][p.id] = prevPH;
-          continue;
-        }
+      const sh = startingHcpByPlayer[pid];
+      const max = sh + 3;
+      const min = ceilHalfStart(sh);
 
-        const diff = (avgRounded - prevScore) / 3;
-        const raw = roundHalfUp(prevPH + diff);
-
-        const sh = startingHcpByPlayer[p.id];
-        const max = sh + 3;
-        const min = ceilHalfStart(sh);
-
-        phByRoundPlayer[next.id][p.id] = clamp(raw, min, max);
-      }
+      phByRoundPlayer[next.id][pid] = clamp(raw, min, max);
     }
   }
 
@@ -382,7 +377,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
       const existing = rpByKey.get(rpKey(r.id, p.id));
       const playing = existing?.playing === true;
 
-      // If we computed a PH for that round/player, use it; else keep existing; else default to starting
       const computed = phByRoundPlayer[r.id]?.[p.id];
       const fallback = existing?.playing_handicap ?? startingHcpByPlayer[p.id];
 
