@@ -71,6 +71,7 @@ type Shade = "ace" | "eagle" | "birdie" | "par" | "bogey" | "dbogey" | "none";
 
 /**
  * Blue palette (distinct shades)
+ * (DO NOT CHANGE — user wants these preserved)
  */
 const BLUE_ACE = "#082B5C";
 const BLUE_EAGLE = "#1757D6";
@@ -330,8 +331,7 @@ export default function MobileRoundPlayerResultPage() {
   function ScoreBox({ shade, label }: { shade: Shade; label: string | number }) {
     const isBlue = shade === "ace" || shade === "eagle" || shade === "birdie";
 
-    // ✅ Smaller boxes (was min-w-[34px], px-2 py-1, text-base)
-    // Now: min-w 28, smaller padding, smaller font
+    // ✅ Keep exact box colours/logic (unchanged)
     const base = "min-w-[28px] px-1.5 py-0.5 rounded text-center text-sm font-extrabold";
 
     const className =
@@ -343,55 +343,59 @@ export default function MobileRoundPlayerResultPage() {
         ? `${base} bg-[#c0392b] text-white`
         : `${base} bg-transparent text-gray-900`;
 
-    return <div className={className} style={isBlue ? blueStyleForShade(shade) : undefined}>{label}</div>;
+    return (
+      <div className={className} style={isBlue ? blueStyleForShade(shade) : undefined}>
+        {label}
+      </div>
+    );
   }
 
   return (
-    <div className="bg-[#0b1e33] text-white min-h-dvh">
+    // ✅ Remove dark background: light theme page wrapper
+    <div className="bg-white text-slate-900 min-h-dvh">
       <main className="mx-auto w-full max-w-md px-4 py-4 pb-24">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xl font-semibold">Scorecard</div>
-            <div className="mt-1 truncate text-sm text-white/80">{headerTitle}</div>
-            {dateText ? <div className="mt-1 text-sm text-white/60">{dateText}</div> : null}
+            <div className="mt-1 truncate text-sm text-slate-700">{headerTitle}</div>
+            {dateText ? <div className="mt-1 text-sm text-slate-500">{dateText}</div> : null}
           </div>
 
           <button
             type="button"
             onClick={goBack}
-            className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm font-semibold hover:bg-white/10 active:bg-white/15"
+            className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-sm font-semibold hover:bg-slate-200 active:bg-slate-300"
           >
             Back
           </button>
         </div>
 
         {errorMsg ? (
-          <div className="mt-4 rounded-xl border border-red-300/40 bg-red-500/15 p-3 text-sm text-red-50">
-            {errorMsg}
-          </div>
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMsg}</div>
         ) : null}
 
         {loading ? (
-          <div className="mt-4 rounded-2xl bg-white/10 p-4">Loading…</div>
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">Loading…</div>
         ) : (
           <>
             <div className="mt-4 flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="truncate text-2xl font-extrabold">{player?.name ?? "(player)"}</div>
-                <div className="mt-1 text-sm text-white/70">
-                  HCP: <span className="font-semibold text-white">{hcp}</span>
+                <div className="mt-1 text-sm text-slate-600">
+                  HCP: <span className="font-semibold text-slate-900">{hcp}</span>
                 </div>
               </div>
 
-              <div className="rounded-2xl bg-white text-gray-900 px-4 py-3 text-center shadow-sm">
+              {/* Keep this points card white (unchanged look) */}
+              <div className="rounded-2xl bg-white text-gray-900 px-4 py-3 text-center shadow-sm border border-slate-200">
                 <div className="text-4xl font-extrabold">{computed.total.pts}</div>
                 <div className="text-sm font-extrabold tracking-wide">POINTS</div>
               </div>
             </div>
 
             {/* Front 9 */}
-            <div className="mt-4 rounded-2xl bg-white text-gray-900 overflow-hidden shadow-sm">
-              <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b bg-gray-50 text-xs font-semibold">
+            <div className="mt-4 rounded-2xl bg-white text-gray-900 overflow-hidden shadow-sm border border-slate-200">
+              <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b border-slate-200 bg-slate-50 text-xs font-semibold">
                 {computed.front.map((h) => (
                   <div key={h.hole} className="py-2 text-center">
                     {h.hole}
@@ -400,7 +404,7 @@ export default function MobileRoundPlayerResultPage() {
                 <div className="py-2 text-center">Out</div>
               </div>
 
-              <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b text-base font-semibold">
+              <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b border-slate-200 text-base font-semibold">
                 {computed.front.map((h) => (
                   <div key={h.hole} className="py-2 text-center">
                     {h.par || ""}
@@ -409,7 +413,7 @@ export default function MobileRoundPlayerResultPage() {
                 <div className="py-2 text-center font-bold">{computed.out.par || ""}</div>
               </div>
 
-              <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b">
+              <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b border-slate-200">
                 {computed.front.map((h) => {
                   const label = h.pickup ? "P" : h.gross ?? "";
                   return (
@@ -432,8 +436,8 @@ export default function MobileRoundPlayerResultPage() {
             </div>
 
             {/* Back 9 */}
-            <div className="mt-4 rounded-2xl bg-white text-gray-900 overflow-hidden shadow-sm">
-              <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b bg-gray-50 text-xs font-semibold">
+            <div className="mt-4 rounded-2xl bg-white text-gray-900 overflow-hidden shadow-sm border border-slate-200">
+              <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b border-slate-200 bg-slate-50 text-xs font-semibold">
                 {computed.back.map((h) => (
                   <div key={h.hole} className="py-2 text-center">
                     {h.hole}
@@ -442,7 +446,7 @@ export default function MobileRoundPlayerResultPage() {
                 <div className="py-2 text-center">In</div>
               </div>
 
-              <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b text-base font-semibold">
+              <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b border-slate-200 text-base font-semibold">
                 {computed.back.map((h) => (
                   <div key={h.hole} className="py-2 text-center">
                     {h.par || ""}
@@ -451,7 +455,7 @@ export default function MobileRoundPlayerResultPage() {
                 <div className="py-2 text-center font-bold">{computed.inn.par || ""}</div>
               </div>
 
-              <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b">
+              <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b border-slate-200">
                 {computed.back.map((h) => {
                   const label = h.pickup ? "P" : h.gross ?? "";
                   return (
@@ -473,28 +477,28 @@ export default function MobileRoundPlayerResultPage() {
               </div>
             </div>
 
-            {/* Legend */}
+            {/* Legend (same colours, just readable on white) */}
             <div className="mt-4 flex flex-wrap gap-2">
-              <div className="rounded-md px-3 py-2 text-sm font-bold border border-white/20 bg-white/10">
+              <div className="rounded-md px-3 py-2 text-sm font-bold border border-slate-300 bg-slate-50 text-slate-900">
                 Ace/Albatross{" "}
                 <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm" style={{ backgroundColor: BLUE_ACE }} />
               </div>
-              <div className="rounded-md px-3 py-2 text-sm font-bold border border-white/20 bg-white/10">
+              <div className="rounded-md px-3 py-2 text-sm font-bold border border-slate-300 bg-slate-50 text-slate-900">
                 Eagle{" "}
                 <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm" style={{ backgroundColor: BLUE_EAGLE }} />
               </div>
-              <div className="rounded-md px-3 py-2 text-sm font-bold border border-white/20 bg-white/10">
+              <div className="rounded-md px-3 py-2 text-sm font-bold border border-slate-300 bg-slate-50 text-slate-900">
                 Birdie{" "}
                 <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm" style={{ backgroundColor: BLUE_BIRDIE }} />
               </div>
-              <div className="rounded-md px-3 py-2 text-sm font-bold border border-white/20 bg-white/10">
-                Par <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm bg-white" />
+              <div className="rounded-md px-3 py-2 text-sm font-bold border border-slate-300 bg-slate-50 text-slate-900">
+                Par <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm bg-white border border-slate-300" />
               </div>
-              <div className="rounded-md px-3 py-2 text-sm font-bold border border-white/20 bg-white/10">
-                Bogey <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm bg-[#f8cfcf]" />
+              <div className="rounded-md px-3 py-2 text-sm font-bold border border-slate-300 bg-slate-50 text-slate-900">
+                Bogey <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm" style={{ backgroundColor: "#f8cfcf" }} />
               </div>
-              <div className="rounded-md px-3 py-2 text-sm font-bold border border-white/20 bg-white/10">
-                D. Bogey + <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm bg-[#c0392b]" />
+              <div className="rounded-md px-3 py-2 text-sm font-bold border border-slate-300 bg-slate-50 text-slate-900">
+                D. Bogey + <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm" style={{ backgroundColor: "#c0392b" }} />
               </div>
             </div>
           </>
