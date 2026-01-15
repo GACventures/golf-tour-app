@@ -183,8 +183,7 @@ export default function MobileRoundsHubPage() {
     router.push(href);
   }
 
-  const pillBase =
-    "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
+  const pillBase = "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
   const pillActive = "border-gray-900 bg-gray-900 text-white";
   const pillIdle = "border-gray-200 bg-white text-gray-900";
 
@@ -208,7 +207,7 @@ export default function MobileRoundsHubPage() {
             className={`${pillBase} ${mode === "score" ? pillActive : pillIdle}`}
             onClick={() => setMode("score")}
           >
-            Score
+            Score Entry
           </button>
           <button
             className={`${pillBase} ${mode === "results" ? pillActive : pillIdle}`}
@@ -246,22 +245,16 @@ export default function MobileRoundsHubPage() {
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-sm font-extrabold text-gray-900">{label}</div>
-                    <div className="text-xs font-semibold text-gray-600 whitespace-nowrap">
-                      {d || "—"}
-                    </div>
+                    <div className="text-xs font-semibold text-gray-600 whitespace-nowrap">{d || "—"}</div>
                   </div>
-                  <div className="mt-1 text-sm font-semibold text-gray-900 truncate">
-                    {course}
-                  </div>
+                  <div className="mt-1 text-sm font-semibold text-gray-900 truncate">{course}</div>
                 </button>
               );
             })}
           </div>
         )}
 
-        <div className="mt-3 text-[11px] text-gray-400">
-          Dates shown in Australia/Melbourne.
-        </div>
+        <div className="mt-3 text-[11px] text-gray-400">Dates shown in Australia/Melbourne.</div>
       </div>
     </div>
   );
