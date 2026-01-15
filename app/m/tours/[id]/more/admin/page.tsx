@@ -6,6 +6,10 @@ import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import MobileNav from "../../_components/MobileNav";
 
+// ⬇️ Adjust this import path if your file lives somewhere else.
+// Use the grep command in the git block below to find it.
+import { recalcAndSaveTourHandicaps } from "@/lib/rehandicapping/recalcAndSaveTourHandicaps";
+
 type Tour = { id: string; name: string };
 
 type PlayerRow = {
@@ -19,8 +23,6 @@ type TourPlayerRow = {
   starting_handicap: number | null;
   players: PlayerRow | PlayerRow[] | null;
 };
-
-type RoundIdRow = { id: string };
 
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
@@ -38,7 +40,9 @@ function toNullableNumber(v: string): number | null {
   if (!s) return null;
   const n = Number(s);
   if (!Number.isFinite(n)) return null;
-  return n;
+
+  // keep it consistent with other handicap handling (ints, >=0)
+  return Math.max(0, Math.floor(n));
 }
 
 export default function MobileTourAdminStartingHandicapsPage() {
@@ -90,7 +94,7 @@ export default function MobileTourAdminStartingHandicapsPage() {
             const pid = String(r.player_id ?? p?.id ?? "");
             if (!pid) return null;
 
-            const sh = Number.isFinite(Number(r.starting_handicap)) ? Number(r.starting_handicap) : null;
+            const sh = Number.isFinite(Number(r.starting_handicap)) ? Math.max(0, Math.floor(Number(r.starting_handicap))) : null;
 
             return {
               player_id: pid,
@@ -157,24 +161,11 @@ export default function MobileTourAdminStartingHandicapsPage() {
       });
       if (upErr) throw upErr;
 
-      // 2) Propagate to per-round playing handicaps for ALL rounds in this tour
-      //    We only UPDATE existing round_players rows to avoid tee NOT NULL insert issues.
-      const { data: rData, error: rErr } = await supabase.from("rounds").select("id").eq("tour_id", tourId);
-      if (rErr) throw rErr;
-
-      const roundIds = ((rData ?? []) as RoundIdRow[]).map((r) => String(r.id)).filter(Boolean);
-
-      if (roundIds.length > 0) {
-        for (const u of updates) {
-          const { error: rpErr } = await supabase
-            .from("round_players")
-            .update({ playing_handicap: u.starting_handicap })
-            .eq("player_id", u.player_id)
-            .in("round_id", roundIds);
-
-          if (rpErr) throw rpErr;
-        }
-      }
+      // 2) Recalculate + save per-round playing handicaps using the rehandicapping engine.
+      //    This updates Round 1 PH immediately and advances future rounds according to your rule
+      //    (stopping at the first incomplete round), and safely upserts tee to avoid NOT NULL issues.
+      const recalcRes = await recalcAndSaveTourHandicaps({ supabase, tourId });
+      if (!recalcRes.ok) throw new Error(recalcRes.error);
 
       // Mark clean locally
       setRows((prev) =>
@@ -191,7 +182,9 @@ export default function MobileTourAdminStartingHandicapsPage() {
       );
 
       setSaveMsg(
-        `Saved ${updates.length} change${updates.length === 1 ? "" : "s"} (and overwrote per-round handicaps for all rounds in this tour).`
+        `Saved ${updates.length} change${updates.length === 1 ? "" : "s"}. Rehandicapping recalculated and updated ${recalcRes.updated} round_player row${
+          recalcRes.updated === 1 ? "" : "s"
+        }.`
       );
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Save failed.");
@@ -256,7 +249,8 @@ export default function MobileTourAdminStartingHandicapsPage() {
               <div className="p-4 border-b">
                 <div className="text-sm font-semibold text-gray-900">Tour starting handicaps</div>
                 <div className="mt-1 text-xs text-gray-600">
-                  Saves tour_players.starting_handicap and overwrites round_players.playing_handicap for all rounds in this tour.
+                  Saves <span className="font-medium">tour_players.starting_handicap</span>, then recalculates{" "}
+                  <span className="font-medium">round_players.playing_handicap</span> using the tour’s rehandicapping rule.
                 </div>
               </div>
 
