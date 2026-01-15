@@ -1,4 +1,3 @@
-// app/m/tours/[id]/competitions/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -379,7 +378,12 @@ export default function MobileCompetitionsPage() {
           if (!sc) continue;
 
           const raw = normalizeRawScore(sc.strokes, sc.pickup);
-          const pts = netStablefordPointsForHole({ rawScore: raw, par: pr.par, strokeIndex: pr.si, playingHandicap: hcp });
+          const pts = netStablefordPointsForHole({
+            rawScore: raw,
+            par: pr.par,
+            strokeIndex: pr.si,
+            playingHandicap: hcp,
+          });
 
           holesWithScore += 1;
           if (pts >= 4) holesWith4plus += 1;
@@ -540,7 +544,9 @@ export default function MobileCompetitionsPage() {
               <div className="mt-2 space-y-2 text-gray-700">
                 {comps.map((c) => (
                   <div key={c.key}>
-                    <span className="font-semibold">{c.label}:</span> {c.description}
+                    {/* ✅ FORMAT CHANGE: description starts on next line */}
+                    <div className="font-semibold">{c.label}:</div>
+                    <div>{c.description}</div>
                   </div>
                 ))}
               </div>
