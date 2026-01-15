@@ -9,6 +9,11 @@ type Tour = {
   name: string;
   start_date: string | null;
   end_date: string | null;
+
+  // ✅ rehandicapping fields confirmed in schema
+  rehandicapping_enabled: boolean | null;
+  rehandicapping_rules_summary: string | null;
+  rehandicapping_rule_key: string | null;
 };
 
 type Round = {
@@ -21,12 +26,6 @@ type Round = {
 };
 
 type PlayerRow = { id: string; name: string };
-
-type TourPlayerRow = {
-  tour_id: string;
-  player_id: string;
-  players: PlayerRow | PlayerRow[] | null;
-};
 
 type TourGroupRow = {
   id: string;
@@ -52,9 +51,6 @@ type TourGroupingSettings = {
   pair_mode: "ALL" | "BEST_Q" | string | null;
   pair_best_q: number | null;
   pair_final_required: boolean | null;
-
-  // NOTE: If you later add a dedicated rehandicapping flag/fields,
-  // wire them here and update isRehandicappingEnabled().
 };
 
 function fmtDate(value: string | null) {
@@ -124,9 +120,11 @@ function normalizePlayerJoin(val: any): PlayerRow | null {
   return { id: String(p.id), name: String(p.name ?? "").trim() || "(unnamed)" };
 }
 
-function asSingle<T>(v: T | T[] | null | undefined): T | null {
-  if (!v) return null;
-  return Array.isArray(v) ? v[0] ?? null : v;
+function courseNameForRound(r: Round) {
+  const c: any = r.courses;
+  if (!c) return "";
+  if (Array.isArray(c)) return String(c?.[0]?.name ?? "").trim();
+  return String(c?.name ?? "").trim();
 }
 
 export default function MobileTourDetailsPage() {
@@ -154,15 +152,15 @@ export default function MobileTourDetailsPage() {
       setError("");
 
       try {
-        // Tour
+        // Tour (include rehandicapping fields)
         const { data: tData, error: tErr } = await supabase
           .from("tours")
-          .select("id,name,start_date,end_date")
+          .select("id,name,start_date,end_date,rehandicapping_enabled,rehandicapping_rules_summary,rehandicapping_rule_key")
           .eq("id", tourId)
           .single();
         if (tErr) throw tErr;
 
-        // Rounds (+ course name for display)
+        // Rounds (include course name for display)
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,round_no,played_on,created_at,course_id,courses(name)")
@@ -268,33 +266,35 @@ export default function MobileTourDetailsPage() {
   const tourPairs = useMemo(() => tourGroups.filter((g) => g.type === "pair"), [tourGroups]);
   const tourTeams = useMemo(() => tourGroups.filter((g) => g.type === "team"), [tourGroups]);
 
+  function labelForGroup(g: TourGroupRow) {
+    const stored = (g.name ?? "").trim();
+    if (stored) return stored;
+
+    const ids = membersByGroupId.get(g.id) ?? [];
+    if (g.type === "pair" && ids.length >= 2) {
+      const a = playerNameById.get(ids[0]) ?? ids[0];
+      const b = playerNameById.get(ids[1]) ?? ids[1];
+      return `${a} / ${b}`;
+    }
+    return `${g.type === "pair" ? "Pair" : "Team"} ${g.id.slice(0, 6)}`;
+  }
+
   function membersLabel(g: TourGroupRow) {
     const ids = membersByGroupId.get(g.id) ?? [];
     if (!ids.length) return "—";
     return ids.map((pid) => playerNameById.get(pid) ?? pid).join(g.type === "pair" ? " / " : ", ");
   }
 
-  function teamNameOrFallback(g: TourGroupRow) {
-    const stored = (g.name ?? "").trim();
-    if (stored) return stored;
-    return `Team ${g.id.slice(0, 6)}`;
-  }
+  const pairsMemberOnlyLabel = (g: TourGroupRow) => {
+    const ids = membersByGroupId.get(g.id) ?? [];
+    if (!ids.length) return "—";
+    return ids.map((pid) => playerNameById.get(pid) ?? pid).join(" / ");
+  };
 
-  function courseNameForRound(r: Round) {
-    const c = asSingle<any>(r.courses);
-    const name = String(c?.name ?? "").trim();
-    return name || "Course";
-  }
-
-  // NOTE: You asked for - Yes / - No without adding schema.
-  // For now, treat “rehandicapping enabled” as “we have settings present AND at least one round exists”.
-  // If you later store a dedicated flag, wire it in here.
-  function isRehandicappingEnabled(): boolean {
-    // conservative: default to false unless you later add a proper setting
-    return false;
-  }
-
-  const rehandicapYesNo = isRehandicappingEnabled() ? "Yes" : "No";
+  // ✅ Rehandicapping: actual truth from tours table
+  const rehandicapEnabled = tour?.rehandicapping_enabled === true;
+  const rehandicapSummary = (tour?.rehandicapping_rules_summary ?? "").trim();
+  const rehandicapHeading = `Rehandicapping – ${rehandicapEnabled ? "Yes" : "No"}`;
 
   return (
     <div className="min-h-dvh bg-white text-gray-900">
@@ -325,7 +325,7 @@ export default function MobileTourDetailsPage() {
 
             {/* Players */}
             <section className="rounded-xl border p-4">
-              <div className="font-semibold mb-2">Players – {players.length}</div>
+              <div className="font-semibold mb-2">{`Players – ${players.length}`}</div>
 
               {players.length > 0 ? (
                 <ul className="space-y-1 text-sm text-gray-600">
@@ -342,14 +342,12 @@ export default function MobileTourDetailsPage() {
 
             {/* Pairs */}
             <section className="rounded-xl border p-4">
-              <div className="font-semibold mb-2">Pairs – {tourPairs.length}</div>
+              <div className="font-semibold mb-2">{`Pairs – ${tourPairs.length}`}</div>
 
               {tourPairs.length > 0 ? (
                 <ul className="space-y-1 text-sm text-gray-600">
                   {tourPairs.map((g) => (
-                    <li key={g.id} className="truncate">
-                      {membersLabel(g)}
-                    </li>
+                    <li key={g.id}>{pairsMemberOnlyLabel(g)}</li>
                   ))}
                 </ul>
               ) : (
@@ -359,13 +357,13 @@ export default function MobileTourDetailsPage() {
 
             {/* Teams */}
             <section className="rounded-xl border p-4">
-              <div className="font-semibold mb-2">Teams – {tourTeams.length}</div>
+              <div className="font-semibold mb-2">{`Teams – ${tourTeams.length}`}</div>
 
               {tourTeams.length > 0 ? (
                 <ul className="space-y-2 text-sm text-gray-600">
                   {tourTeams.map((g) => (
                     <li key={g.id}>
-                      <div className="font-semibold text-gray-800">{teamNameOrFallback(g)}</div>
+                      <div className="font-semibold text-gray-800">{labelForGroup(g)}</div>
                       <div className="text-gray-600">{membersLabel(g)}</div>
                     </li>
                   ))}
@@ -379,19 +377,19 @@ export default function MobileTourDetailsPage() {
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">Leaderboard rules</div>
 
-              <div className="space-y-3 text-sm text-gray-700">
+              <div className="text-sm text-gray-700 space-y-2">
                 <div>
-                  <div className="font-semibold text-gray-900">Individual</div>
+                  <div className="font-semibold">Individual</div>
                   <div className="text-gray-600">Stableford total · {fmtRuleIndividual(eventSettings)}</div>
                 </div>
 
                 <div>
-                  <div className="font-semibold text-gray-900">Pairs</div>
+                  <div className="font-semibold">Pairs</div>
                   <div className="text-gray-600">Better Ball Stableford · {fmtRulePairs(eventSettings)}</div>
                 </div>
 
                 <div>
-                  <div className="font-semibold text-gray-900">Teams</div>
+                  <div className="font-semibold">Teams</div>
                   <div className="text-gray-600">{fmtRuleTeams(eventSettings)}</div>
                 </div>
               </div>
@@ -399,15 +397,22 @@ export default function MobileTourDetailsPage() {
 
             {/* Rounds summary */}
             <section className="rounded-xl border p-4">
-              <div className="font-semibold mb-2">Rounds – {sortedRounds.length}</div>
+              <div className="font-semibold mb-2">{`Rounds – ${sortedRounds.length}`}</div>
 
               {sortedRounds.length > 0 ? (
                 <ul className="space-y-1 text-sm text-gray-600">
-                  {sortedRounds.map((r, i) => (
-                    <li key={r.id} className="truncate">
-                      Round {r.round_no ?? i + 1} — {fmtDate(r.played_on ?? null)} — {courseNameForRound(r)}
-                    </li>
-                  ))}
+                  {sortedRounds.map((r, i) => {
+                    const roundLabel = `Round ${r.round_no ?? i + 1}`;
+                    const dateLabel = fmtDate(r.played_on ?? null);
+                    const course = courseNameForRound(r);
+                    const suffix = course ? ` · ${course}` : "";
+                    return (
+                      <li key={r.id}>
+                        {roundLabel} — {dateLabel}
+                        {suffix}
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : (
                 <div className="text-sm text-gray-500">No rounds found for this tour.</div>
@@ -416,10 +421,12 @@ export default function MobileTourDetailsPage() {
 
             {/* Rehandicapping */}
             <section className="rounded-xl border p-4">
-              <div className="font-semibold mb-1">Rehandicapping – {rehandicapYesNo}</div>
+              <div className="font-semibold mb-2">{rehandicapHeading}</div>
 
-              {isRehandicappingEnabled() ? (
-                <div className="text-sm text-gray-700">See Rehandicapping page for the rule summary.</div>
+              {rehandicapEnabled ? (
+                <div className="text-sm text-gray-700">
+                  {rehandicapSummary ? rehandicapSummary : "(No summary provided)"}
+                </div>
               ) : null}
             </section>
           </>
