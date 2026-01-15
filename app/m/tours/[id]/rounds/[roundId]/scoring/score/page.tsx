@@ -1,3 +1,4 @@
+// app/m/rounds/[roundId]/mobile/score/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -32,13 +33,13 @@ type RoundPlayerRow = {
   player_id: string;
   playing: boolean;
   playing_handicap: number | null;
-  tee?: Tee | null; // legacy round override (fallback only)
+  tee?: Tee | null; // per-round tee
 };
 
 type PlayerRow = {
   id: string;
   name: string;
-  gender?: Tee | null; // global source of truth
+  gender?: Tee | null; // global gender (fallback only)
 };
 
 type ScoreRow = {
@@ -128,7 +129,7 @@ export default function MobileScoreEntryPage() {
 
   const isLocked = round?.is_locked === true;
 
-  // ✅ FX state + timeouts (slower / obvious)
+  // ✅ FX state + timeouts
   const [holeFx, setHoleFx] = useState<HoleFxState>({ stage: "idle", dir: null });
   const fxTimerRef = useRef<number | null>(null);
 
@@ -142,7 +143,7 @@ export default function MobileScoreEntryPage() {
   // ✅ Whole-page slide style
   const fxStyle: React.CSSProperties = useMemo(() => {
     const base = "transform 330ms ease-in-out";
-    const off = "105%"; // move more than full width so it’s obvious
+    const off = "105%";
 
     if (holeFx.stage === "idle") {
       return { transform: "translateX(0)", transition: base, willChange: "transform" };
@@ -153,19 +154,33 @@ export default function MobileScoreEntryPage() {
       return { transform: `translateX(${x})`, transition: base, willChange: "transform" };
     }
 
-    // snap to the other side without transition
     if (holeFx.stage === "inSnap") {
       const x = holeFx.dir === "next" ? off : `-${off}`;
       return { transform: `translateX(${x})`, transition: "none", willChange: "transform" };
     }
 
-    // animate back to center
     if (holeFx.stage === "in") {
       return { transform: "translateX(0)", transition: base, willChange: "transform" };
     }
 
     return { transform: "translateX(0)", transition: base, willChange: "transform" };
   }, [holeFx]);
+
+  // ✅ Preferred tee logic:
+  // 1) round_players.tee (per-round tee actually used)
+  // 2) players.gender (global fallback)
+  // 3) default M
+  function teeForPlayer(pid: string): Tee {
+    if (!pid) return "M";
+
+    const rp = roundPlayers.find((x) => x.player_id === pid);
+    if (rp?.tee) return normalizeTee(rp.tee);
+
+    const g = playersById[pid]?.gender;
+    if (g) return normalizeTee(g);
+
+    return "M";
+  }
 
   // --------- Load ----------
   useEffect(() => {
@@ -316,18 +331,6 @@ export default function MobileScoreEntryPage() {
     };
     return { M: makeMap(parsByTee.M), F: makeMap(parsByTee.F) };
   }, [parsByTee]);
-
-  function teeForPlayer(pid: string): Tee {
-    if (!pid) return "M";
-
-    const g = playersById[pid]?.gender;
-    if (g) return normalizeTee(g);
-
-    const rp = roundPlayers.find((x) => x.player_id === pid);
-    if (rp?.tee) return normalizeTee(rp.tee);
-
-    return "M";
-  }
 
   const meTee = useMemo(() => teeForPlayer(meId), [meId, roundPlayers, playersById]);
   const buddyTee = useMemo(() => teeForPlayer(buddyId), [buddyId, roundPlayers, playersById]);
@@ -491,15 +494,12 @@ export default function MobileScoreEntryPage() {
 
     clearFxTimer();
 
-    // slide whole page OUT
     setHoleFx({ stage: "out", dir });
 
-    // after out animation, swap hole, snap to opposite side, then animate IN
     fxTimerRef.current = window.setTimeout(() => {
       setHole(nextHole);
       setHoleFx({ stage: "inSnap", dir });
 
-      // next paint: animate back to center
       requestAnimationFrame(() => {
         setHoleFx({ stage: "in", dir });
 
@@ -526,10 +526,7 @@ export default function MobileScoreEntryPage() {
     const dy = t.clientY - start.y;
     const dt = Date.now() - start.t;
 
-    // ignore vertical scroll
     if (Math.abs(dy) > Math.abs(dx)) return;
-
-    // allow slower swipes (still bounded)
     if (dt > 1200) return;
 
     const threshold = 70;
@@ -799,7 +796,6 @@ export default function MobileScoreEntryPage() {
     );
   }
 
-  // ✅ Render content without returning early before hooks
   let body: React.ReactNode = null;
 
   if (loading) {
@@ -839,7 +835,7 @@ export default function MobileScoreEntryPage() {
     body = (
       <div
         className={`${navy} min-h-[100svh] text-white overflow-hidden`}
-        style={tab === "entry" ? fxStyle : undefined} // ✅ whole-page swipe animation
+        style={tab === "entry" ? fxStyle : undefined}
         onTouchStart={tab === "entry" ? onTouchStart : undefined}
         onTouchEnd={tab === "entry" ? onTouchEnd : undefined}
       >
@@ -886,7 +882,6 @@ export default function MobileScoreEntryPage() {
           </div>
         </div>
 
-        {/* Entry: hole box; Summary: player toggle */}
         {tab === "entry" ? <HoleBoxEntryOnly /> : <SummaryPlayerToggleTop />}
 
         {/* Tabs */}

@@ -2,276 +2,231 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useParams } from "next/navigation";
+import Link from "next/link";
+
 import { supabase } from "@/lib/supabaseClient";
 
-type Tour = { id: string; name: string };
+type Tee = "M" | "F";
 
-// Global library player
-type Player = { id: string; name: string; starting_handicap: number };
-
-// Tour membership row (snapshot handicap)
-type TourPlayerRow = {
-  tour_id: string;
-  player_id: string;
-  starting_handicap: number | null;
-  created_at?: string | null;
-  players?: Player | null; // joined (may be object OR array depending on relationship config)
+type TourRow = {
+  id: string;
+  name: string | null;
 };
 
-function intOrNull(s: string): number | null {
-  const t = s.trim();
-  if (!t) return null;
-  const n = Number(t);
-  if (!Number.isFinite(n)) return null;
-  return Math.trunc(n);
+type PlayerRow = {
+  id: string;
+  name: string;
+  gender: Tee | null;
+  start_handicap: number | null; // ✅ GLOBAL source of truth
+};
+
+type TourPlayerJoinRow = {
+  tour_id: string;
+  player_id: string;
+  starting_handicap: number; // ✅ TOUR snapshot / override
+  players: PlayerRow | PlayerRow[] | null; // supabase join can be array
+};
+
+function asSingle<T>(v: T | T[] | null | undefined): T | null {
+  if (!v) return null;
+  return Array.isArray(v) ? v[0] ?? null : v;
 }
 
-function normalizePlayerJoin(val: any): Player | null {
-  if (!val) return null;
-
-  // Supabase nested select may return either:
-  // - object: { id, name, starting_handicap }
-  // - array:  [{ id, name, starting_handicap }]
-  const p = Array.isArray(val) ? val[0] : val;
-  if (!p) return null;
-
-  const id = p.id != null ? String(p.id) : "";
-  if (!id) return null;
-
-  const name = p.name != null ? String(p.name) : "(missing player)";
-  const h = p.starting_handicap;
-  const starting_handicap = Number.isFinite(Number(h)) ? Number(h) : 0;
-
-  return { id, name, starting_handicap };
+function toNonNegIntOrNull(v: string): number | null {
+  const s = (v ?? "").trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.floor(n));
 }
 
 export default function TourPlayersPage() {
   const params = useParams<{ id: string }>();
   const tourId = String(params?.id ?? "").trim();
 
-  const [tour, setTour] = useState<Tour | null>(null);
-
-  const [allPlayers, setAllPlayers] = useState<Player[]>([]);
-  const [tourPlayers, setTourPlayers] = useState<TourPlayerRow[]>([]);
-
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
+  const [tour, setTour] = useState<TourRow | null>(null);
+  const [allPlayers, setAllPlayers] = useState<PlayerRow[]>([]);
+  const [tourPlayers, setTourPlayers] = useState<TourPlayerJoinRow[]>([]);
+
+  // Add-player UI
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>("");
+  const [tourStartHcpDraft, setTourStartHcpDraft] = useState<string>(""); // ✅ must default to blank
 
-  // inline edit
-  const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
-  const [editHcp, setEditHcp] = useState<string>("");
+  // Per-row edit drafts
+  const [editDraft, setEditDraft] = useState<Record<string, string>>({});
+  const [editSaving, setEditSaving] = useState<Record<string, boolean>>({});
+  const [editErr, setEditErr] = useState<Record<string, string>>({});
+  const [toast, setToast] = useState<string>("");
 
-  async function load() {
+  async function loadAll() {
+    if (!tourId) return;
+
     setLoading(true);
     setErrorMsg("");
+    setToast("");
 
     try {
-      if (!tourId) throw new Error("Missing tour id.");
-
       const [{ data: tData, error: tErr }, { data: pData, error: pErr }, { data: tpData, error: tpErr }] =
         await Promise.all([
           supabase.from("tours").select("id,name").eq("id", tourId).single(),
-
-          // Global players library
-          supabase.from("players").select("id,name,starting_handicap").order("name", { ascending: true }),
-
-          // Tour membership, snapshot handicap + joined player
+          supabase.from("players").select("id,name,gender,start_handicap").order("name", { ascending: true }),
           supabase
             .from("tour_players")
-            .select("tour_id,player_id,starting_handicap,created_at, players:players(id,name,starting_handicap)")
-            .eq("tour_id", tourId)
-            .order("created_at", { ascending: true }),
+            .select("tour_id,player_id,starting_handicap,players(id,name,gender,start_handicap)")
+            .eq("tour_id", tourId),
         ]);
 
-      if (tErr) throw new Error(tErr.message);
-      if (pErr) throw new Error(pErr.message);
-      if (tpErr) throw new Error(tpErr.message);
+      if (tErr) throw tErr;
+      if (pErr) throw pErr;
+      if (tpErr) throw tpErr;
 
-      const players: Player[] = (pData ?? []).map((r: any) => ({
-        id: String(r.id),
-        name: String(r.name),
-        starting_handicap: Number.isFinite(Number(r.starting_handicap)) ? Number(r.starting_handicap) : 0,
-      }));
+      setTour(tData as TourRow);
+      setAllPlayers((pData ?? []) as PlayerRow[]);
+      setTourPlayers((tpData ?? []) as TourPlayerJoinRow[]);
 
-      const membership: TourPlayerRow[] = (tpData ?? []).map((row: any) => {
-        const joined = normalizePlayerJoin(row.players);
-        const starting_handicap =
-          row.starting_handicap == null ? null : Number.isFinite(Number(row.starting_handicap)) ? Number(row.starting_handicap) : null;
+      // init editDraft
+      const nextDraft: Record<string, string> = {};
+      for (const tp of (tpData ?? []) as TourPlayerJoinRow[]) {
+        nextDraft[String(tp.player_id)] = String(tp.starting_handicap ?? 0);
+      }
+      setEditDraft(nextDraft);
 
-        return {
-          tour_id: String(row.tour_id),
-          player_id: String(row.player_id),
-          starting_handicap,
-          created_at: row.created_at ?? null,
-          players: joined,
-        };
-      });
-
-      setTour(tData as Tour);
-      setAllPlayers(players);
-      setTourPlayers(membership);
-
-      // Default selection to first available
-      const inTour = new Set(membership.map((x) => x.player_id));
-      const firstAvailable = players.find((p) => !inTour.has(p.id));
-      setSelectedPlayerId(firstAvailable?.id ?? "");
-
-      // If editing a player that was removed, exit edit mode
-      if (editingPlayerId && !membership.some((m) => m.player_id === editingPlayerId)) {
-        setEditingPlayerId(null);
-        setEditHcp("");
+      // Pick a default available player if none selected
+      const currentIds = new Set(((tpData ?? []) as TourPlayerJoinRow[]).map((x) => String(x.player_id)));
+      const available = ((pData ?? []) as PlayerRow[]).filter((p) => !currentIds.has(p.id));
+      if (!selectedPlayerId && available.length) {
+        setSelectedPlayerId(available[0].id);
       }
     } catch (e: any) {
-      setErrorMsg(e?.message ?? "Unknown error");
+      setErrorMsg(e?.message ?? "Failed to load players.");
+      setTour(null);
+      setAllPlayers([]);
+      setTourPlayers([]);
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    if (!tourId) return;
-    void load();
+    void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tourId]);
 
-  const tourPlayerIds = useMemo(() => new Set(tourPlayers.map((x) => x.player_id)), [tourPlayers]);
+  const tourPlayerIds = useMemo(() => new Set(tourPlayers.map((tp) => String(tp.player_id))), [tourPlayers]);
 
-  const availablePlayers = useMemo(
-    () => allPlayers.filter((p) => !tourPlayerIds.has(p.id)),
-    [allPlayers, tourPlayerIds]
+  const availablePlayers = useMemo(() => allPlayers.filter((p) => !tourPlayerIds.has(p.id)), [allPlayers, tourPlayerIds]);
+
+  const selectedPlayer = useMemo(
+    () => availablePlayers.find((p) => p.id === selectedPlayerId) ?? null,
+    [availablePlayers, selectedPlayerId]
   );
 
-  const roster = useMemo(() => {
-    const byId = new Map(allPlayers.map((p) => [p.id, p]));
-    return tourPlayers
-      .map((tp) => {
-        const joined = tp.players ?? null;
-        const p = joined ?? byId.get(tp.player_id) ?? null;
-        if (!p) return null;
-
-        const tourHcp = tp.starting_handicap ?? p.starting_handicap;
-
-        return {
-          id: p.id,
-          name: p.name,
-          tour_starting_handicap: tourHcp,
-          hasOverride: tp.starting_handicap != null && tp.starting_handicap !== p.starting_handicap,
-          global_starting_handicap: p.starting_handicap,
-        };
-      })
-      .filter(Boolean) as Array<{
-      id: string;
-      name: string;
-      tour_starting_handicap: number;
-      hasOverride: boolean;
-      global_starting_handicap: number;
-    }>;
-  }, [allPlayers, tourPlayers]);
-
-  const canAdd = useMemo(() => Boolean(selectedPlayerId) && !saving, [selectedPlayerId, saving]);
+  // ✅ KEY CHANGE:
+  // When selected player changes, the Tour Starting HCP input should be BLANK (not 0, not auto-filled).
+  // Blank => use global automatically on insert.
+  useEffect(() => {
+    setTourStartHcpDraft("");
+  }, [selectedPlayerId]);
 
   async function addPlayerToTour() {
-    setErrorMsg("");
-    if (!canAdd) return;
+    if (!tourId) return;
+    if (!selectedPlayerId) return;
 
-    setSaving(true);
+    setBusy(true);
+    setErrorMsg("");
+    setToast("");
+
     try {
+      const globalHcp = Number.isFinite(Number(selectedPlayer?.start_handicap))
+        ? Math.max(0, Math.floor(Number(selectedPlayer?.start_handicap)))
+        : 0;
+
+      const parsed = toNonNegIntOrNull(tourStartHcpDraft);
+
+      // ✅ Blank => use global
+      const starting_handicap = parsed === null ? globalHcp : parsed;
+
       const { error } = await supabase.from("tour_players").insert({
         tour_id: tourId,
         player_id: selectedPlayerId,
+        starting_handicap,
       });
 
-      if (error) throw new Error(error.message);
+      if (error) throw error;
 
-      await load();
+      setToast("Added ✓");
+      setTourStartHcpDraft("");
+      await loadAll();
     } catch (e: any) {
-      setErrorMsg(e?.message ?? "Unknown error");
+      setErrorMsg(e?.message ?? "Failed to add player to tour.");
     } finally {
-      setSaving(false);
+      setBusy(false);
+      window.setTimeout(() => setToast(""), 1200);
     }
   }
 
-  async function removePlayerFromTour(playerId: string) {
-    setErrorMsg("");
-    setSaving(true);
-    try {
-      const { error } = await supabase.from("tour_players").delete().eq("tour_id", tourId).eq("player_id", playerId);
-      if (error) throw new Error(error.message);
+  async function saveTourStartingHcp(playerId: string) {
+    const draft = (editDraft[playerId] ?? "").trim();
+    const parsed = toNonNegIntOrNull(draft);
 
-      await load();
-    } catch (e: any) {
-      setErrorMsg(e?.message ?? "Unknown error");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  function beginEdit(playerId: string) {
-    const row = roster.find((r) => r.id === playerId);
-    if (!row) return;
-    setEditingPlayerId(playerId);
-    setEditHcp(String(row.tour_starting_handicap));
-  }
-
-  async function saveEdit(playerId: string) {
-    setErrorMsg("");
-    const n = intOrNull(editHcp);
-    if (n == null) {
-      setErrorMsg("Please enter a valid whole-number handicap.");
+    if (parsed === null) {
+      setEditErr((prev) => ({ ...prev, [playerId]: "Enter a whole number (0+)." }));
       return;
     }
 
-    setSaving(true);
-    try {
-      const { error } = await supabase
-        .from("tour_players")
-        .update({ starting_handicap: n })
-        .eq("tour_id", tourId)
-        .eq("player_id", playerId);
+    setEditErr((prev) => ({ ...prev, [playerId]: "" }));
+    setEditSaving((prev) => ({ ...prev, [playerId]: true }));
 
-      if (error) throw new Error(error.message);
+    const { error } = await supabase
+      .from("tour_players")
+      .update({ starting_handicap: parsed })
+      .eq("tour_id", tourId)
+      .eq("player_id", playerId);
 
-      setEditingPlayerId(null);
-      setEditHcp("");
-      await load();
-    } catch (e: any) {
-      setErrorMsg(e?.message ?? "Unknown error");
-    } finally {
-      setSaving(false);
+    if (error) {
+      setEditErr((prev) => ({ ...prev, [playerId]: error.message }));
+      setEditSaving((prev) => ({ ...prev, [playerId]: false }));
+      return;
     }
+
+    setToast("Saved ✓");
+    setEditSaving((prev) => ({ ...prev, [playerId]: false }));
+    await loadAll();
+    window.setTimeout(() => setToast(""), 1200);
   }
 
-  async function resetToGlobal(playerId: string) {
-    // set to NULL -> means “use copied/global”; keeping NULL also preserves trigger behavior for future inserts
+  async function removePlayerFromTour(playerId: string) {
+    if (!tourId || !playerId) return;
+
+    if (!confirm("Remove this player from the tour?")) return;
+
+    setBusy(true);
     setErrorMsg("");
-    setSaving(true);
+    setToast("");
+
     try {
-      const { error } = await supabase
-        .from("tour_players")
-        .update({ starting_handicap: null })
-        .eq("tour_id", tourId)
-        .eq("player_id", playerId);
+      const { error } = await supabase.from("tour_players").delete().eq("tour_id", tourId).eq("player_id", playerId);
+      if (error) throw error;
 
-      if (error) throw new Error(error.message);
-
-      setEditingPlayerId(null);
-      setEditHcp("");
-      await load();
+      setToast("Removed ✓");
+      await loadAll();
     } catch (e: any) {
-      setErrorMsg(e?.message ?? "Unknown error");
+      // If there are FK dependencies (round_players/scores/etc), Supabase will tell us here.
+      setErrorMsg(e?.message ?? "Failed to remove player from tour.");
     } finally {
-      setSaving(false);
+      setBusy(false);
+      window.setTimeout(() => setToast(""), 1200);
     }
   }
 
   if (loading) {
     return (
-      <main className="mx-auto max-w-5xl p-4 space-y-4">
+      <main className="mx-auto max-w-4xl p-4">
         <div className="text-sm opacity-70">Loading…</div>
       </main>
     );
@@ -279,11 +234,9 @@ export default function TourPlayersPage() {
 
   if (errorMsg) {
     return (
-      <main className="mx-auto max-w-5xl p-4 space-y-4">
-        <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-900">
-          <div className="font-semibold">Error</div>
-          <div className="mt-1">{errorMsg}</div>
-        </div>
+      <main className="mx-auto max-w-4xl p-4 space-y-3">
+        <div className="text-lg font-semibold text-red-600">Error</div>
+        <div className="text-sm">{errorMsg}</div>
         <div className="text-sm">
           <Link className="underline" href="/tours">
             Back to tours
@@ -294,188 +247,159 @@ export default function TourPlayersPage() {
   }
 
   return (
-    <main className="mx-auto max-w-5xl p-4 space-y-4">
-      <div className="text-sm opacity-70">
-        <Link className="underline" href="/tours">
-          Tours
-        </Link>{" "}
-        <span className="opacity-50">/</span>{" "}
-        <Link className="underline" href={`/tours/${tourId}`}>
-          {tour?.name ?? tourId}
-        </Link>{" "}
-        <span className="opacity-50">/</span> Players (This Tour)
-      </div>
-
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Players (This Tour)</h1>
-          <div className="text-sm opacity-70">
-            Tour: <span className="font-medium">{tour?.name ?? tourId}</span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Link className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50" href={`/tours/${tourId}`}>
-            Back to Tour
-          </Link>
-          <Link className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50" href={`/tours/${tourId}/leaderboard`}>
-            Leaderboard
+    <main className="mx-auto max-w-4xl p-4 space-y-4">
+      <header className="space-y-1">
+        <div className="text-sm">
+          <Link className="underline" href={`/tours/${tourId}`}>
+            ← Back to tour
           </Link>
         </div>
+        <h1 className="text-2xl font-semibold">Tour players</h1>
+        <div className="text-sm text-gray-600">{tour?.name ?? tourId}</div>
       </header>
 
-      {/* Add from global library */}
+      {toast ? (
+        <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900">{toast}</div>
+      ) : null}
+
+      {/* Add player */}
       <section className="rounded-2xl border bg-white p-4 space-y-3">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="text-lg font-semibold">Add player from library</div>
-            <div className="text-xs opacity-70">
-              If a player doesn’t exist yet, add them on{" "}
-              <Link className="underline" href="/players">
-                Players
-              </Link>{" "}
-              (and set starting handicap there).
-            </div>
-          </div>
+        <h2 className="text-lg font-semibold">Add player from global library</h2>
 
-          <Link className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50" href="/players">
-            Go to Players library
-          </Link>
+        <div className="text-sm text-gray-600">
+          If <span className="font-medium">Tour Starting HCP</span> is left blank, we automatically use{" "}
+          <code className="px-1 rounded bg-gray-100">players.start_handicap</code>.
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="md:col-span-2">
-            <div className="text-sm opacity-70 mb-1">Player</div>
-            <select
-              className="w-full rounded-xl border px-3 py-2 text-sm"
-              value={selectedPlayerId}
-              onChange={(e) => setSelectedPlayerId(e.target.value)}
-              disabled={availablePlayers.length === 0}
-            >
-              {availablePlayers.length === 0 ? (
-                <option value="">All players are already in this tour</option>
-              ) : (
-                availablePlayers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} (HCP {p.starting_handicap})
-                  </option>
-                ))
-              )}
-            </select>
-          </div>
-
-          <div className="flex items-end">
-            <button
-              className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-              disabled={!canAdd || availablePlayers.length === 0}
-              onClick={() => void addPlayerToTour()}
-            >
-              {saving ? "Adding…" : "Add to tour"}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* Tour roster */}
-      <section className="rounded-2xl border bg-white">
-        {roster.length === 0 ? (
-          <div className="p-4 text-sm opacity-70">No players in this tour yet.</div>
+        {availablePlayers.length === 0 ? (
+          <div className="text-sm opacity-70">All global players are already in this tour.</div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-[900px] w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="p-3 text-left font-medium opacity-70">Player</th>
-                  <th className="p-3 text-right font-medium opacity-70">Tour starting HCP</th>
-                  <th className="p-3 text-right font-medium opacity-70">Global HCP</th>
-                  <th className="p-3 text-right font-medium opacity-70">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {roster.map((p) => {
-                  const isEditing = editingPlayerId === p.id;
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="flex-1">
+              <div className="text-xs font-semibold text-gray-700">Player</div>
+              <select
+                className="mt-1 w-full rounded-md border px-3 py-2"
+                value={selectedPlayerId}
+                onChange={(e) => setSelectedPlayerId(e.target.value)}
+                disabled={busy}
+              >
+                {availablePlayers.map((p) => {
+                  const gh = Number.isFinite(Number(p.start_handicap)) ? Number(p.start_handicap) : 0;
                   return (
-                    <tr key={p.id} className="border-b last:border-b-0">
-                      <td className="p-3">
-                        <div className="font-medium">{p.name}</div>
-                        {p.hasOverride ? <div className="text-xs opacity-70">Tour override applied</div> : null}
-                      </td>
-
-                      <td className="p-3 text-right tabular-nums">
-                        {isEditing ? (
-                          <input
-                            className="w-24 rounded border px-2 py-1 text-right"
-                            value={editHcp}
-                            onChange={(e) => setEditHcp(e.target.value)}
-                            inputMode="numeric"
-                          />
-                        ) : (
-                          p.tour_starting_handicap
-                        )}
-                      </td>
-
-                      <td className="p-3 text-right tabular-nums opacity-80">{p.global_starting_handicap}</td>
-
-                      <td className="p-3 text-right">
-                        <div className="inline-flex gap-3 items-center">
-                          <Link className="text-sm underline" href={`/tours/${tourId}/players/${p.id}`}>
-                            Stats
-                          </Link>
-
-                          {isEditing ? (
-                            <>
-                              <button
-                                className="text-sm underline disabled:opacity-50"
-                                disabled={saving}
-                                onClick={() => void saveEdit(p.id)}
-                              >
-                                Save
-                              </button>
-                              <button
-                                className="text-sm underline opacity-80 hover:opacity-100 disabled:opacity-50"
-                                disabled={saving}
-                                onClick={() => {
-                                  setEditingPlayerId(null);
-                                  setEditHcp("");
-                                }}
-                              >
-                                Cancel
-                              </button>
-                            </>
-                          ) : (
-                            <button
-                              className="text-sm underline opacity-80 hover:opacity-100 disabled:opacity-50"
-                              disabled={saving}
-                              onClick={() => beginEdit(p.id)}
-                            >
-                              Edit tour HCP
-                            </button>
-                          )}
-
-                          <button
-                            className="text-sm underline opacity-80 hover:opacity-100 disabled:opacity-50"
-                            disabled={saving}
-                            onClick={() => void resetToGlobal(p.id)}
-                            title="Resets to global value (stores NULL in tour_players so it falls back)."
-                          >
-                            Reset
-                          </button>
-
-                          <button
-                            className="text-sm underline opacity-80 hover:opacity-100 disabled:opacity-50"
-                            disabled={saving}
-                            onClick={() => void removePlayerFromTour(p.id)}
-                            title="Remove from this tour (does not delete from library)"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                    <option key={p.id} value={p.id}>
+                      {p.name} {p.gender ? `(${p.gender})` : ""} — Global HCP: {gh}
+                    </option>
                   );
                 })}
-              </tbody>
-            </table>
+              </select>
+            </div>
+
+            <div className="w-full sm:w-56">
+              <div className="text-xs font-semibold text-gray-700">Tour Starting HCP</div>
+              <input
+                inputMode="numeric"
+                className="mt-1 w-full rounded-md border px-3 py-2"
+                value={tourStartHcpDraft}
+                onChange={(e) => setTourStartHcpDraft(e.target.value)}
+                placeholder={
+                  selectedPlayer
+                    ? `Blank = Global (${Number.isFinite(Number(selectedPlayer.start_handicap)) ? Number(selectedPlayer.start_handicap) : 0})`
+                    : "Blank = Global"
+                }
+                disabled={busy}
+              />
+              <div className="mt-1 text-[11px] text-gray-500">Leave blank to use Global HCP automatically.</div>
+            </div>
+
+            <button
+              type="button"
+              onClick={addPlayerToTour}
+              disabled={busy || !selectedPlayerId}
+              className="rounded-xl bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
+            >
+              {busy ? "Adding…" : "Add to tour"}
+            </button>
+          </div>
+        )}
+      </section>
+
+      {/* Tour players list */}
+      <section className="rounded-2xl border bg-white p-4 space-y-3">
+        <h2 className="text-lg font-semibold">Players in this tour</h2>
+
+        {tourPlayers.length === 0 ? (
+          <div className="text-sm opacity-70">No players in this tour yet.</div>
+        ) : (
+          <div className="space-y-3">
+            {tourPlayers
+              .slice()
+              .sort((a, b) => {
+                const ap = asSingle(a.players);
+                const bp = asSingle(b.players);
+                return String(ap?.name ?? "").localeCompare(String(bp?.name ?? ""));
+              })
+              .map((tp) => {
+                const p = asSingle(tp.players);
+                const pid = String(tp.player_id);
+                const saving = editSaving[pid] === true;
+                const err = editErr[pid] ?? "";
+
+                const globalHcp = Number.isFinite(Number(p?.start_handicap)) ? Number(p?.start_handicap) : 0;
+
+                return (
+                  <div key={pid} className="rounded-xl border p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-semibold truncate">
+                          {p?.name ?? "(unknown player)"}{" "}
+                          {p?.gender ? <span className="opacity-60">({p.gender})</span> : null}
+                        </div>
+                        <div className="text-xs text-gray-600">
+                          Global HCP: <span className="font-medium">{globalHcp}</span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => removePlayerFromTour(pid)}
+                          disabled={busy}
+                          className="mt-2 text-xs underline text-red-600 disabled:opacity-50"
+                          title="Remove from tour"
+                        >
+                          Remove player from tour
+                        </button>
+                      </div>
+
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="text-xs font-semibold text-gray-700">Tour Starting HCP</div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            inputMode="numeric"
+                            className="w-24 rounded-md border px-2 py-1"
+                            value={editDraft[pid] ?? String(tp.starting_handicap ?? 0)}
+                            onChange={(e) => {
+                              setEditDraft((prev) => ({ ...prev, [pid]: e.target.value }));
+                              setEditErr((prev) => ({ ...prev, [pid]: "" }));
+                            }}
+                            disabled={saving || busy}
+                          />
+                          <button
+                            type="button"
+                            className="rounded-md bg-black px-3 py-1 text-sm text-white disabled:opacity-50"
+                            onClick={() => saveTourStartingHcp(pid)}
+                            disabled={saving || busy}
+                          >
+                            {saving ? "Saving…" : "Save"}
+                          </button>
+                        </div>
+                        {err ? <div className="text-xs text-red-600">{err}</div> : null}
+                        <div className="text-[11px] text-gray-500">
+                          Round 1 PH is seeded from this value; later rounds follow re-handicapping rules.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
           </div>
         )}
       </section>
