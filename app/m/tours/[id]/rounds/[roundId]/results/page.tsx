@@ -14,6 +14,9 @@ type RoundRow = {
   round_no: number | null;
   course_id: string | null;
   courses?: { name: string } | null;
+
+  // ✅ confirmed correct date column
+  played_on: string | null;
 };
 
 type RoundPlayerRow = {
@@ -204,10 +207,12 @@ export default function MobileRoundResultsPage() {
       try {
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
-          .select("id,tour_id,name,created_at,round_no,course_id,courses(name)")
+          // ✅ include played_on (confirmed)
+          .select("id,tour_id,name,created_at,played_on,round_no,course_id,courses(name)")
           .eq("id", roundId)
           .eq("tour_id", tourId)
           .single();
+
         if (rErr) throw rErr;
 
         const courseId = String((rData as any)?.course_id ?? "");
@@ -321,45 +326,45 @@ export default function MobileRoundResultsPage() {
     return `${name || roundNo}${courseName}`;
   }, [round]);
 
-  const dateText = useMemo(() => formatDate(round?.created_at), [round]);
+  // ✅ Correct date: use played_on
+  const dateText = useMemo(() => formatDate(round?.played_on ?? null), [round?.played_on]);
 
   return (
-    <div className="bg-[#0b1e33] text-white min-h-dvh">
+    // ✅ Remove dark background: light theme
+    <div className="bg-white text-slate-900 min-h-dvh">
       <main className="mx-auto w-full max-w-md px-4 py-4 pb-24">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xl font-semibold">Results</div>
-            <div className="mt-1 truncate text-sm text-white/80">{headerTitle}</div>
-            {dateText ? <div className="mt-1 text-sm text-white/60">{dateText}</div> : null}
+            <div className="mt-1 truncate text-sm text-slate-700">{headerTitle}</div>
+            {dateText ? <div className="mt-1 text-sm text-slate-500">{dateText}</div> : null}
           </div>
 
           <button
             type="button"
             onClick={goBack}
-            className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm font-semibold hover:bg-white/10 active:bg-white/15"
+            className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-sm font-semibold hover:bg-slate-200 active:bg-slate-300"
           >
             Back
           </button>
         </div>
 
         {errorMsg ? (
-          <div className="mt-4 rounded-xl border border-red-300/40 bg-red-500/15 p-3 text-sm text-red-50">
-            {errorMsg}
-          </div>
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMsg}</div>
         ) : null}
 
         {loading ? (
           <div className="mt-4 space-y-3">
             {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="rounded-2xl bg-white/10 p-4">
-                <div className="h-5 w-52 rounded bg-white/10" />
-                <div className="mt-3 h-10 rounded bg-white/10" />
+              <div key={i} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="h-5 w-52 rounded bg-slate-100" />
+                <div className="mt-3 h-10 rounded bg-slate-100" />
               </div>
             ))}
           </div>
         ) : (
           <div className="mt-4">
-            <div className="px-2 text-xs font-semibold text-white/70">
+            <div className="px-2 text-xs font-semibold text-slate-600">
               <div className="grid grid-cols-[64px_1fr_64px_64px] items-center gap-2">
                 <div>Rank</div>
                 <div>Name</div>
@@ -370,7 +375,7 @@ export default function MobileRoundResultsPage() {
 
             <div className="mt-2 space-y-2">
               {rows.map((r) => (
-                <div key={r.playerId} className="rounded-xl bg-white/90 text-gray-900 shadow-sm">
+                <div key={r.playerId} className="rounded-xl border border-slate-300 bg-white text-slate-900 shadow-sm">
                   <div className="grid grid-cols-[64px_1fr_64px_64px] items-center gap-2 px-3 py-3">
                     <div className="text-center text-lg font-extrabold">{r.rank}</div>
 
@@ -388,7 +393,7 @@ export default function MobileRoundResultsPage() {
             </div>
 
             {rows.length === 0 ? (
-              <div className="mt-4 rounded-xl bg-white/10 p-4 text-sm text-white/80">
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                 No players found for this round.
               </div>
             ) : null}
