@@ -1,4 +1,3 @@
-// app/m/rounds/[roundId]/mobile/score/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -51,10 +50,9 @@ type ScoreRow = {
   pickup?: boolean | null;
 };
 
-const navy = "bg-slate-950";
 const headerBlue = "bg-sky-500";
 const headerPink = "bg-pink-400";
-const borderDark = "border-slate-600/60";
+const borderLight = "border-slate-300";
 
 function asSingle<T>(v: T | T[] | null | undefined): T | null {
   if (!v) return null;
@@ -609,15 +607,15 @@ export default function MobileScoreEntryPage() {
     return (
       <div className="px-4 pb-3">
         <div className="flex items-center justify-center">
-          <div className={`w-[260px] rounded-md border ${borderDark} bg-slate-900 text-white text-center py-2`}>
-            <div className="text-xs font-semibold tracking-wide opacity-90">SUMMARY PLAYER</div>
+          <div className={`w-[260px] rounded-md border ${borderLight} bg-white text-slate-900 text-center py-2`}>
+            <div className="text-xs font-semibold tracking-wide text-slate-600">SUMMARY PLAYER</div>
 
-            <div className="mt-2 inline-flex rounded-md overflow-hidden border border-slate-700">
+            <div className="mt-2 inline-flex rounded-md overflow-hidden border border-slate-300">
               <button
                 type="button"
                 onClick={() => setSummaryPid(meId)}
                 className={`px-4 py-2 text-base font-bold ${
-                  summaryPid === meId ? "bg-sky-600 text-white" : "bg-slate-950 text-slate-200"
+                  summaryPid === meId ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
                 }`}
               >
                 {meName}
@@ -628,7 +626,7 @@ export default function MobileScoreEntryPage() {
                   type="button"
                   onClick={() => setSummaryPid(buddyId)}
                   className={`px-4 py-2 text-base font-bold ${
-                    summaryPid === buddyId ? "bg-sky-600 text-white" : "bg-slate-950 text-slate-200"
+                    summaryPid === buddyId ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
                   }`}
                 >
                   {buddyName}
@@ -663,16 +661,16 @@ export default function MobileScoreEntryPage() {
     const headerClass = isFemale ? headerPink : headerBlue;
 
     return (
-      <div className="rounded-lg overflow-hidden shadow-sm">
+      <div className="rounded-lg overflow-hidden shadow-sm border border-slate-200 bg-white">
         <div className={`${headerClass} px-4 py-2 text-white font-semibold text-base text-center`}>
           {name} <span className="opacity-90">(HC: {hcp} · Tee: {tee})</span>
         </div>
 
-        <div className="bg-white p-3 text-black">
+        <div className="bg-white p-3 text-slate-900">
           <div className="flex items-center justify-between gap-3">
             <button
               type="button"
-              className="w-16 h-16 rounded-lg border border-slate-300 bg-white text-slate-900 text-5xl font-black leading-none active:scale-[0.98]"
+              className="w-16 h-16 rounded-lg border border-slate-300 bg-slate-100 text-slate-900 text-5xl font-black leading-none active:scale-[0.98] disabled:opacity-50"
               onClick={() => adjustStrokes(pid, hole, -1)}
               disabled={isLocked || pickup}
               aria-label="Decrease strokes"
@@ -682,12 +680,12 @@ export default function MobileScoreEntryPage() {
 
             <div className="text-center">
               <div className="text-5xl font-black text-slate-900 leading-none">{grossDisplay}</div>
-              <div className="text-sm font-semibold text-slate-700 mt-1">strokes</div>
+              <div className="text-sm font-semibold text-slate-600 mt-1">strokes</div>
             </div>
 
             <button
               type="button"
-              className="w-16 h-16 rounded-lg border border-slate-300 bg-white text-slate-900 text-5xl font-black leading-none active:scale-[0.98]"
+              className="w-16 h-16 rounded-lg border border-slate-300 bg-slate-100 text-slate-900 text-5xl font-black leading-none active:scale-[0.98] disabled:opacity-50"
               onClick={() => adjustStrokes(pid, hole, +1)}
               disabled={isLocked || pickup}
               aria-label="Increase strokes"
@@ -698,21 +696,32 @@ export default function MobileScoreEntryPage() {
 
           <div className="mt-3 grid grid-cols-4 gap-2 text-center">
             <div>
-              <div className="text-[11px] font-bold tracking-wide text-slate-700">PAR</div>
-              <div className="mt-1 rounded-md border border-slate-300 bg-white text-slate-900 text-2xl font-black py-2">
+              <div className="text-[11px] font-bold tracking-wide text-slate-600">PAR</div>
+
+              {/* ✅ NEW: Tap PAR to set strokes = PAR */}
+              <button
+                type="button"
+                className="mt-1 w-full rounded-md border border-slate-300 bg-white text-slate-900 text-2xl font-black py-2 active:scale-[0.99] disabled:opacity-50"
+                onClick={() => {
+                  if (!info?.par) return;
+                  setRaw(pid, hole, String(info.par));
+                }}
+                disabled={isLocked || !info?.par}
+                aria-label="Set strokes to par"
+              >
                 {info.par || "—"}
-              </div>
+              </button>
             </div>
 
             <div>
-              <div className="text-[11px] font-bold tracking-wide text-slate-700">SI</div>
+              <div className="text-[11px] font-bold tracking-wide text-slate-600">SI</div>
               <div className="mt-1 rounded-md border border-slate-300 bg-white text-slate-900 text-2xl font-black py-2">
                 {info.si || "—"}
               </div>
             </div>
 
             <div>
-              <div className="text-[11px] font-bold tracking-wide text-slate-700">POINTS</div>
+              <div className="text-[11px] font-bold tracking-wide text-slate-600">POINTS</div>
               <div
                 className={`mt-1 rounded-md border border-slate-300 text-2xl font-black py-2 ${
                   pickup ? "bg-slate-100 text-slate-400" : "bg-white text-slate-900"
@@ -723,7 +732,7 @@ export default function MobileScoreEntryPage() {
             </div>
 
             <div>
-              <div className="text-[11px] font-bold tracking-wide text-slate-700">PICK UP</div>
+              <div className="text-[11px] font-bold tracking-wide text-slate-600">PICK UP</div>
               <button
                 type="button"
                 className={`mt-1 w-full rounded-md border border-slate-300 text-2xl font-black py-2 ${
@@ -752,7 +761,7 @@ export default function MobileScoreEntryPage() {
     const { label, shots, pts, onJumpTo } = props;
 
     return (
-      <div className="px-3 py-2 border-t border-slate-300 bg-slate-50 grid grid-cols-5 gap-2 items-center text-black">
+      <div className="px-3 py-2 border-t border-slate-300 bg-slate-50 grid grid-cols-5 gap-2 items-center text-slate-900">
         <button
           type="button"
           className="rounded-md px-3 py-2 text-left font-bold bg-slate-900 text-white"
@@ -785,7 +794,7 @@ export default function MobileScoreEntryPage() {
     const totalPts = frontPts + backPts;
 
     return (
-      <div className="rounded-lg overflow-hidden bg-white shadow-sm text-black">
+      <div className="rounded-lg overflow-hidden bg-white shadow-sm text-slate-900 border border-slate-200">
         <div className="bg-slate-100 px-3 py-2 text-xs font-bold tracking-wide text-slate-700 grid grid-cols-5 gap-2">
           <div>HOLE</div>
           <div className="text-center">PAR</div>
@@ -841,10 +850,10 @@ export default function MobileScoreEntryPage() {
     return (
       <div className="px-4 pb-3">
         <div className="flex items-center justify-center">
-          <div className={`w-[230px] rounded-md border ${borderDark} bg-slate-900 text-white text-center py-2`}>
-            <div className="text-xs font-semibold tracking-wide opacity-90">HOLE</div>
+          <div className={`w-[230px] rounded-md border ${borderLight} bg-white text-slate-900 text-center py-2`}>
+            <div className="text-xs font-semibold tracking-wide text-slate-600">HOLE</div>
             <div className="text-4xl font-black leading-tight">{hole}</div>
-            <div className="text-[11px] opacity-85">
+            <div className="text-[11px] text-slate-600">
               <div>
                 <span className="font-semibold">M:</span> Par {holeInfoM.par || "—"} · SI {holeInfoM.si || "—"}
               </div>
@@ -861,22 +870,22 @@ export default function MobileScoreEntryPage() {
   let body: React.ReactNode = null;
 
   if (loading) {
-    body = <div className="p-4 text-sm opacity-70">Loading…</div>;
+    body = <div className="p-4 text-sm text-slate-600">Loading…</div>;
   } else if (!round) {
     body = (
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3 text-slate-900">
         <div className="text-lg font-semibold">Score entry</div>
-        <div className="text-sm text-red-300">{errorMsg || "Round not found."}</div>
+        <div className="text-sm text-red-600">{errorMsg || "Round not found."}</div>
       </div>
     );
   } else if (!meOk) {
     body = (
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3 text-slate-900">
         <div className="text-xl font-semibold">{round.name}</div>
-        <div className="text-sm opacity-75">Course: {courseName}</div>
-        <div className="rounded-md border border-slate-700 p-3 text-sm space-y-2 bg-slate-900/40">
+        <div className="text-sm text-slate-600">Course: {courseName}</div>
+        <div className="rounded-md border border-slate-300 p-3 text-sm space-y-2 bg-slate-50">
           <div className="font-semibold">Can’t start scoring</div>
-          <div className="opacity-80">
+          <div className="text-slate-600">
             The score page needs a valid <code>meId</code> for a player marked <code>playing=true</code>.
           </div>
         </div>
@@ -884,29 +893,29 @@ export default function MobileScoreEntryPage() {
     );
   } else if (!buddyOk) {
     body = (
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3 text-slate-900">
         <div className="text-xl font-semibold">{round.name}</div>
-        <div className="text-sm opacity-75">Course: {courseName}</div>
-        <div className="rounded-md border border-slate-700 p-3 text-sm space-y-2 bg-slate-900/40">
+        <div className="text-sm text-slate-600">Course: {courseName}</div>
+        <div className="rounded-md border border-slate-300 p-3 text-sm space-y-2 bg-slate-50">
           <div className="font-semibold">Buddy is not eligible</div>
-          <div className="opacity-80">The selected buddy is not marked as playing for this round.</div>
+          <div className="text-slate-600">The selected buddy is not marked as playing for this round.</div>
         </div>
       </div>
     );
   } else {
     body = (
       <div
-        className={`${navy} min-h-[100svh] text-white overflow-hidden`}
+        className="bg-white min-h-[100svh] text-slate-900 overflow-hidden"
         style={tab === "entry" ? fxStyle : undefined}
         onTouchStart={tab === "entry" ? onTouchStart : undefined}
         onTouchEnd={tab === "entry" ? onTouchEnd : undefined}
       >
         {/* Top bar */}
-        <div className="px-4 pt-4 pb-2 flex items-start justify-between gap-3">
+        <div className="px-4 pt-4 pb-2 flex items-start justify-between gap-3 border-b border-slate-200">
           <div className="flex items-start gap-3">
             <button
               type="button"
-              className="flex items-center gap-2 text-xl font-bold"
+              className="flex items-center gap-2 text-xl font-bold text-slate-900"
               onClick={() => {
                 const href = `/m/tours/${String((params as any)?.id ?? "")}/rounds/${roundId}/scoring?meId=${encodeURIComponent(
                   meId
@@ -919,12 +928,12 @@ export default function MobileScoreEntryPage() {
             </button>
             <div className="leading-tight">
               <div className="text-sm font-semibold">{round?.name ?? "Round"}</div>
-              <div className="text-xs opacity-75">{courseName}</div>
-              <div className="text-[11px] opacity-80">
+              <div className="text-xs text-slate-600">{courseName}</div>
+              <div className="text-[11px]">
                 {isLocked ? (
-                  <span className="text-red-300 font-semibold">Locked</span>
+                  <span className="text-red-600 font-semibold">Locked</span>
                 ) : (
-                  <span className="text-green-300 font-semibold">Open</span>
+                  <span className="text-green-700 font-semibold">Open</span>
                 )}
               </div>
             </div>
@@ -948,12 +957,12 @@ export default function MobileScoreEntryPage() {
 
         {/* Tabs */}
         <div className="px-4">
-          <div className="rounded-md border border-slate-600/60 overflow-hidden flex">
+          <div className="rounded-md border border-slate-300 overflow-hidden flex bg-white">
             <button
               type="button"
               onClick={() => setTab("entry")}
               className={`flex-1 py-2 text-sm font-semibold ${
-                tab === "entry" ? "bg-slate-800 text-white" : "bg-slate-900 text-slate-200"
+                tab === "entry" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"
               }`}
             >
               Entry
@@ -962,7 +971,7 @@ export default function MobileScoreEntryPage() {
               type="button"
               onClick={() => setTab("summary")}
               className={`flex-1 py-2 text-sm font-semibold ${
-                tab === "summary" ? "bg-sky-600 text-white" : "bg-slate-900 text-slate-200"
+                tab === "summary" ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
               }`}
             >
               Summary
@@ -977,24 +986,24 @@ export default function MobileScoreEntryPage() {
               <PlayerCard pid={meId} name={meName} hcp={meHcp} tee={meTee} />
               {buddyId ? <PlayerCard pid={buddyId} name={buddyName} hcp={buddyHcp} tee={buddyTee} /> : null}
 
-              <div className="text-xs opacity-80 text-center">
+              <div className="text-xs text-slate-600 text-center">
                 Swipe <span className="font-semibold">left/right</span> to change hole.{" "}
-                {dirty ? <span className="text-amber-300 font-semibold">Unsaved (Me)</span> : null}
-                {savedMsg ? <span className="text-green-300 font-semibold"> {savedMsg}</span> : null}
-                {saveErr ? <span className="text-red-300 font-semibold"> {saveErr}</span> : null}
-                {rehandicapMsg ? <span className="text-cyan-200 font-semibold"> {rehandicapMsg}</span> : null}
+                {dirty ? <span className="text-amber-700 font-semibold">Unsaved (Me)</span> : null}
+                {savedMsg ? <span className="text-green-700 font-semibold"> {savedMsg}</span> : null}
+                {saveErr ? <span className="text-red-600 font-semibold"> {saveErr}</span> : null}
+                {rehandicapMsg ? <span className="text-sky-700 font-semibold"> {rehandicapMsg}</span> : null}
               </div>
 
-              <div className="text-[11px] opacity-70 text-center">
+              <div className="text-[11px] text-slate-500 text-center">
                 Note: Buddy scores are for viewing/entry only and are not saved.
               </div>
 
-              {errorMsg ? <div className="text-sm text-red-300">{errorMsg}</div> : null}
+              {errorMsg ? <div className="text-sm text-red-600">{errorMsg}</div> : null}
             </>
           ) : (
             <>
               <SummaryTable />
-              {errorMsg ? <div className="text-sm text-red-300">{errorMsg}</div> : null}
+              {errorMsg ? <div className="text-sm text-red-600">{errorMsg}</div> : null}
             </>
           )}
         </div>
