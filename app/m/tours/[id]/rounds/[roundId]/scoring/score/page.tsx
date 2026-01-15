@@ -120,6 +120,9 @@ export default function MobileScoreEntryPage() {
   const [saveErr, setSaveErr] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
 
+  // ✅ DEBUG banner to prove rehandicapping is called
+  const [rehandicapMsg, setRehandicapMsg] = useState<string>("");
+
   const [hole, setHole] = useState(1);
 
   // Tabs
@@ -220,6 +223,7 @@ export default function MobileScoreEntryPage() {
       setErrorMsg("");
       setSaveErr("");
       setSavedMsg("");
+      setRehandicapMsg("");
 
       try {
         // Round
@@ -442,6 +446,7 @@ export default function MobileScoreEntryPage() {
   async function saveAll() {
     setSaveErr("");
     setSavedMsg("");
+    setRehandicapMsg("");
 
     if (!roundId) return;
     if (isLocked) {
@@ -500,24 +505,32 @@ export default function MobileScoreEntryPage() {
         if (error) throw error;
       }
 
-      // ✅ Trigger rehandicap recalculation for the tour
+      // ✅ Trigger rehandicap recalculation for the tour (DEBUG banner on page)
       try {
         const tourId = await fetchTourIdForRound(roundId);
         if (tourId) {
+          setRehandicapMsg("Rehandicapping running…");
+
           const res = await recalcAndSaveTourHandicaps({
             supabase,
             tourId,
           });
 
+          const ts = new Date().toLocaleTimeString();
+
           if (!res.ok) {
-            // Don't fail the save, but show a warning
+            setRehandicapMsg(`Rehandicapping FAILED @ ${ts}: ${res.error}`);
             setSaveErr(`Saved, but rehandicap failed: ${res.error}`);
           } else {
-            // Refresh this round’s round_players so UI PH stays in sync (optional)
+            setRehandicapMsg(`Rehandicapping ran ✓ (updated ${res.updated} rows) @ ${ts}`);
             await refreshRoundPlayers();
           }
+        } else {
+          setRehandicapMsg("Rehandicapping skipped (no tourId for this round).");
         }
       } catch (e: any) {
+        const ts = new Date().toLocaleTimeString();
+        setRehandicapMsg(`Rehandicapping ERROR @ ${ts}: ${e?.message ?? "unknown"}`);
         setSaveErr(`Saved, but rehandicap error: ${e?.message ?? "unknown"}`);
       }
 
@@ -969,6 +982,7 @@ export default function MobileScoreEntryPage() {
                 {dirty ? <span className="text-amber-300 font-semibold">Unsaved (Me)</span> : null}
                 {savedMsg ? <span className="text-green-300 font-semibold"> {savedMsg}</span> : null}
                 {saveErr ? <span className="text-red-300 font-semibold"> {saveErr}</span> : null}
+                {rehandicapMsg ? <span className="text-cyan-200 font-semibold"> {rehandicapMsg}</span> : null}
               </div>
 
               <div className="text-[11px] opacity-70 text-center">
