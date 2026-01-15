@@ -661,7 +661,10 @@ export default function MobileScoreEntryPage() {
     const headerClass = isFemale ? headerPink : headerBlue;
 
     return (
-      <div className="rounded-lg overflow-hidden shadow-sm border border-slate-200 bg-white">
+      <div
+        // ✅ STEP 2: darker/bolder outline
+        className="rounded-lg overflow-hidden shadow-sm border-2 border-slate-400 bg-white"
+      >
         <div className={`${headerClass} px-4 py-2 text-white font-semibold text-base text-center`}>
           {name} <span className="opacity-90">(HC: {hcp} · Tee: {tee})</span>
         </div>
@@ -698,7 +701,7 @@ export default function MobileScoreEntryPage() {
             <div>
               <div className="text-[11px] font-bold tracking-wide text-slate-600">PAR</div>
 
-              {/* ✅ NEW: Tap PAR to set strokes = PAR */}
+              {/* ✅ STEP 1: Tap PAR to set strokes = PAR */}
               <button
                 type="button"
                 className="mt-1 w-full rounded-md border border-slate-300 bg-white text-slate-900 text-2xl font-black py-2 active:scale-[0.99] disabled:opacity-50"
@@ -869,6 +872,11 @@ export default function MobileScoreEntryPage() {
 
   let body: React.ReactNode = null;
 
+  const playingIdsNow = playingIds; // keep as-is
+
+  const meOkNow = !!meId && playingIdsNow.includes(meId);
+  const buddyOkNow = !buddyId || playingIdsNow.includes(buddyId);
+
   if (loading) {
     body = <div className="p-4 text-sm text-slate-600">Loading…</div>;
   } else if (!round) {
@@ -878,7 +886,7 @@ export default function MobileScoreEntryPage() {
         <div className="text-sm text-red-600">{errorMsg || "Round not found."}</div>
       </div>
     );
-  } else if (!meOk) {
+  } else if (!meOkNow) {
     body = (
       <div className="p-4 space-y-3 text-slate-900">
         <div className="text-xl font-semibold">{round.name}</div>
@@ -891,7 +899,7 @@ export default function MobileScoreEntryPage() {
         </div>
       </div>
     );
-  } else if (!buddyOk) {
+  } else if (!buddyOkNow) {
     body = (
       <div className="p-4 space-y-3 text-slate-900">
         <div className="text-xl font-semibold">{round.name}</div>
@@ -920,8 +928,9 @@ export default function MobileScoreEntryPage() {
                 const href = `/m/tours/${String((params as any)?.id ?? "")}/rounds/${roundId}/scoring?meId=${encodeURIComponent(
                   meId
                 )}${buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""}`;
-                if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?"))
+                if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?")) {
                   window.location.href = href;
+                }
               }}
             >
               <span className="text-2xl">‹</span>
