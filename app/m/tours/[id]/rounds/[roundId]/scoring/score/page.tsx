@@ -6,6 +6,7 @@ import { useParams, useSearchParams } from "next/navigation";
 
 import { supabase } from "@/lib/supabaseClient";
 import { netStablefordPointsForHole } from "@/lib/stableford";
+import { recalcAndSaveTourHandicaps } from "@/lib/handicaps/recalcAndSaveTourHandicaps";
 
 type Tee = "M" | "F";
 type TabKey = "entry" | "summary";
@@ -180,6 +181,33 @@ export default function MobileScoreEntryPage() {
     if (g) return normalizeTee(g);
 
     return "M";
+  }
+
+  async function fetchTourIdForRound(rid: string): Promise<string | null> {
+    if (!rid) return null;
+    const { data, error } = await supabase.from("rounds").select("tour_id").eq("id", rid).maybeSingle();
+    if (error) throw error;
+    const tid = (data as any)?.tour_id ? String((data as any).tour_id) : "";
+    return tid.trim() ? tid : null;
+  }
+
+  async function refreshRoundPlayers() {
+    if (!roundId) return;
+    const { data: rpData, error: rpErr } = await supabase
+      .from("round_players")
+      .select("round_id,player_id,playing,playing_handicap,tee")
+      .eq("round_id", roundId)
+      .eq("playing", true);
+    if (rpErr) throw rpErr;
+
+    const rpRows: RoundPlayerRow[] = (rpData ?? []).map((x: any) => ({
+      round_id: String(x.round_id),
+      player_id: String(x.player_id),
+      playing: x.playing === true,
+      playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
+      tee: x.tee ? normalizeTee(x.tee) : null,
+    }));
+    setRoundPlayers(rpRows);
   }
 
   // --------- Load ----------
@@ -470,6 +498,28 @@ export default function MobileScoreEntryPage() {
           onConflict: "round_id,player_id,hole_number",
         });
         if (error) throw error;
+      }
+
+      // ✅ Trigger rehandicap recalculation for the tour (updates NEXT rounds' PH)
+      try {
+        const tourId = await fetchTourIdForRound(roundId);
+        if (tourId) {
+          const res = await recalcAndSaveTourHandicaps({
+            supabase,
+            tourId,
+            onlyIfRoundCompleteId: roundId,
+          });
+
+          if (!res.ok) {
+            // Don't fail the save, but show a warning
+            setSaveErr(`Saved, but rehandicap failed: ${res.error}`);
+          } else {
+            // Refresh this round’s round_players so UI PH stays in sync (optional)
+            await refreshRoundPlayers();
+          }
+        }
+      } catch (e: any) {
+        setSaveErr(`Saved, but rehandicap error: ${e?.message ?? "unknown"}`);
       }
 
       initialScoresRef.current = { [meId]: { ...(scores[meId] ?? {}) } };
