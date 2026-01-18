@@ -1,14 +1,13 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 
 import { supabase } from "@/lib/supabaseClient";
 import { netStablefordPointsForHole } from "@/lib/stableford";
 import { recalcAndSaveTourHandicaps } from "@/lib/handicaps/recalcAndSaveTourHandicaps";
 
 type Tee = "M" | "F";
-type TabKey = "entry" | "summary";
 
 type CourseRel = { name: string };
 
@@ -84,7 +83,7 @@ function normalizeTee(v: any): Tee {
   return s === "F" ? "F" : "M";
 }
 
-// ✅ Whole-page swipe FX states
+// Whole-page swipe FX states
 type HoleFxState =
   | { stage: "idle"; dir: "next" | "prev" | null }
   | { stage: "out"; dir: "next" | "prev" }
@@ -94,6 +93,9 @@ type HoleFxState =
 export default function MobileScoreEntryPage() {
   const params = useParams();
   const sp = useSearchParams();
+  const router = useRouter();
+
+  const tourId = String((params as any)?.id ?? "").trim();
 
   const roundId = (params as any)?.roundId
     ? String((params as any)?.roundId ?? "")
@@ -118,20 +120,14 @@ export default function MobileScoreEntryPage() {
   const [saveErr, setSaveErr] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
 
-  // ✅ DEBUG banner to prove rehandicapping is called
+  // DEBUG banner to prove rehandicapping is called
   const [rehandicapMsg, setRehandicapMsg] = useState<string>("");
 
   const [hole, setHole] = useState(1);
 
-  // Tabs
-  const [tab, setTab] = useState<TabKey>("entry");
-
-  // Summary: one player at a time
-  const [summaryPid, setSummaryPid] = useState<string>("");
-
   const isLocked = round?.is_locked === true;
 
-  // ✅ FX state + timeouts
+  // FX state + timeouts
   const [holeFx, setHoleFx] = useState<HoleFxState>({ stage: "idle", dir: null });
   const fxTimerRef = useRef<number | null>(null);
 
@@ -142,7 +138,27 @@ export default function MobileScoreEntryPage() {
     }
   }
 
-  // ✅ Whole-page slide style
+  // Lock page scroll/bounce for this screen only
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    const prevBodyOverscroll = (body.style as any).overscrollBehavior;
+
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    (body.style as any).overscrollBehavior = "none";
+
+    return () => {
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+      (body.style as any).overscrollBehavior = prevBodyOverscroll;
+    };
+  }, []);
+
+  // Whole-page slide style
   const fxStyle: React.CSSProperties = useMemo(() => {
     const base = "transform 330ms ease-in-out";
     const off = "105%";
@@ -168,9 +184,9 @@ export default function MobileScoreEntryPage() {
     return { transform: "translateX(0)", transition: base, willChange: "transform" };
   }, [holeFx]);
 
-  // ✅ Preferred tee logic:
-  // 1) round_players.tee (per-round tee actually used)
-  // 2) players.gender (global fallback)
+  // Preferred tee logic:
+  // 1) round_players.tee
+  // 2) players.gender
   // 3) default M
   function teeForPlayer(pid: string): Tee {
     if (!pid) return "M";
@@ -211,7 +227,7 @@ export default function MobileScoreEntryPage() {
     setRoundPlayers(rpRows);
   }
 
-  // --------- Load ----------
+  // Load
   useEffect(() => {
     if (!roundId) return;
     let alive = true;
@@ -322,11 +338,6 @@ export default function MobileScoreEntryPage() {
 
         // baseline for unsaved: me only
         initialScoresRef.current = { [meId]: nextScores[meId] ?? {} };
-
-        // summary pid defaults
-        if (!summaryPid) setSummaryPid(meId || buddyId || ids[0] || "");
-
-        setTab("entry");
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load score entry.");
@@ -343,7 +354,7 @@ export default function MobileScoreEntryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  // --------- Derived ----------
+  // Derived
   const courseName = useMemo(() => asSingle(round?.courses)?.name ?? "(no course)", [round]);
   const playingIds = useMemo(() => roundPlayers.map((rp) => rp.player_id), [roundPlayers]);
 
@@ -416,15 +427,9 @@ export default function MobileScoreEntryPage() {
     });
   }
 
-  function sumPoints(pid: string, from: number, to: number): number {
+  function sumPoints(pid: string): number {
     let sum = 0;
-    for (let h = from; h <= to; h++) sum += pointsFor(pid, h);
-    return sum;
-  }
-
-  function sumShots(pid: string, from: number, to: number): number {
-    let sum = 0;
-    for (let h = from; h <= to; h++) sum += rawToShots(scores[pid]?.[h] ?? "");
+    for (let h = 1; h <= 18; h++) sum += pointsFor(pid, h);
     return sum;
   }
 
@@ -503,15 +508,15 @@ export default function MobileScoreEntryPage() {
         if (error) throw error;
       }
 
-      // ✅ Trigger rehandicap recalculation for the tour (DEBUG banner on page)
+      // Trigger rehandicap recalculation for the tour (DEBUG banner on page)
       try {
-        const tourId = await fetchTourIdForRound(roundId);
-        if (tourId) {
+        const tid = await fetchTourIdForRound(roundId);
+        if (tid) {
           setRehandicapMsg("Rehandicapping running…");
 
           const res = await recalcAndSaveTourHandicaps({
             supabase,
-            tourId,
+            tourId: tid,
           });
 
           const ts = new Date().toLocaleTimeString();
@@ -542,11 +547,10 @@ export default function MobileScoreEntryPage() {
     }
   }
 
-  // Swipe handling: left = next, right = prev (Entry tab only)
+  // Swipe handling: left = next, right = prev
   const swipeRef = useRef<{ x: number; y: number; t: number } | null>(null);
 
   function animateHoleChange(dir: "next" | "prev") {
-    if (tab !== "entry") return;
     if (holeFx.stage !== "idle") return;
 
     const nextHole = clamp(hole + (dir === "next" ? 1 : -1), 1, 18);
@@ -601,37 +605,34 @@ export default function MobileScoreEntryPage() {
 
   const dirty = isDirty();
 
-  function SummaryPlayerToggleTop() {
-    const hasBuddy = Boolean(buddyId);
+  function goBackToSelect() {
+    const href = `/m/tours/${tourId}/rounds/${roundId}/scoring?meId=${encodeURIComponent(meId)}${
+      buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""
+    }`;
+    if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?")) {
+      router.push(href);
+    }
+  }
 
+  function openPlayerSummary(pid: string) {
+    if (!pid) return;
+    router.push(`/m/tours/${tourId}/rounds/${roundId}/results/${pid}`);
+  }
+
+  function HoleBox() {
     return (
-      <div className="px-4 pb-3">
+      <div className="px-4 pb-2">
         <div className="flex items-center justify-center">
-          <div className={`w-[260px] rounded-md border ${borderLight} bg-white text-slate-900 text-center py-2`}>
-            <div className="text-xs font-semibold tracking-wide text-slate-600">SUMMARY PLAYER</div>
-
-            <div className="mt-2 inline-flex rounded-md overflow-hidden border border-slate-300">
-              <button
-                type="button"
-                onClick={() => setSummaryPid(meId)}
-                className={`px-4 py-2 text-base font-bold ${
-                  summaryPid === meId ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
-                }`}
-              >
-                {meName}
-              </button>
-
-              {hasBuddy ? (
-                <button
-                  type="button"
-                  onClick={() => setSummaryPid(buddyId)}
-                  className={`px-4 py-2 text-base font-bold ${
-                    summaryPid === buddyId ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
-                  }`}
-                >
-                  {buddyName}
-                </button>
-              ) : null}
+          <div className={`w-[230px] rounded-md border ${borderLight} bg-white text-slate-900 text-center py-2`}>
+            <div className="text-xs font-semibold tracking-wide text-slate-600">HOLE</div>
+            <div className="text-4xl font-black leading-tight">{hole}</div>
+            <div className="text-[11px] text-slate-600">
+              <div>
+                <span className="font-semibold">M:</span> Par {holeInfoM.par || "—"} · SI {holeInfoM.si || "—"}
+              </div>
+              <div>
+                <span className="font-semibold">F:</span> Par {holeInfoF.par || "—"} · SI {holeInfoF.si || "—"}
+              </div>
             </div>
           </div>
         </div>
@@ -646,25 +647,18 @@ export default function MobileScoreEntryPage() {
     const pickup = raw === "P";
 
     const pts = pointsFor(pid, hole);
-    const grossDisplay = pickup ? "—" : raw && raw !== "P" ? raw : "0";
+
+    // ✅ Change #4: show "P" in strokes display (not —)
+    const grossDisplay = pickup ? "P" : raw && raw !== "P" ? raw : "0";
 
     const info = infoFor(pid, hole);
-
-    const totalPts = useMemo(() => {
-      let sum = 0;
-      for (let h = 1; h <= 18; h++) sum += pointsFor(pid, h);
-      return sum;
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [scores, pid, meHcp, buddyHcp, parsByTee]);
+    const totalPts = useMemo(() => sumPoints(pid), [pid, scores, meHcp, buddyHcp, parsByTee]);
 
     const isFemale = teeForPlayer(pid) === "F";
     const headerClass = isFemale ? headerPink : headerBlue;
 
     return (
-      <div
-        // ✅ STEP 2: darker/bolder outline
-        className="rounded-lg overflow-hidden shadow-sm border-2 border-slate-400 bg-white"
-      >
+      <div className="rounded-lg overflow-hidden shadow-sm border-2 border-slate-400 bg-white">
         <div className={`${headerClass} px-4 py-2 text-white font-semibold text-base text-center`}>
           {name} <span className="opacity-90">(HC: {hcp} · Tee: {tee})</span>
         </div>
@@ -700,8 +694,6 @@ export default function MobileScoreEntryPage() {
           <div className="mt-3 grid grid-cols-4 gap-2 text-center">
             <div>
               <div className="text-[11px] font-bold tracking-wide text-slate-600">PAR</div>
-
-              {/* ✅ STEP 1: Tap PAR to set strokes = PAR */}
               <button
                 type="button"
                 className="mt-1 w-full rounded-md border border-slate-300 bg-white text-slate-900 text-2xl font-black py-2 active:scale-[0.99] disabled:opacity-50"
@@ -749,145 +741,41 @@ export default function MobileScoreEntryPage() {
             </div>
           </div>
 
+          {/* ✅ Change #3: tap Total pts -> go to that player's summary page */}
           <div className="mt-2 flex justify-between text-xs text-slate-600">
             <button type="button" className="underline" onClick={() => setRaw(pid, hole, "")} disabled={isLocked}>
               Clear hole
             </button>
-            <div className="font-bold">Total pts: {totalPts}</div>
+
+            <button
+              type="button"
+              onClick={() => openPlayerSummary(pid)}
+              className="font-extrabold text-slate-900 underline underline-offset-2"
+              aria-label={`Open ${name} summary`}
+            >
+              Total pts: {totalPts}
+            </button>
           </div>
         </div>
       </div>
     );
   }
-
-  function SummaryTotalsRow(props: { label: string; shots: number; pts: number; onJumpTo?: number }) {
-    const { label, shots, pts, onJumpTo } = props;
-
-    return (
-      <div className="px-3 py-2 border-t border-slate-300 bg-slate-50 grid grid-cols-5 gap-2 items-center text-slate-900">
-        <button
-          type="button"
-          className="rounded-md px-3 py-2 text-left font-bold bg-slate-900 text-white"
-          onClick={() => {
-            if (onJumpTo) {
-              setHole(onJumpTo);
-              setTab("entry");
-            }
-          }}
-        >
-          {label}
-        </button>
-        <div />
-        <div />
-        <div className="text-center font-bold">{shots}</div>
-        <div className="text-center font-bold">{pts}</div>
-      </div>
-    );
-  }
-
-  function SummaryTable() {
-    const pid = summaryPid || meId;
-    const tee = teeForPlayer(pid);
-
-    const frontShots = sumShots(pid, 1, 9);
-    const frontPts = sumPoints(pid, 1, 9);
-    const backShots = sumShots(pid, 10, 18);
-    const backPts = sumPoints(pid, 10, 18);
-    const totalShots = frontShots + backShots;
-    const totalPts = frontPts + backPts;
-
-    return (
-      <div className="rounded-lg overflow-hidden bg-white shadow-sm text-slate-900 border border-slate-200">
-        <div className="bg-slate-100 px-3 py-2 text-xs font-bold tracking-wide text-slate-700 grid grid-cols-5 gap-2">
-          <div>HOLE</div>
-          <div className="text-center">PAR</div>
-          <div className="text-center">SI</div>
-          <div className="text-center">STROKES</div>
-          <div className="text-center">PTS</div>
-        </div>
-
-        {Array.from({ length: 18 }).map((_, idx) => {
-          const h = idx + 1;
-          const info = holeInfoByNumberByTee[tee]?.[h] ?? { par: 0, si: 0 };
-
-          const raw = scores[pid]?.[h] ?? "";
-          const disp = raw === "P" ? "P" : raw || "—";
-          const pts = pointsFor(pid, h);
-
-          return (
-            <React.Fragment key={h}>
-              <div className="px-3 py-2 border-t border-slate-200 grid grid-cols-5 gap-2 items-center">
-                <button
-                  type="button"
-                  className="rounded-md px-3 py-2 text-left font-bold bg-slate-100 text-slate-900"
-                  onClick={() => {
-                    setHole(h);
-                    setTab("entry");
-                  }}
-                >
-                  {h}
-                </button>
-
-                <div className="text-center font-semibold">{info.par || "—"}</div>
-                <div className="text-center">{info.si || "—"}</div>
-                <div className="text-center font-bold">{disp}</div>
-                <div className="text-center font-bold">{pts}</div>
-              </div>
-
-              {h === 9 ? <SummaryTotalsRow label="Front 9" shots={frontShots} pts={frontPts} onJumpTo={1} /> : null}
-
-              {h === 18 ? (
-                <>
-                  <SummaryTotalsRow label="Back 9" shots={backShots} pts={backPts} onJumpTo={10} />
-                  <SummaryTotalsRow label="Total" shots={totalShots} pts={totalPts} onJumpTo={1} />
-                </>
-              ) : null}
-            </React.Fragment>
-          );
-        })}
-      </div>
-    );
-  }
-
-  function HoleBoxEntryOnly() {
-    return (
-      <div className="px-4 pb-3">
-        <div className="flex items-center justify-center">
-          <div className={`w-[230px] rounded-md border ${borderLight} bg-white text-slate-900 text-center py-2`}>
-            <div className="text-xs font-semibold tracking-wide text-slate-600">HOLE</div>
-            <div className="text-4xl font-black leading-tight">{hole}</div>
-            <div className="text-[11px] text-slate-600">
-              <div>
-                <span className="font-semibold">M:</span> Par {holeInfoM.par || "—"} · SI {holeInfoM.si || "—"}
-              </div>
-              <div>
-                <span className="font-semibold">F:</span> Par {holeInfoF.par || "—"} · SI {holeInfoF.si || "—"}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  let body: React.ReactNode = null;
-
-  const playingIdsNow = playingIds; // keep as-is
-
-  const meOkNow = !!meId && playingIdsNow.includes(meId);
-  const buddyOkNow = !buddyId || playingIdsNow.includes(buddyId);
 
   if (loading) {
-    body = <div className="p-4 text-sm text-slate-600">Loading…</div>;
-  } else if (!round) {
-    body = (
+    return <div className="mx-auto w-full max-w-md px-4 py-4 pb-24 text-sm opacity-70">Loading…</div>;
+  }
+
+  if (!round) {
+    return (
       <div className="p-4 space-y-3 text-slate-900">
         <div className="text-lg font-semibold">Score entry</div>
         <div className="text-sm text-red-600">{errorMsg || "Round not found."}</div>
       </div>
     );
-  } else if (!meOkNow) {
-    body = (
+  }
+
+  if (!meOk) {
+    return (
       <div className="p-4 space-y-3 text-slate-900">
         <div className="text-xl font-semibold">{round.name}</div>
         <div className="text-sm text-slate-600">Course: {courseName}</div>
@@ -899,8 +787,10 @@ export default function MobileScoreEntryPage() {
         </div>
       </div>
     );
-  } else if (!buddyOkNow) {
-    body = (
+  }
+
+  if (!buddyOk) {
+    return (
       <div className="p-4 space-y-3 text-slate-900">
         <div className="text-xl font-semibold">{round.name}</div>
         <div className="text-sm text-slate-600">Course: {courseName}</div>
@@ -910,115 +800,63 @@ export default function MobileScoreEntryPage() {
         </div>
       </div>
     );
-  } else {
-    body = (
-      <div
-        className="bg-white min-h-[100svh] text-slate-900 overflow-hidden"
-        style={tab === "entry" ? fxStyle : undefined}
-        onTouchStart={tab === "entry" ? onTouchStart : undefined}
-        onTouchEnd={tab === "entry" ? onTouchEnd : undefined}
-      >
-        {/* Top bar */}
-        <div className="px-4 pt-4 pb-2 flex items-start justify-between gap-3 border-b border-slate-200">
-          <div className="flex items-start gap-3">
-            <button
-              type="button"
-              className="flex items-center gap-2 text-xl font-bold text-slate-900"
-              onClick={() => {
-                const href = `/m/tours/${String((params as any)?.id ?? "")}/rounds/${roundId}/scoring?meId=${encodeURIComponent(
-                  meId
-                )}${buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""}`;
-                if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?")) {
-                  window.location.href = href;
-                }
-              }}
-            >
-              <span className="text-2xl">‹</span>
-            </button>
-            <div className="leading-tight">
-              <div className="text-sm font-semibold">{round?.name ?? "Round"}</div>
-              <div className="text-xs text-slate-600">{courseName}</div>
-              <div className="text-[11px]">
-                {isLocked ? (
-                  <span className="text-red-600 font-semibold">Locked</span>
-                ) : (
-                  <span className="text-green-700 font-semibold">Open</span>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={saveAll}
-              disabled={saving || isLocked}
-              className={`px-3 py-2 rounded-md text-sm font-bold text-white ${
-                saving || isLocked ? "bg-slate-500" : "bg-sky-600"
-              }`}
-            >
-              {saving ? "Saving…" : isLocked ? "Locked" : "Save (Me)"}
-            </button>
-          </div>
-        </div>
-
-        {tab === "entry" ? <HoleBoxEntryOnly /> : <SummaryPlayerToggleTop />}
-
-        {/* Tabs */}
-        <div className="px-4">
-          <div className="rounded-md border border-slate-300 overflow-hidden flex bg-white">
-            <button
-              type="button"
-              onClick={() => setTab("entry")}
-              className={`flex-1 py-2 text-sm font-semibold ${
-                tab === "entry" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"
-              }`}
-            >
-              Entry
-            </button>
-            <button
-              type="button"
-              onClick={() => setTab("summary")}
-              className={`flex-1 py-2 text-sm font-semibold ${
-                tab === "summary" ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
-              }`}
-            >
-              Summary
-            </button>
-          </div>
-        </div>
-
-        {/* Content */}
-        <div className="px-4 py-3 space-y-3">
-          {tab === "entry" ? (
-            <>
-              <PlayerCard pid={meId} name={meName} hcp={meHcp} tee={meTee} />
-              {buddyId ? <PlayerCard pid={buddyId} name={buddyName} hcp={buddyHcp} tee={buddyTee} /> : null}
-
-              <div className="text-xs text-slate-600 text-center">
-                Swipe <span className="font-semibold">left/right</span> to change hole.{" "}
-                {dirty ? <span className="text-amber-700 font-semibold">Unsaved (Me)</span> : null}
-                {savedMsg ? <span className="text-green-700 font-semibold"> {savedMsg}</span> : null}
-                {saveErr ? <span className="text-red-600 font-semibold"> {saveErr}</span> : null}
-                {rehandicapMsg ? <span className="text-sky-700 font-semibold"> {rehandicapMsg}</span> : null}
-              </div>
-
-              <div className="text-[11px] text-slate-500 text-center">
-                Note: Buddy scores are for viewing/entry only and are not saved.
-              </div>
-
-              {errorMsg ? <div className="text-sm text-red-600">{errorMsg}</div> : null}
-            </>
-          ) : (
-            <>
-              <SummaryTable />
-              {errorMsg ? <div className="text-sm text-red-600">{errorMsg}</div> : null}
-            </>
-          )}
-        </div>
-      </div>
-    );
   }
 
-  return <>{body}</>;
+  // ✅ Change #1 + #2:
+  // Full-screen, no tour/home header, no Entry/Summary tabs. Keep only minimal back + save.
+  return (
+    <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden">
+      {/* Minimal top strip (not tour/home header) */}
+      <div className="h-14 px-4 flex items-center justify-between border-b border-slate-200">
+        <button
+          type="button"
+          className="flex items-center gap-2 text-lg font-bold text-slate-900"
+          onClick={goBackToSelect}
+          aria-label="Back"
+        >
+          <span className="text-2xl leading-none">‹</span>
+          <span>Back</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={saveAll}
+          disabled={saving || isLocked}
+          className={`px-3 py-2 rounded-md text-sm font-bold text-white ${
+            saving || isLocked ? "bg-slate-500" : "bg-sky-600"
+          }`}
+        >
+          {saving ? "Saving…" : isLocked ? "Locked" : "Save (Me)"}
+        </button>
+      </div>
+
+      {/* Hole box */}
+      <HoleBox />
+
+      {/* Main content locked to screen; swipe to change hole */}
+      <div
+        className="px-4 pb-3 space-y-3"
+        style={fxStyle}
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+      >
+        <PlayerCard pid={meId} name={meName} hcp={meHcp} tee={meTee} />
+        {buddyId ? <PlayerCard pid={buddyId} name={buddyName} hcp={buddyHcp} tee={buddyTee} /> : null}
+
+        <div className="text-xs text-slate-600 text-center">
+          Swipe <span className="font-semibold">left/right</span> to change hole.{" "}
+          {dirty ? <span className="text-amber-700 font-semibold">Unsaved (Me)</span> : null}
+          {savedMsg ? <span className="text-green-700 font-semibold"> {savedMsg}</span> : null}
+          {saveErr ? <span className="text-red-600 font-semibold"> {saveErr}</span> : null}
+          {rehandicapMsg ? <span className="text-sky-700 font-semibold"> {rehandicapMsg}</span> : null}
+        </div>
+
+        <div className="text-[11px] text-slate-500 text-center">
+          Note: Buddy scores are for viewing/entry only and are not saved.
+        </div>
+
+        {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
+      </div>
+    </div>
+  );
 }
