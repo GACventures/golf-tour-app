@@ -328,7 +328,7 @@ export default function MobileLeaderboardsPage() {
           setTeamRule({ bestY: clampInt(y, 1, 99) });
         }
 
-        // Rounds (include course name) — schema tolerant for round_date/played_on
+        // Rounds
         const baseRoundCols = "id,tour_id,name,round_no,created_at,course_id,courses(name)";
         const cols1 = `${baseRoundCols},round_date,played_on`;
         const cols2 = `${baseRoundCols},played_on`;
@@ -440,7 +440,7 @@ export default function MobileLeaderboardsPage() {
           setScores([]);
         }
 
-        // pars for all courses in rounds (both tees)
+        // pars (both tees)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
@@ -1100,6 +1100,7 @@ export default function MobileLeaderboardsPage() {
                             {row.name}
                           </td>
 
+                          {/* TOUR total (optional clickable later) */}
                           <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
                             <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
                               {row.tourTotal}
@@ -1110,17 +1111,21 @@ export default function MobileLeaderboardsPage() {
                             const val = row.perRound[r.id] ?? 0;
                             const counted = pairRule.mode === "BEST_Q" ? row.countedIds.has(r.id) : false;
 
+                            const href = `/m/tours/${tourId}/leaderboards/pairs/${row.groupId}/${r.id}`;
+
                             return (
                               <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                                <span
+                                <Link
+                                  href={href}
                                   className={
                                     counted
-                                      ? "inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1"
-                                      : "inline-flex min-w-[44px] justify-end rounded-md px-2 py-1"
+                                      ? "inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1 hover:bg-gray-50 active:bg-gray-100 cursor-pointer"
+                                      : "inline-flex min-w-[44px] justify-end rounded-md px-2 py-1 hover:bg-gray-50 active:bg-gray-100 cursor-pointer border border-transparent"
                                   }
+                                  title="Tap to view pair round detail"
                                 >
                                   {val}
-                                </span>
+                                </Link>
                               </td>
                             );
                           })}
@@ -1144,18 +1149,17 @@ export default function MobileLeaderboardsPage() {
                           const val = row.perRound[r.id] ?? 0;
                           const counted = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
 
-                          // ✅ FIX: make each per-round score cell a link to that round's player detail page
-                          const href = `/m/tours/${tourId}/rounds/${r.id}/results/${row.playerId}`;
-
-                          const cls = counted
-                            ? "inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1 hover:bg-gray-50 active:bg-gray-100"
-                            : "inline-flex min-w-[44px] justify-end rounded-md px-2 py-1 hover:bg-gray-50 active:bg-gray-100";
-
                           return (
                             <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                              <Link href={href} className={cls} title="View player round details">
+                              <span
+                                className={
+                                  counted
+                                    ? "inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1"
+                                    : "inline-flex min-w-[44px] justify-end rounded-md px-2 py-1"
+                                }
+                              >
                                 {val}
-                              </Link>
+                              </span>
                             </td>
                           );
                         })}
@@ -1166,10 +1170,10 @@ export default function MobileLeaderboardsPage() {
               </table>
             </div>
 
-            {(kind === "individual" && individualRule.mode === "BEST_N") || (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
+            {(kind === "individual" && individualRule.mode === "BEST_N") ||
+            (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
               <div className="mt-3 text-xs text-gray-600">
-                Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour
-                total.
+                Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour total.
               </div>
             ) : null}
 
