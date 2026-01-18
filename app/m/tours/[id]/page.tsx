@@ -69,7 +69,10 @@ export default function MobileTourLandingPage() {
               .select("id, name, start_date, end_date, image_url")
               .eq("id", tourId)
               .single(),
-            supabase.from("rounds").select("id, tour_id, played_on").eq("tour_id", tourId),
+            supabase
+              .from("rounds")
+              .select("id, tour_id, played_on")
+              .eq("tour_id", tourId),
           ]);
 
         if (!alive) return;
@@ -104,7 +107,9 @@ export default function MobileTourLandingPage() {
   const title = tour?.name?.trim() || "Tour";
 
   // ✅ Always show a hero image (tour image_url if present, otherwise default)
-  const heroImage = (tour?.image_url?.trim() ? tour!.image_url!.trim() : DEFAULT_HERO) as string;
+  const heroImage = (tour?.image_url?.trim()
+    ? tour!.image_url!.trim()
+    : DEFAULT_HERO) as string;
 
   // Default dates from rounds.played_on if tour dates not set
   const derived = useMemo(() => {
@@ -127,14 +132,8 @@ export default function MobileTourLandingPage() {
 
   return (
     <div className="bg-black text-white">
-      {/* HERO IMAGE */}
-      <div className="relative h-[72vh] w-full overflow-hidden bg-black">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={heroImage} alt="" className="h-full w-full object-contain bg-black" />
-      </div>
-
-      {/* TEXT AREA */}
-      <div className="px-4 py-5">
+      {/* TOP TEXT AREA (moved above hero image) */}
+      <div className="px-4 py-4">
         <div className="mx-auto max-w-md">
           {loading ? (
             <div className="space-y-2">
@@ -149,11 +148,15 @@ export default function MobileTourLandingPage() {
               <div className="mt-1 text-sm font-semibold text-white/80">
                 {dateLabel || "Dates TBD"}
               </div>
-
-              {/* ✅ removed the "(Using dates from rounds)" hint */}
             </>
           )}
         </div>
+      </div>
+
+      {/* HERO IMAGE */}
+      <div className="relative h-[72vh] w-full overflow-hidden bg-black">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={heroImage} alt="" className="h-full w-full object-contain bg-black" />
       </div>
     </div>
   );
