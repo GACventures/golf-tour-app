@@ -113,14 +113,7 @@ function blueStyleForShade(s: Shade): React.CSSProperties | undefined {
   return undefined;
 }
 
-function isMissingColumnError(msg: string, column: string) {
-  const m = String(msg ?? "").toLowerCase();
-  const c = column.toLowerCase();
-  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
-}
-
 async function loadParsForCourse(courseId: string) {
-  // schema tolerant: pars may have only (par, stroke_index) or also gender split; our app uses tee rows already.
   const { data, error } = await supabase
     .from("pars")
     .select("course_id,hole_number,tee,par,stroke_index")
@@ -134,10 +127,7 @@ async function loadParsForCourse(courseId: string) {
 
 function GrossBox({ shade, label }: { shade: Shade; label: string }) {
   const isBlue = shade === "ace" || shade === "eagle" || shade === "birdie";
-
-  // slightly smaller (per request)
   const base = "inline-flex min-w-[22px] justify-center rounded px-1 py-[1px] text-[12px] font-extrabold leading-5";
-
   const className =
     shade === "par"
       ? `${base} bg-white text-gray-900 border border-gray-300`
@@ -158,24 +148,15 @@ function StablefordBox({
   value,
   contributes,
   tied,
-  blockShade,
 }: {
   value: number;
   contributes: boolean;
   tied: boolean;
-  blockShade: "p1" | "p2";
 }) {
-  // slightly smaller (per request)
   const base =
     "inline-flex min-w-[22px] justify-center rounded px-1 py-[1px] text-[12px] font-extrabold leading-5";
-
-  // dotted outline only on stableford (per request)
   const border = contributes ? "border-2 border-dotted border-slate-700" : "border border-transparent";
-
-  // tie highlight: subtle solid ring around both (per earlier requirement)
   const ring = tied ? "ring-2 ring-slate-400 ring-inset" : "";
-
-  // keep background neutral; block shading is on cell container
   return <span className={`${base} ${border} ${ring}`}>{value}</span>;
 }
 
@@ -213,7 +194,6 @@ export default function MobilePairsRoundDetailPage() {
       setErrorMsg("");
 
       try {
-        // Round
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,name,created_at,played_on,round_no,course_id,courses(name)")
@@ -225,7 +205,6 @@ export default function MobilePairsRoundDetailPage() {
         const courseId = String((rData as any)?.course_id ?? "");
         if (!courseId) throw new Error("Round has no course_id.");
 
-        // Pair members (2)
         const { data: gmData, error: gmErr } = await supabase
           .from("tour_group_members")
           .select("group_id,player_id,position,players(id,name,gender)")
@@ -253,7 +232,6 @@ export default function MobilePairsRoundDetailPage() {
         const p1 = players[0];
         const p2 = players[1];
 
-        // round_players for handicaps
         const { data: rpData, error: rpErr } = await supabase
           .from("round_players")
           .select("round_id,player_id,playing,playing_handicap")
@@ -261,7 +239,6 @@ export default function MobilePairsRoundDetailPage() {
           .in("player_id", [p1.id, p2.id]);
         if (rpErr) throw rpErr;
 
-        // scores for the 2 players
         const { data: sData, error: sErr } = await supabase
           .from("scores")
           .select("round_id,player_id,hole_number,strokes,pickup")
@@ -269,7 +246,6 @@ export default function MobilePairsRoundDetailPage() {
           .in("player_id", [p1.id, p2.id]);
         if (sErr) throw sErr;
 
-        // pars (tee-based)
         const ps = await loadParsForCourse(courseId);
 
         if (cancelled) return;
@@ -317,9 +293,7 @@ export default function MobilePairsRoundDetailPage() {
 
   const scoreByPlayerHole = useMemo(() => {
     const m = new Map<string, ScoreRow>();
-    for (const s of scores) {
-      m.set(`${String(s.player_id)}|${Number(s.hole_number)}`, s);
-    }
+    for (const s of scores) m.set(`${String(s.player_id)}|${Number(s.hole_number)}`, s);
     return m;
   }, [scores]);
 
@@ -337,7 +311,6 @@ export default function MobilePairsRoundDetailPage() {
 
     const out: any[] = [];
     for (let hole = 1; hole <= 18; hole++) {
-      // Use each player's own tee par/si
       const p1pr = p1pars?.get(hole) ?? { par: 0, si: 0 };
       const p2pr = p2pars?.get(hole) ?? { par: 0, si: 0 };
 
@@ -379,8 +352,10 @@ export default function MobilePairsRoundDetailPage() {
       const p1contrib = tied ? true : p1net === best;
       const p2contrib = tied ? true : p2net === best;
 
-      const p1shade = p1pr.par > 0 && (p1pickup || p1gross !== null) ? shadeForGross(p1gross, p1pickup, p1pr.par) : "none";
-      const p2shade = p2pr.par > 0 && (p2pickup || p2gross !== null) ? shadeForGross(p2gross, p2pickup, p2pr.par) : "none";
+      const p1shade =
+        p1pr.par > 0 && (p1pickup || p1gross !== null) ? shadeForGross(p1gross, p1pickup, p1pr.par) : "none";
+      const p2shade =
+        p2pr.par > 0 && (p2pickup || p2gross !== null) ? shadeForGross(p2gross, p2pickup, p2pr.par) : "none";
 
       out.push({
         hole,
@@ -389,7 +364,6 @@ export default function MobilePairsRoundDetailPage() {
         best,
       });
     }
-
     return out;
   }, [p1, p2, parByTeeHole, hcpByPlayer, scoreByPlayerHole]);
 
@@ -420,34 +394,33 @@ export default function MobilePairsRoundDetailPage() {
     const inn = sum(back);
     const total = sum(rows);
 
-    // Contribution totals: sum of stableford scores that have dotted border
     const contrib = (arr: typeof rows) => {
       const p1 = arr.reduce((s, r) => s + (r.p1.contributes ? Number(r.p1.net) || 0 : 0), 0);
       const p2 = arr.reduce((s, r) => s + (r.p2.contributes ? Number(r.p2.net) || 0 : 0), 0);
       return { p1, p2 };
     };
 
-    return {
-      out,
-      inn,
-      total,
-      contrib: contrib(rows),
-    };
+    return { out, inn, total, contrib: contrib(rows) };
   }, [rows]);
 
-  const title = useMemo(() => {
-    if (!p1 || !p2) return "Pairs";
-    return `Pairs – ${p1.name}/${p2.name}`;
+  // -----------------------------
+  // ✅ STEP 1 ONLY: Header lines
+  // -----------------------------
+  const headerLine1 = useMemo(() => {
+    if (!p1 || !p2) return "Pair";
+    return `Pair – ${p1.name}/${p2.name}`;
   }, [p1, p2]);
 
-  const subTitle = useMemo(() => {
-    const roundNo = typeof round?.round_no === "number" && round.round_no ? `Round ${round.round_no}` : "Round";
+  const headerLine2 = useMemo(() => {
+    const roundNo =
+      typeof round?.round_no === "number" && round.round_no ? `Round ${round.round_no}` : "Round";
     const course = round?.courses?.name ? ` · ${round.courses.name}` : "";
-    const dt = formatDate(round?.played_on ?? null);
-    return `${(round?.name ?? "").trim() || roundNo}${course}${dt ? ` · ${dt}` : ""}`;
+    return `${roundNo}${course}`;
   }, [round]);
 
-  // Two greys to demarcate the player blocks
+  const headerLine3 = useMemo(() => formatDate(round?.played_on ?? null), [round?.played_on]);
+
+  // Existing block shading vars (unchanged)
   const P1_BG = "bg-slate-50";
   const P2_BG = "bg-slate-100/70";
 
@@ -456,8 +429,9 @@ export default function MobilePairsRoundDetailPage() {
       <main className="mx-auto w-full max-w-md px-4 py-4 pb-24">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-xl font-extrabold">{title}</div>
-            <div className="mt-1 truncate text-sm text-slate-700">{subTitle}</div>
+            <div className="text-xl font-extrabold">{headerLine1}</div>
+            <div className="mt-1 truncate text-sm font-semibold text-slate-700">{headerLine2}</div>
+            {headerLine3 ? <div className="mt-1 text-sm text-slate-500">{headerLine3}</div> : null}
           </div>
 
           <button
@@ -484,39 +458,23 @@ export default function MobilePairsRoundDetailPage() {
             <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
               <table className="w-full border-collapse">
                 <thead>
-                  {/* Grouped header row: names centered across 2 columns each */}
                   <tr className="text-[12px] font-extrabold text-slate-800">
                     <th className="border-b border-slate-200 bg-white px-2 py-2 text-center w-[44px]">Hole</th>
-
-                    <th
-                      colSpan={2}
-                      className={`border-b border-slate-200 px-2 py-2 text-center ${P1_BG}`}
-                    >
+                    <th colSpan={2} className={`border-b border-slate-200 px-2 py-2 text-center ${P1_BG}`}>
                       {p1.name}
                     </th>
-
-                    <th
-                      colSpan={2}
-                      className={`border-b border-slate-200 px-2 py-2 text-center ${P2_BG}`}
-                    >
+                    <th colSpan={2} className={`border-b border-slate-200 px-2 py-2 text-center ${P2_BG}`}>
                       {p2.name}
                     </th>
-
-                    <th className="border-b border-slate-200 bg-white px-2 py-2 text-center w-[70px]">
-                      Better
-                    </th>
+                    <th className="border-b border-slate-200 bg-white px-2 py-2 text-center w-[70px]">Better</th>
                   </tr>
 
-                  {/* Column labels */}
                   <tr className="bg-slate-50 text-[11px] font-semibold text-slate-700">
                     <th className="border-b border-slate-200 px-2 py-2 text-center"> </th>
-
                     <th className={`border-b border-slate-200 px-2 py-2 text-center ${P1_BG}`}>Gross</th>
                     <th className={`border-b border-slate-200 px-2 py-2 text-center ${P1_BG}`}>Net</th>
-
                     <th className={`border-b border-slate-200 px-2 py-2 text-center ${P2_BG}`}>Gross</th>
                     <th className={`border-b border-slate-200 px-2 py-2 text-center ${P2_BG}`}>Net</th>
-
                     <th className="border-b border-slate-200 px-2 py-2 text-center">BB</th>
                   </tr>
                 </thead>
@@ -531,27 +489,23 @@ export default function MobilePairsRoundDetailPage() {
                         <tr className="border-b border-slate-100">
                           <td className="px-2 py-2 text-center font-semibold">{r.hole}</td>
 
-                          {/* Player 1 block */}
                           <td className={`px-2 py-2 text-center ${P1_BG}`}>
                             <GrossBox shade={r.p1.shade} label={r.p1.gross || ""} />
                           </td>
                           <td className={`px-2 py-2 text-center ${P1_BG}`}>
-                            <StablefordBox value={r.p1.net} contributes={r.p1.contributes} tied={r.p1.tied} blockShade="p1" />
+                            <StablefordBox value={r.p1.net} contributes={r.p1.contributes} tied={r.p1.tied} />
                           </td>
 
-                          {/* Player 2 block */}
                           <td className={`px-2 py-2 text-center ${P2_BG}`}>
                             <GrossBox shade={r.p2.shade} label={r.p2.gross || ""} />
                           </td>
                           <td className={`px-2 py-2 text-center ${P2_BG}`}>
-                            <StablefordBox value={r.p2.net} contributes={r.p2.contributes} tied={r.p2.tied} blockShade="p2" />
+                            <StablefordBox value={r.p2.net} contributes={r.p2.contributes} tied={r.p2.tied} />
                           </td>
 
-                          {/* Better ball */}
                           <td className="px-2 py-2 text-center font-extrabold">{r.best}</td>
                         </tr>
 
-                        {/* Subtotal after hole 9 (Out) */}
                         {isFrontEnd ? (
                           <tr className="border-b border-slate-200 bg-white">
                             <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-700">Out</td>
@@ -566,7 +520,6 @@ export default function MobilePairsRoundDetailPage() {
                           </tr>
                         ) : null}
 
-                        {/* Subtotal after hole 18 (In + Total) */}
                         {isBackEnd ? (
                           <>
                             <tr className="border-b border-slate-100 bg-white">
@@ -593,7 +546,6 @@ export default function MobilePairsRoundDetailPage() {
                               <td className="px-2 py-2 text-center text-[12px] font-extrabold">{totals.total.best}</td>
                             </tr>
 
-                            {/* Contribution row (stableford only, no number in final column) */}
                             <tr className="bg-white">
                               <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-700">
                                 Contrib
@@ -618,43 +570,6 @@ export default function MobilePairsRoundDetailPage() {
                   })}
                 </tbody>
               </table>
-            </div>
-
-            {/* Small legend */}
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-700">
-              <div className="font-semibold text-slate-900">Legend</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <div className="rounded-md px-2 py-1 font-bold border border-slate-300 bg-slate-50 text-slate-900">
-                  Ace/Alb{" "}
-                  <span className="ml-2 inline-block h-3 w-3 align-middle rounded-sm" style={{ backgroundColor: BLUE_ACE }} />
-                </div>
-                <div className="rounded-md px-2 py-1 font-bold border border-slate-300 bg-slate-50 text-slate-900">
-                  Eagle{" "}
-                  <span className="ml-2 inline-block h-3 w-3 align-middle rounded-sm" style={{ backgroundColor: BLUE_EAGLE }} />
-                </div>
-                <div className="rounded-md px-2 py-1 font-bold border border-slate-300 bg-slate-50 text-slate-900">
-                  Birdie{" "}
-                  <span className="ml-2 inline-block h-3 w-3 align-middle rounded-sm" style={{ backgroundColor: BLUE_BIRDIE }} />
-                </div>
-                <div className="rounded-md px-2 py-1 font-bold border border-slate-300 bg-slate-50 text-slate-900">
-                  Par{" "}
-                  <span className="ml-2 inline-block h-3 w-3 align-middle rounded-sm bg-white border border-slate-300" />
-                </div>
-                <div className="rounded-md px-2 py-1 font-bold border border-slate-300 bg-slate-50 text-slate-900">
-                  Bogey{" "}
-                  <span className="ml-2 inline-block h-3 w-3 align-middle rounded-sm" style={{ backgroundColor: "#f8cfcf" }} />
-                </div>
-                <div className="rounded-md px-2 py-1 font-bold border border-slate-300 bg-slate-50 text-slate-900">
-                  D.Bogey+{" "}
-                  <span className="ml-2 inline-block h-3 w-3 align-middle rounded-sm" style={{ backgroundColor: "#c0392b" }} />
-                </div>
-                <div className="rounded-md px-2 py-1 font-bold border border-slate-300 bg-slate-50 text-slate-900">
-                  Dotted = contributes
-                </div>
-                <div className="rounded-md px-2 py-1 font-bold border border-slate-300 bg-slate-50 text-slate-900">
-                  Solid ring = tie
-                </div>
-              </div>
             </div>
 
             <div className="mt-4 text-center">
