@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 import MobileNav from "../_components/MobileNav";
 import { supabase } from "@/lib/supabaseClient";
@@ -240,6 +240,8 @@ function pickBestRoundIds(args: {
 // -----------------------------
 export default function MobileLeaderboardsPage() {
   const params = useParams<{ id?: string }>();
+  const router = useRouter();
+
   const tourId = String(params?.id ?? "").trim();
 
   const [loading, setLoading] = useState(true);
@@ -655,7 +657,9 @@ export default function MobileLeaderboardsPage() {
     if (kind === "pairs") {
       if (pairRule.mode === "ALL") return "Pairs Better Ball · Total points across all rounds";
       const r = pairRule;
-      return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
+      return r.finalRequired
+        ? `Pairs Better Ball · Best ${r.q} rounds (Final required)`
+        : `Pairs Better Ball · Best ${r.q} rounds`;
     }
 
     return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 for each zero · All rounds`;
@@ -1100,7 +1104,6 @@ export default function MobileLeaderboardsPage() {
                             {row.name}
                           </td>
 
-                          {/* TOUR total (optional clickable later) */}
                           <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
                             <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
                               {row.tourTotal}
@@ -1115,17 +1118,19 @@ export default function MobileLeaderboardsPage() {
 
                             return (
                               <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                                <Link
-                                  href={href}
+                                <button
+                                  type="button"
+                                  onClick={() => router.push(href)}
                                   className={
                                     counted
-                                      ? "inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1 hover:bg-gray-50 active:bg-gray-100 cursor-pointer"
-                                      : "inline-flex min-w-[44px] justify-end rounded-md px-2 py-1 hover:bg-gray-50 active:bg-gray-100 cursor-pointer border border-transparent"
+                                      ? "w-full inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1 hover:bg-gray-50 active:bg-gray-100"
+                                      : "w-full inline-flex min-w-[44px] justify-end rounded-md border border-transparent px-2 py-1 hover:bg-gray-50 active:bg-gray-100"
                                   }
-                                  title="Tap to view pair round detail"
+                                  style={{ pointerEvents: "auto" }}
+                                  aria-label="Open pair round detail"
                                 >
                                   {val}
-                                </Link>
+                                </button>
                               </td>
                             );
                           })}
@@ -1173,7 +1178,8 @@ export default function MobileLeaderboardsPage() {
             {(kind === "individual" && individualRule.mode === "BEST_N") ||
             (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
               <div className="mt-3 text-xs text-gray-600">
-                Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour total.
+                Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour
+                total.
               </div>
             ) : null}
 
