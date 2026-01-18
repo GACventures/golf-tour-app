@@ -1,9 +1,9 @@
 // PRODUCTION
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 import MobileNav from "../_components/MobileNav";
 import { supabase } from "@/lib/supabaseClient";
@@ -235,43 +235,13 @@ function pickBestRoundIds(args: {
   return chosen;
 }
 
-function pickBestRoundIdForPair(args: {
-  sortedRounds: RoundRow[];
-  finalRoundId: string;
-  rule: PairRule;
-  perRound: Record<string, number>;
-  countedIds: Set<string>;
-}) {
-  const { sortedRounds, finalRoundId, rule, perRound, countedIds } = args;
-
-  if (!sortedRounds.length) return "";
-
-  // If BEST_Q: pick best-scoring among counted
-  if (rule.mode === "BEST_Q" && countedIds.size > 0) {
-    let bestId = "";
-    let bestVal = -1;
-    for (const rid of countedIds) {
-      const v = Number(perRound[rid] ?? 0) || 0;
-      if (v > bestVal) {
-        bestVal = v;
-        bestId = rid;
-      }
-    }
-    if (bestId) return bestId;
-  }
-
-  // Otherwise: default to final round if present
-  if (finalRoundId) return finalRoundId;
-
-  // Fallback: last round in list
-  return sortedRounds[sortedRounds.length - 1].id;
-}
-
 // -----------------------------
 // Page
 // -----------------------------
 export default function MobileLeaderboardsPage() {
   const params = useParams<{ id?: string }>();
+  const router = useRouter();
+
   const tourId = String(params?.id ?? "").trim();
 
   const [loading, setLoading] = useState(true);
@@ -975,6 +945,66 @@ export default function MobileLeaderboardsPage() {
   ]);
 
   // -----------------------------
+  // TapCell (robust tap vs scroll)
+  // -----------------------------
+  function TapCell({
+    href,
+    counted,
+    children,
+    ariaLabel,
+  }: {
+    href: string;
+    counted: boolean;
+    children: React.ReactNode;
+    ariaLabel: string;
+  }) {
+    const start = useRef<{ x: number; y: number } | null>(null);
+
+    const base =
+      "block w-full min-w-[44px] rounded-md px-2 py-1 text-right select-none touch-manipulation";
+    const cls = counted
+      ? `${base} border-2 border-blue-500 hover:bg-gray-50 active:bg-gray-100`
+      : `${base} border border-transparent hover:bg-gray-50 active:bg-gray-100`;
+
+    return (
+      <span
+        role="link"
+        tabIndex={0}
+        className={cls}
+        aria-label={ariaLabel}
+        onTouchStart={(e) => {
+          const t = e.touches?.[0];
+          if (!t) return;
+          start.current = { x: t.clientX, y: t.clientY };
+        }}
+        onTouchEnd={(e) => {
+          const t = e.changedTouches?.[0];
+          const s = start.current;
+          start.current = null;
+          if (!t || !s) return;
+
+          const dx = Math.abs(t.clientX - s.x);
+          const dy = Math.abs(t.clientY - s.y);
+
+          // treat as tap only if finger didn't move much
+          if (dx <= 10 && dy <= 10) {
+            router.push(href);
+          }
+        }}
+        onClick={() => {
+          // desktop / non-touch fallback
+          router.push(href);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") router.push(href);
+        }}
+      >
+        {children}
+      </span>
+    );
+  }
+
+  // -----------------------------
   // UI
   // -----------------------------
   if (!tourId || !isLikelyUuid(tourId)) {
@@ -1128,69 +1158,38 @@ export default function MobileLeaderboardsPage() {
                         </td>
                       </tr>
                     ) : (
-                      pairRows.map((row) => {
-                        const defaultRoundId = pickBestRoundIdForPair({
-                          sortedRounds,
-                          finalRoundId,
-                          rule: pairRule,
-                          perRound: row.perRound,
-                          countedIds: row.countedIds,
-                        });
+                      pairRows.map((row) => (
+                        <tr key={row.groupId} className="border-b last:border-b-0">
+                          <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                            {row.name}
+                          </td>
 
-                        const tourHref = defaultRoundId
-                          ? `/m/tours/${tourId}/leaderboards/pairs/${row.groupId}/${defaultRoundId}`
-                          : "";
+                          {/* TOUR total NOT clickable */}
+                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
+                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
+                              {row.tourTotal}
+                            </span>
+                          </td>
 
-                        return (
-                          <tr key={row.groupId} className="border-b last:border-b-0">
-                            <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                              {row.name}
-                            </td>
+                          {sortedRounds.map((r) => {
+                            const val = row.perRound[r.id] ?? 0;
+                            const counted = pairRule.mode === "BEST_Q" ? row.countedIds.has(r.id) : false;
+                            const href = `/m/tours/${tourId}/leaderboards/pairs/${row.groupId}/${r.id}`;
 
-                            {/* TOUR total is now tappable */}
-                            <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                              {tourHref ? (
-                                <Link
-                                  href={tourHref}
-                                  prefetch={false}
-                                  className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1 hover:opacity-90 active:opacity-80"
-                                  aria-label="Open pair detail (default round)"
+                            return (
+                              <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
+                                <TapCell
+                                  href={href}
+                                  counted={counted}
+                                  ariaLabel="Open pair round detail"
                                 >
-                                  {row.tourTotal}
-                                </Link>
-                              ) : (
-                                <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
-                                  {row.tourTotal}
-                                </span>
-                              )}
-                            </td>
-
-                            {sortedRounds.map((r) => {
-                              const val = row.perRound[r.id] ?? 0;
-                              const counted = pairRule.mode === "BEST_Q" ? row.countedIds.has(r.id) : false;
-
-                              const href = `/m/tours/${tourId}/leaderboards/pairs/${row.groupId}/${r.id}`;
-
-                              return (
-                                <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                                  <Link
-                                    href={href}
-                                    prefetch={false}
-                                    className={
-                                      counted
-                                        ? "block w-full min-w-[44px] rounded-md border-2 border-blue-500 px-2 py-1 text-right hover:bg-gray-50 active:bg-gray-100"
-                                        : "block w-full min-w-[44px] rounded-md border border-transparent px-2 py-1 text-right hover:bg-gray-50 active:bg-gray-100"
-                                    }
-                                    aria-label="Open pair round detail"
-                                  >
-                                    {val}
-                                  </Link>
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        );
-                      })
+                                  {val}
+                                </TapCell>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))
                     )
                   ) : (
                     individualRows.map((row) => (
