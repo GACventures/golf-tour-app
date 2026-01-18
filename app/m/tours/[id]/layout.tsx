@@ -22,11 +22,7 @@ export default function TourLayout({ children }: { children: ReactNode }) {
     async function loadTourName() {
       if (!tourId) return;
 
-      const { data, error } = await supabase
-        .from("tours")
-        .select("id,name")
-        .eq("id", tourId)
-        .single();
+      const { data, error } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
 
       if (cancelled) return;
 
@@ -48,23 +44,31 @@ export default function TourLayout({ children }: { children: ReactNode }) {
   const homeHref = `/m/tours/${tourId}`;
 
   // Hide ONLY on the tour landing page (/m/tours/[id])
-  const hideTopBar = useMemo(() => {
+  const hideTopBarOnLanding = useMemo(() => {
     if (!tourId) return false;
-    // pathname is usually exactly /m/tours/<id> (no trailing slash)
     return pathname === `/m/tours/${tourId}`;
   }, [pathname, tourId]);
 
+  // ✅ Focus mode for score entry page only:
+  // /m/tours/[id]/rounds/[roundId]/scoring/score
+  const isScoreEntryFocusMode = useMemo(() => {
+    const p = String(pathname ?? "");
+    // robust match: works even if query params exist elsewhere (pathname has none)
+    return p.includes("/scoring/score");
+  }, [pathname]);
+
+  const hideTopBar = hideTopBarOnLanding || isScoreEntryFocusMode;
+  const hideBottomNav = isScoreEntryFocusMode;
+
   return (
-    <div className="min-h-dvh bg-white">
-      {/* Top bar (hidden on landing page only) */}
+    <div className={isScoreEntryFocusMode ? "h-dvh bg-white overflow-hidden" : "min-h-dvh bg-white"}>
+      {/* Top bar (hidden on landing page AND on score entry focus mode) */}
       {!hideTopBar && (
         <div className="sticky top-0 z-20 border-b bg-white/95 backdrop-blur">
           <div className="mx-auto flex w-full max-w-md items-center justify-between px-4 py-3">
             {/* Left: Tour name */}
             <div className="min-w-0">
-              <div className="truncate text-base font-semibold text-gray-900">
-                {tourName || "Tour"}
-              </div>
+              <div className="truncate text-base font-semibold text-gray-900">{tourName || "Tour"}</div>
             </div>
 
             {/* Right: Home link */}
@@ -79,10 +83,12 @@ export default function TourLayout({ children }: { children: ReactNode }) {
       )}
 
       {/* Content */}
-      <main className="mx-auto w-full max-w-md px-0 pb-20">{children}</main>
+      <main className={isScoreEntryFocusMode ? "h-dvh w-full p-0" : "mx-auto w-full max-w-md px-0 pb-20"}>
+        {children}
+      </main>
 
-      {/* Bottom nav */}
-      <MobileNav />
+      {/* Bottom nav (hidden on score entry focus mode) */}
+      {!hideBottomNav && <MobileNav />}
     </div>
   );
 }
