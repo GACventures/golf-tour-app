@@ -14,6 +14,7 @@ type Round = {
   course_id: string | null;
   is_locked: boolean | null;
   played_on: string | null;
+  round_no: number | null;
   courses?: CourseRel | CourseRel[] | null;
 };
 
@@ -73,7 +74,7 @@ export default function MobileRoundScoringSelectPage() {
       try {
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
-          .select("id,name,course_id,is_locked,played_on,courses(name)")
+          .select("id,name,course_id,is_locked,played_on,round_no,courses(name)")
           .eq("id", roundId)
           .eq("tour_id", tourId)
           .single();
@@ -159,6 +160,13 @@ export default function MobileRoundScoringSelectPage() {
 
   const isLocked = round?.is_locked === true;
 
+  const roundLabel = useMemo(() => {
+    const n = round?.round_no;
+    if (Number.isFinite(Number(n)) && Number(n) > 0) return `Round ${Number(n)}`;
+    // fallback if round_no is null
+    return round?.name?.trim() ? round.name.trim() : "Round";
+  }, [round]);
+
   const playingPlayers = useMemo(() => {
     const list = roundPlayers
       .filter((rp) => rp.playing === true)
@@ -228,7 +236,8 @@ export default function MobileRoundScoringSelectPage() {
   }, [meId, buddyId, playersInSameGroup]);
 
   function goBack() {
-    router.push(`/m/tours/${tourId}/rounds/${roundId}`);
+    // ✅ back to ROUNDS LIST (avoid 404)
+    router.push(`/m/tours/${tourId}/rounds`);
   }
 
   if (loading) {
@@ -240,21 +249,26 @@ export default function MobileRoundScoringSelectPage() {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xl font-semibold">Scoring</div>
-          <div className="mt-1 truncate text-sm text-gray-600">{round?.name ?? "Round"}</div>
-          <div className="mt-1 text-sm text-gray-600">Course: {courseName}</div>
-          <div className="mt-1 text-sm">
+
+          {/* ✅ show round number/label clearly */}
+          <div className="mt-1 truncate text-base font-semibold text-gray-800">{roundLabel}</div>
+
+          <div className="mt-1 text-base text-gray-700">Course: {courseName}</div>
+
+          <div className="mt-1 text-base">
             Status:{" "}
             <span className={isLocked ? "text-red-600 font-semibold" : "text-green-700 font-semibold"}>
               {isLocked ? "Locked" : "Open"}
             </span>
           </div>
+
           {errorMsg ? <div className="mt-2 text-sm text-red-600">{errorMsg}</div> : null}
         </div>
 
         <button
           type="button"
           onClick={goBack}
-          className="rounded-lg border px-3 py-2 text-sm font-semibold hover:bg-gray-50 active:bg-gray-100"
+          className="rounded-xl border px-4 py-3 text-base font-semibold hover:bg-gray-50 active:bg-gray-100"
         >
           Back
         </button>
@@ -269,11 +283,11 @@ export default function MobileRoundScoringSelectPage() {
           </div>
         </div>
       ) : (
-        <div className="mt-4 space-y-4">
-          <label className="block text-sm">
-            <div className="mb-1 font-semibold">Me</div>
+        <div className="mt-5 space-y-5">
+          <label className="block">
+            <div className="mb-2 text-base font-semibold">Me</div>
             <select
-              className="w-full rounded-xl border px-3 py-3 bg-white"
+              className="w-full rounded-2xl border px-4 py-4 bg-white text-base"
               value={meId}
               onChange={(e) => {
                 const nextMe = e.target.value;
@@ -292,10 +306,10 @@ export default function MobileRoundScoringSelectPage() {
             </select>
           </label>
 
-          <label className="block text-sm">
-            <div className="mb-1 font-semibold">{buddyLabel}</div>
+          <label className="block">
+            <div className="mb-2 text-base font-semibold">{buddyLabel}</div>
             <select
-              className="w-full rounded-xl border px-3 py-3 bg-white"
+              className="w-full rounded-2xl border px-4 py-4 bg-white text-base"
               value={buddyId}
               onChange={(e) => {
                 buddyManuallySetRef.current = true;
@@ -339,7 +353,7 @@ export default function MobileRoundScoringSelectPage() {
           </label>
 
           {meId ? (
-            <div className="text-xs text-gray-600">
+            <div className="text-sm text-gray-600">
               {playersInSameGroup.length > 0
                 ? "Buddy is suggested from your group, but you can override."
                 : "No group found for you yet (or groups not generated). Buddy is optional."}
@@ -349,7 +363,7 @@ export default function MobileRoundScoringSelectPage() {
           {meId && !isLocked ? (
             <Link
               href={targetUrl}
-              className="block w-full rounded-xl bg-gray-900 px-4 py-3 text-center text-sm font-semibold text-white hover:bg-gray-800 active:bg-gray-700"
+              className="block w-full rounded-2xl bg-gray-900 px-4 py-4 text-center text-base font-semibold text-white hover:bg-gray-800 active:bg-gray-700"
             >
               Continue to scoring
             </Link>
@@ -357,7 +371,7 @@ export default function MobileRoundScoringSelectPage() {
             <button
               type="button"
               disabled
-              className="w-full rounded-xl bg-gray-400 px-4 py-3 text-center text-sm font-semibold text-white"
+              className="w-full rounded-2xl bg-gray-400 px-4 py-4 text-center text-base font-semibold text-white"
             >
               {isLocked ? "Round is locked" : "Select Me to continue"}
             </button>
