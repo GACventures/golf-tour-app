@@ -960,8 +960,7 @@ export default function MobileLeaderboardsPage() {
   }) {
     const start = useRef<{ x: number; y: number } | null>(null);
 
-    const base =
-      "block w-full min-w-[44px] rounded-md px-2 py-1 text-right select-none touch-manipulation";
+    const base = "block w-full min-w-[44px] rounded-md px-2 py-1 text-right select-none touch-manipulation";
     const cls = counted
       ? `${base} border-2 border-blue-500 hover:bg-gray-50 active:bg-gray-100`
       : `${base} border border-transparent hover:bg-gray-50 active:bg-gray-100`;
@@ -1178,11 +1177,7 @@ export default function MobileLeaderboardsPage() {
 
                             return (
                               <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                                <TapCell
-                                  href={href}
-                                  counted={counted}
-                                  ariaLabel="Open pair round detail"
-                                >
+                                <TapCell href={href} counted={counted} ariaLabel="Open pair round detail">
                                   {val}
                                 </TapCell>
                               </td>
@@ -1208,17 +1203,15 @@ export default function MobileLeaderboardsPage() {
                           const val = row.perRound[r.id] ?? 0;
                           const counted = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
 
+                          // ✅ This is the missing navigation: go to the same hole-by-hole page used by
+                          // Rounds -> (Round) -> Results -> (Player)
+                          const href = `/m/tours/${tourId}/rounds/${r.id}/results/${row.playerId}`;
+
                           return (
                             <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                              <span
-                                className={
-                                  counted
-                                    ? "inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1"
-                                    : "inline-flex min-w-[44px] justify-end rounded-md px-2 py-1"
-                                }
-                              >
+                              <TapCell href={href} counted={counted} ariaLabel="Open player round detail">
                                 {val}
-                              </span>
+                              </TapCell>
                             </td>
                           );
                         })}
@@ -1229,8 +1222,7 @@ export default function MobileLeaderboardsPage() {
               </table>
             </div>
 
-            {(kind === "individual" && individualRule.mode === "BEST_N") ||
-            (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
+            {(kind === "individual" && individualRule.mode === "BEST_N") || (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
               <div className="mt-3 text-xs text-gray-600">
                 Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour
                 total.
