@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 
 import MobileNav from "../_components/MobileNav";
 import { supabase } from "@/lib/supabaseClient";
@@ -235,13 +235,43 @@ function pickBestRoundIds(args: {
   return chosen;
 }
 
+function pickBestRoundIdForPair(args: {
+  sortedRounds: RoundRow[];
+  finalRoundId: string;
+  rule: PairRule;
+  perRound: Record<string, number>;
+  countedIds: Set<string>;
+}) {
+  const { sortedRounds, finalRoundId, rule, perRound, countedIds } = args;
+
+  if (!sortedRounds.length) return "";
+
+  // If BEST_Q: pick best-scoring among counted
+  if (rule.mode === "BEST_Q" && countedIds.size > 0) {
+    let bestId = "";
+    let bestVal = -1;
+    for (const rid of countedIds) {
+      const v = Number(perRound[rid] ?? 0) || 0;
+      if (v > bestVal) {
+        bestVal = v;
+        bestId = rid;
+      }
+    }
+    if (bestId) return bestId;
+  }
+
+  // Otherwise: default to final round if present
+  if (finalRoundId) return finalRoundId;
+
+  // Fallback: last round in list
+  return sortedRounds[sortedRounds.length - 1].id;
+}
+
 // -----------------------------
 // Page
 // -----------------------------
 export default function MobileLeaderboardsPage() {
   const params = useParams<{ id?: string }>();
-  const router = useRouter();
-
   const tourId = String(params?.id ?? "").trim();
 
   const [loading, setLoading] = useState(true);
@@ -1098,44 +1128,69 @@ export default function MobileLeaderboardsPage() {
                         </td>
                       </tr>
                     ) : (
-                      pairRows.map((row) => (
-                        <tr key={row.groupId} className="border-b last:border-b-0">
-                          <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                            {row.name}
-                          </td>
+                      pairRows.map((row) => {
+                        const defaultRoundId = pickBestRoundIdForPair({
+                          sortedRounds,
+                          finalRoundId,
+                          rule: pairRule,
+                          perRound: row.perRound,
+                          countedIds: row.countedIds,
+                        });
 
-                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
-                              {row.tourTotal}
-                            </span>
-                          </td>
+                        const tourHref = defaultRoundId
+                          ? `/m/tours/${tourId}/leaderboards/pairs/${row.groupId}/${defaultRoundId}`
+                          : "";
 
-                          {sortedRounds.map((r) => {
-                            const val = row.perRound[r.id] ?? 0;
-                            const counted = pairRule.mode === "BEST_Q" ? row.countedIds.has(r.id) : false;
+                        return (
+                          <tr key={row.groupId} className="border-b last:border-b-0">
+                            <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                              {row.name}
+                            </td>
 
-                            const href = `/m/tours/${tourId}/leaderboards/pairs/${row.groupId}/${r.id}`;
-
-                            return (
-                              <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                                <button
-                                  type="button"
-                                  onClick={() => router.push(href)}
-                                  className={
-                                    counted
-                                      ? "w-full inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1 hover:bg-gray-50 active:bg-gray-100"
-                                      : "w-full inline-flex min-w-[44px] justify-end rounded-md border border-transparent px-2 py-1 hover:bg-gray-50 active:bg-gray-100"
-                                  }
-                                  style={{ pointerEvents: "auto" }}
-                                  aria-label="Open pair round detail"
+                            {/* TOUR total is now tappable */}
+                            <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
+                              {tourHref ? (
+                                <Link
+                                  href={tourHref}
+                                  prefetch={false}
+                                  className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1 hover:opacity-90 active:opacity-80"
+                                  aria-label="Open pair detail (default round)"
                                 >
-                                  {val}
-                                </button>
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))
+                                  {row.tourTotal}
+                                </Link>
+                              ) : (
+                                <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
+                                  {row.tourTotal}
+                                </span>
+                              )}
+                            </td>
+
+                            {sortedRounds.map((r) => {
+                              const val = row.perRound[r.id] ?? 0;
+                              const counted = pairRule.mode === "BEST_Q" ? row.countedIds.has(r.id) : false;
+
+                              const href = `/m/tours/${tourId}/leaderboards/pairs/${row.groupId}/${r.id}`;
+
+                              return (
+                                <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
+                                  <Link
+                                    href={href}
+                                    prefetch={false}
+                                    className={
+                                      counted
+                                        ? "block w-full min-w-[44px] rounded-md border-2 border-blue-500 px-2 py-1 text-right hover:bg-gray-50 active:bg-gray-100"
+                                        : "block w-full min-w-[44px] rounded-md border border-transparent px-2 py-1 text-right hover:bg-gray-50 active:bg-gray-100"
+                                    }
+                                    aria-label="Open pair round detail"
+                                  >
+                                    {val}
+                                  </Link>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })
                     )
                   ) : (
                     individualRows.map((row) => (
