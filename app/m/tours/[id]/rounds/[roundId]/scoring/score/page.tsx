@@ -8,6 +8,7 @@ import { netStablefordPointsForHole } from "@/lib/stableford";
 import { recalcAndSaveTourHandicaps } from "@/lib/handicaps/recalcAndSaveTourHandicaps";
 
 type Tee = "M" | "F";
+type TabKey = "entry" | "summary";
 
 type CourseRel = { name: string };
 
@@ -125,6 +126,12 @@ export default function MobileScoreEntryPage() {
 
   const [hole, setHole] = useState(1);
 
+  // Tabs restored (Entry + Summary)
+  const [tab, setTab] = useState<TabKey>("entry");
+
+  // Summary player (Me or Buddy)
+  const [summaryPid, setSummaryPid] = useState<string>("");
+
   const isLocked = round?.is_locked === true;
 
   // FX state + timeouts
@@ -138,7 +145,7 @@ export default function MobileScoreEntryPage() {
     }
   }
 
-  // Lock page scroll/bounce for this screen only
+  // Lock page scroll/bounce for this screen only (focus mode)
   useEffect(() => {
     const html = document.documentElement;
     const body = document.body;
@@ -158,7 +165,7 @@ export default function MobileScoreEntryPage() {
     };
   }, []);
 
-  // Whole-page slide style
+  // Whole-page slide style (entry tab only)
   const fxStyle: React.CSSProperties = useMemo(() => {
     const base = "transform 330ms ease-in-out";
     const off = "105%";
@@ -338,6 +345,12 @@ export default function MobileScoreEntryPage() {
 
         // baseline for unsaved: me only
         initialScoresRef.current = { [meId]: nextScores[meId] ?? {} };
+
+        // default summary player
+        setSummaryPid((prev) => prev || meId || buddyId || ids[0] || "");
+
+        // default tab back to entry when loading
+        setTab("entry");
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load score entry.");
@@ -427,9 +440,15 @@ export default function MobileScoreEntryPage() {
     });
   }
 
-  function sumPoints(pid: string): number {
+  function sumPoints(pid: string, from: number, to: number): number {
     let sum = 0;
-    for (let h = 1; h <= 18; h++) sum += pointsFor(pid, h);
+    for (let h = from; h <= to; h++) sum += pointsFor(pid, h);
+    return sum;
+  }
+
+  function sumShots(pid: string, from: number, to: number): number {
+    let sum = 0;
+    for (let h = from; h <= to; h++) sum += rawToShots(scores[pid]?.[h] ?? "");
     return sum;
   }
 
@@ -547,10 +566,11 @@ export default function MobileScoreEntryPage() {
     }
   }
 
-  // Swipe handling: left = next, right = prev
+  // Swipe handling: left = next, right = prev (Entry tab only)
   const swipeRef = useRef<{ x: number; y: number; t: number } | null>(null);
 
   function animateHoleChange(dir: "next" | "prev") {
+    if (tab !== "entry") return;
     if (holeFx.stage !== "idle") return;
 
     const nextHole = clamp(hole + (dir === "next" ? 1 : -1), 1, 18);
@@ -614,12 +634,141 @@ export default function MobileScoreEntryPage() {
     }
   }
 
-  function openPlayerSummary(pid: string) {
+  // ✅ New behavior: tap Total pts => switch to in-page summary showing Par + SI
+  function openInPageSummaryFor(pid: string) {
     if (!pid) return;
-    router.push(`/m/tours/${tourId}/rounds/${roundId}/results/${pid}`);
+    setSummaryPid(pid);
+    setTab("summary");
   }
 
-  function HoleBox() {
+  function SummaryPlayerToggleTop() {
+    const hasBuddy = Boolean(buddyId);
+
+    return (
+      <div className="px-4 pb-2">
+        <div className="flex items-center justify-center">
+          <div className={`w-[260px] rounded-md border ${borderLight} bg-white text-slate-900 text-center py-2`}>
+            <div className="text-xs font-semibold tracking-wide text-slate-600">SUMMARY PLAYER</div>
+
+            <div className="mt-2 inline-flex rounded-md overflow-hidden border border-slate-300">
+              <button
+                type="button"
+                onClick={() => setSummaryPid(meId)}
+                className={`px-4 py-2 text-base font-bold ${
+                  summaryPid === meId ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
+                }`}
+              >
+                {meName}
+              </button>
+
+              {hasBuddy ? (
+                <button
+                  type="button"
+                  onClick={() => setSummaryPid(buddyId)}
+                  className={`px-4 py-2 text-base font-bold ${
+                    summaryPid === buddyId ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
+                  }`}
+                >
+                  {buddyName}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function SummaryTotalsRow(props: { label: string; shots: number; pts: number; onJumpTo?: number }) {
+    const { label, shots, pts, onJumpTo } = props;
+
+    return (
+      <div className="px-3 py-2 border-t border-slate-300 bg-slate-50 grid grid-cols-5 gap-2 items-center text-slate-900">
+        <button
+          type="button"
+          className="rounded-md px-3 py-2 text-left font-bold bg-slate-900 text-white"
+          onClick={() => {
+            if (onJumpTo) {
+              setHole(onJumpTo);
+              setTab("entry");
+            }
+          }}
+        >
+          {label}
+        </button>
+        <div />
+        <div />
+        <div className="text-center font-bold">{shots}</div>
+        <div className="text-center font-bold">{pts}</div>
+      </div>
+    );
+  }
+
+  function SummaryTable() {
+    const pid = summaryPid || meId;
+    const tee = teeForPlayer(pid);
+
+    const frontShots = sumShots(pid, 1, 9);
+    const frontPts = sumPoints(pid, 1, 9);
+    const backShots = sumShots(pid, 10, 18);
+    const backPts = sumPoints(pid, 10, 18);
+    const totalShots = frontShots + backShots;
+    const totalPts = frontPts + backPts;
+
+    return (
+      <div className="rounded-lg overflow-hidden bg-white shadow-sm text-slate-900 border border-slate-200">
+        <div className="bg-slate-100 px-3 py-2 text-xs font-bold tracking-wide text-slate-700 grid grid-cols-5 gap-2">
+          <div>HOLE</div>
+          <div className="text-center">PAR</div>
+          <div className="text-center">SI</div>
+          <div className="text-center">STROKES</div>
+          <div className="text-center">PTS</div>
+        </div>
+
+        {Array.from({ length: 18 }).map((_, idx) => {
+          const h = idx + 1;
+          const info = holeInfoByNumberByTee[tee]?.[h] ?? { par: 0, si: 0 };
+
+          const raw = scores[pid]?.[h] ?? "";
+          const disp = raw === "P" ? "P" : raw || "—";
+          const pts = pointsFor(pid, h);
+
+          return (
+            <React.Fragment key={h}>
+              <div className="px-3 py-2 border-t border-slate-200 grid grid-cols-5 gap-2 items-center">
+                <button
+                  type="button"
+                  className="rounded-md px-3 py-2 text-left font-bold bg-slate-100 text-slate-900"
+                  onClick={() => {
+                    setHole(h);
+                    setTab("entry");
+                  }}
+                >
+                  {h}
+                </button>
+
+                <div className="text-center font-semibold">{info.par || "—"}</div>
+                <div className="text-center">{info.si || "—"}</div>
+                <div className="text-center font-bold">{disp}</div>
+                <div className="text-center font-bold">{pts}</div>
+              </div>
+
+              {h === 9 ? <SummaryTotalsRow label="Front 9" shots={frontShots} pts={frontPts} onJumpTo={1} /> : null}
+
+              {h === 18 ? (
+                <>
+                  <SummaryTotalsRow label="Back 9" shots={backShots} pts={backPts} onJumpTo={10} />
+                  <SummaryTotalsRow label="Total" shots={totalShots} pts={totalPts} onJumpTo={1} />
+                </>
+              ) : null}
+            </React.Fragment>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function HoleBoxEntryOnly() {
     return (
       <div className="px-4 pb-2">
         <div className="flex items-center justify-center">
@@ -648,11 +797,17 @@ export default function MobileScoreEntryPage() {
 
     const pts = pointsFor(pid, hole);
 
-    // ✅ Change #4: show "P" in strokes display (not —)
+    // Show "P" in strokes display when picked up
     const grossDisplay = pickup ? "P" : raw && raw !== "P" ? raw : "0";
 
     const info = infoFor(pid, hole);
-    const totalPts = useMemo(() => sumPoints(pid), [pid, scores, meHcp, buddyHcp, parsByTee]);
+
+    const totalPts = useMemo(() => {
+      let sum = 0;
+      for (let h = 1; h <= 18; h++) sum += pointsFor(pid, h);
+      return sum;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scores, pid, meHcp, buddyHcp, parsByTee]);
 
     const isFemale = teeForPlayer(pid) === "F";
     const headerClass = isFemale ? headerPink : headerBlue;
@@ -741,7 +896,7 @@ export default function MobileScoreEntryPage() {
             </div>
           </div>
 
-          {/* ✅ Change #3: tap Total pts -> go to that player's summary page */}
+          {/* Tap Total pts => in-page Summary (Par+SI) for that player */}
           <div className="mt-2 flex justify-between text-xs text-slate-600">
             <button type="button" className="underline" onClick={() => setRaw(pid, hole, "")} disabled={isLocked}>
               Clear hole
@@ -749,7 +904,7 @@ export default function MobileScoreEntryPage() {
 
             <button
               type="button"
-              onClick={() => openPlayerSummary(pid)}
+              onClick={() => openInPageSummaryFor(pid)}
               className="font-extrabold text-slate-900 underline underline-offset-2"
               aria-label={`Open ${name} summary`}
             >
@@ -760,6 +915,9 @@ export default function MobileScoreEntryPage() {
       </div>
     );
   }
+
+  const meOkNow = !!meId && playingIds.includes(meId);
+  const buddyOkNow = !buddyId || playingIds.includes(buddyId);
 
   if (loading) {
     return <div className="mx-auto w-full max-w-md px-4 py-4 pb-24 text-sm opacity-70">Loading…</div>;
@@ -774,7 +932,7 @@ export default function MobileScoreEntryPage() {
     );
   }
 
-  if (!meOk) {
+  if (!meOkNow) {
     return (
       <div className="p-4 space-y-3 text-slate-900">
         <div className="text-xl font-semibold">{round.name}</div>
@@ -789,7 +947,7 @@ export default function MobileScoreEntryPage() {
     );
   }
 
-  if (!buddyOk) {
+  if (!buddyOkNow) {
     return (
       <div className="p-4 space-y-3 text-slate-900">
         <div className="text-xl font-semibold">{round.name}</div>
@@ -802,11 +960,10 @@ export default function MobileScoreEntryPage() {
     );
   }
 
-  // ✅ Change #1 + #2:
-  // Full-screen, no tour/home header, no Entry/Summary tabs. Keep only minimal back + save.
+  // Focus mode screen (layout hides global nav/header)
   return (
     <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden">
-      {/* Minimal top strip (not tour/home header) */}
+      {/* Minimal top strip */}
       <div className="h-14 px-4 flex items-center justify-between border-b border-slate-200">
         <button
           type="button"
@@ -830,32 +987,67 @@ export default function MobileScoreEntryPage() {
         </button>
       </div>
 
-      {/* Hole box */}
-      <HoleBox />
+      {/* Hole box (Entry tab) OR Summary selector */}
+      {tab === "entry" ? <HoleBoxEntryOnly /> : <SummaryPlayerToggleTop />}
 
-      {/* Main content locked to screen; swipe to change hole */}
+      {/* Tabs restored */}
+      <div className="px-4">
+        <div className="rounded-md border border-slate-300 overflow-hidden flex bg-white">
+          <button
+            type="button"
+            onClick={() => setTab("entry")}
+            className={`flex-1 py-2 text-sm font-semibold ${
+              tab === "entry" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"
+            }`}
+          >
+            Entry
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("summary")}
+            className={`flex-1 py-2 text-sm font-semibold ${
+              tab === "summary" ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
+            }`}
+          >
+            Summary
+          </button>
+        </div>
+      </div>
+
+      {/* Content area: allow internal scroll within fixed screen */}
       <div
-        className="px-4 pb-3 space-y-3"
-        style={fxStyle}
-        onTouchStart={onTouchStart}
-        onTouchEnd={onTouchEnd}
+        className="px-4 py-3 space-y-3 overflow-y-auto"
+        style={{
+          height: "calc(100dvh - 56px - 84px)", // top strip (56) + hole/summary + tabs (approx)
+        }}
+        onTouchStart={tab === "entry" ? onTouchStart : undefined}
+        onTouchEnd={tab === "entry" ? onTouchEnd : undefined}
       >
-        <PlayerCard pid={meId} name={meName} hcp={meHcp} tee={meTee} />
-        {buddyId ? <PlayerCard pid={buddyId} name={buddyName} hcp={buddyHcp} tee={buddyTee} /> : null}
+        {tab === "entry" ? (
+          <div style={fxStyle}>
+            <PlayerCard pid={meId} name={meName} hcp={meHcp} tee={meTee} />
+            {buddyId ? <PlayerCard pid={buddyId} name={buddyName} hcp={buddyHcp} tee={buddyTee} /> : null}
 
-        <div className="text-xs text-slate-600 text-center">
-          Swipe <span className="font-semibold">left/right</span> to change hole.{" "}
-          {dirty ? <span className="text-amber-700 font-semibold">Unsaved (Me)</span> : null}
-          {savedMsg ? <span className="text-green-700 font-semibold"> {savedMsg}</span> : null}
-          {saveErr ? <span className="text-red-600 font-semibold"> {saveErr}</span> : null}
-          {rehandicapMsg ? <span className="text-sky-700 font-semibold"> {rehandicapMsg}</span> : null}
-        </div>
+            <div className="text-xs text-slate-600 text-center">
+              Swipe <span className="font-semibold">left/right</span> to change hole.{" "}
+              {dirty ? <span className="text-amber-700 font-semibold">Unsaved (Me)</span> : null}
+              {savedMsg ? <span className="text-green-700 font-semibold"> {savedMsg}</span> : null}
+              {saveErr ? <span className="text-red-600 font-semibold"> {saveErr}</span> : null}
+              {rehandicapMsg ? <span className="text-sky-700 font-semibold"> {rehandicapMsg}</span> : null}
+            </div>
 
-        <div className="text-[11px] text-slate-500 text-center">
-          Note: Buddy scores are for viewing/entry only and are not saved.
-        </div>
+            <div className="text-[11px] text-slate-500 text-center">
+              Note: Buddy scores are for viewing/entry only and are not saved.
+            </div>
 
-        {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
+            {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
+          </div>
+        ) : (
+          <>
+            <SummaryTable />
+            {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
+          </>
+        )}
       </div>
     </div>
   );
