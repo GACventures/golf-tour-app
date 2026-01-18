@@ -29,8 +29,8 @@ function getCourseName(r: RoundRow) {
 
 function normalizeMode(raw: string | null): Mode {
   if (raw === "tee-times" || raw === "score" || raw === "results") return raw;
-  // DEFAULT = tee-times (black)
-  return "tee-times";
+  // ✅ DEFAULT = score (black)
+  return "score";
 }
 
 function pickBestRoundDateISO(r: RoundRow): string | null {
@@ -200,7 +200,7 @@ export default function MobileRoundsHubPage() {
 
       <div className="mx-auto w-full max-w-md px-4 pt-4">
         <div className="flex gap-2">
-          {/* ✅ Score Entry FIRST */}
+          {/* Score Entry FIRST */}
           <button
             className={`${pillBase} ${mode === "score" ? pillActive : pillIdle}`}
             onClick={() => setMode("score")}
@@ -208,7 +208,7 @@ export default function MobileRoundsHubPage() {
             Score Entry
           </button>
 
-          {/* ✅ Tee times SECOND */}
+          {/* Tee times SECOND */}
           <button
             className={`${pillBase} ${mode === "tee-times" ? pillActive : pillIdle}`}
             onClick={() => setMode("tee-times")}
