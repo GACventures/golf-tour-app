@@ -279,11 +279,7 @@ export default function MobileLeaderboardsPage() {
       setErrorMsg("");
 
       try {
-        const { data: tData, error: tErr } = await supabase
-          .from("tours")
-          .select("id,name")
-          .eq("id", tourId)
-          .single();
+        const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
         if (!alive) return;
         setTour(tData as Tour);
@@ -659,9 +655,7 @@ export default function MobileLeaderboardsPage() {
     if (kind === "pairs") {
       if (pairRule.mode === "ALL") return "Pairs Better Ball · Total points across all rounds";
       const r = pairRule;
-      return r.finalRequired
-        ? `Pairs Better Ball · Best ${r.q} rounds (Final required)`
-        : `Pairs Better Ball · Best ${r.q} rounds`;
+      return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
     }
 
     return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 for each zero · All rounds`;
@@ -1150,17 +1144,18 @@ export default function MobileLeaderboardsPage() {
                           const val = row.perRound[r.id] ?? 0;
                           const counted = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
 
+                          // ✅ FIX: make each per-round score cell a link to that round's player detail page
+                          const href = `/m/tours/${tourId}/rounds/${r.id}/results/${row.playerId}`;
+
+                          const cls = counted
+                            ? "inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1 hover:bg-gray-50 active:bg-gray-100"
+                            : "inline-flex min-w-[44px] justify-end rounded-md px-2 py-1 hover:bg-gray-50 active:bg-gray-100";
+
                           return (
                             <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                              <span
-                                className={
-                                  counted
-                                    ? "inline-flex min-w-[44px] justify-end rounded-md border-2 border-blue-500 px-2 py-1"
-                                    : "inline-flex min-w-[44px] justify-end rounded-md px-2 py-1"
-                                }
-                              >
+                              <Link href={href} className={cls} title="View player round details">
                                 {val}
-                              </span>
+                              </Link>
                             </td>
                           );
                         })}
@@ -1171,8 +1166,7 @@ export default function MobileLeaderboardsPage() {
               </table>
             </div>
 
-            {(kind === "individual" && individualRule.mode === "BEST_N") ||
-            (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
+            {(kind === "individual" && individualRule.mode === "BEST_N") || (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
               <div className="mt-3 text-xs text-gray-600">
                 Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour
                 total.
