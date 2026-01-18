@@ -1,4 +1,3 @@
-
 // app/m/tours/[id]/rounds/page.tsx
 "use client";
 
@@ -64,7 +63,10 @@ function fmtAuMelbourneDate(d: Date | null): string {
 function isMissingColumnError(msg: string, column: string) {
   const m = msg.toLowerCase();
   const c = column.toLowerCase();
-  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
+  return (
+    m.includes("does not exist") &&
+    (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `))
+  );
 }
 
 export default function MobileRoundsHubPage() {
@@ -198,18 +200,22 @@ export default function MobileRoundsHubPage() {
 
       <div className="mx-auto w-full max-w-md px-4 pt-4">
         <div className="flex gap-2">
-          <button
-            className={`${pillBase} ${mode === "tee-times" ? pillActive : pillIdle}`}
-            onClick={() => setMode("tee-times")}
-          >
-            Tee times
-          </button>
+          {/* ✅ Score Entry FIRST */}
           <button
             className={`${pillBase} ${mode === "score" ? pillActive : pillIdle}`}
             onClick={() => setMode("score")}
           >
             Score Entry
           </button>
+
+          {/* ✅ Tee times SECOND */}
+          <button
+            className={`${pillBase} ${mode === "tee-times" ? pillActive : pillIdle}`}
+            onClick={() => setMode("tee-times")}
+          >
+            Tee times
+          </button>
+
           <button
             className={`${pillBase} ${mode === "results" ? pillActive : pillIdle}`}
             onClick={() => setMode("results")}
