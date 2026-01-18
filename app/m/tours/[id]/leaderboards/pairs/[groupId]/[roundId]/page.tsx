@@ -12,31 +12,19 @@ type RoundRow = {
   id: string;
   tour_id: string;
   name: string | null;
-  round_no: number | null;
-  played_on: string | null;
   created_at: string | null;
+  round_no: number | null;
   course_id: string | null;
-  courses?: { name: string } | { name: string }[] | null;
+  played_on: string | null;
+  courses?: { name: string } | null;
 };
 
-type Player = {
-  id: string;
-  name: string;
-  gender?: string | null;
-};
-
-type GroupMemberRowRaw = {
-  group_id: string;
-  player_id: string;
-  position: number | null;
-  players?: any; // supabase nested (object or array)
-};
-
-type RoundPlayerRow = {
-  round_id: string;
-  player_id: string;
-  playing: boolean | null;
-  playing_handicap: number | null;
+type ParRow = {
+  course_id: string;
+  hole_number: number;
+  tee: Tee;
+  par: number;
+  stroke_index: number;
 };
 
 type ScoreRow = {
@@ -47,12 +35,20 @@ type ScoreRow = {
   pickup?: boolean | null;
 };
 
-type ParRow = {
-  course_id: string;
-  hole_number: number;
-  tee: Tee;
-  par: number;
-  stroke_index: number;
+type RoundPlayerRow = {
+  round_id: string;
+  player_id: string;
+  playing: boolean;
+  playing_handicap: number | null;
+};
+
+type PlayerLite = { id: string; name: string; gender?: string | null };
+
+type GroupMemberRow = {
+  group_id: string;
+  player_id: string;
+  position: number | null;
+  players: PlayerLite | PlayerLite[] | null;
 };
 
 type Shade = "ace" | "eagle" | "birdie" | "par" | "bogey" | "dbogey" | "none";
@@ -64,19 +60,44 @@ const BLUE_ACE = "#082B5C";
 const BLUE_EAGLE = "#1757D6";
 const BLUE_BIRDIE = "#4DA3FF";
 
-function blueStyleForShade(s: Shade): React.CSSProperties | undefined {
-  if (s === "ace") return { backgroundColor: BLUE_ACE, color: "white" };
-  if (s === "eagle") return { backgroundColor: BLUE_EAGLE, color: "white" };
-  if (s === "birdie") return { backgroundColor: BLUE_BIRDIE, color: "white" };
-  return undefined;
+function formatDate(iso: string | null | undefined) {
+  if (!iso) return "";
+  const raw = String(iso).trim();
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+  const d = new Date(isDateOnly ? `${raw}T00:00:00.000Z` : raw);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(d);
 }
 
-function shadeForGross(gross: number | null, pickup: boolean, par: number): Shade {
-  if (pickup) return "dbogey";
-  if (gross === null) return "none";
-  if (!Number.isFinite(gross)) return "none";
+function asSingle<T>(v: T | T[] | null | undefined): T | null {
+  if (!v) return null;
+  return Array.isArray(v) ? v[0] ?? null : v;
+}
 
-  const diff = gross - par;
+function normalizeTee(v: any): Tee {
+  const s = String(v ?? "").trim().toUpperCase();
+  return s === "F" ? "F" : "M";
+}
+
+function rawScoreFor(strokes: number | null, pickup?: boolean | null) {
+  if (pickup) return "P";
+  if (strokes === null || strokes === undefined) return "";
+  const n = Number(strokes);
+  return Number.isFinite(n) ? String(n) : "";
+}
+
+function shadeForGross(gross: number | null, pickup: boolean | null | undefined, par: number): Shade {
+  if (pickup) return "dbogey";
+  if (!Number.isFinite(Number(gross))) return "none";
+
+  const g = Number(gross);
+  const diff = g - Number(par);
   if (diff <= -3) return "ace";
   if (diff === -2) return "eagle";
   if (diff === -1) return "birdie";
@@ -85,98 +106,61 @@ function shadeForGross(gross: number | null, pickup: boolean, par: number): Shad
   return "dbogey";
 }
 
-function normalizeTee(v: any): Tee {
-  const s = String(v ?? "").trim().toUpperCase();
-  return s === "F" ? "F" : "M";
+function blueStyleForShade(s: Shade): React.CSSProperties | undefined {
+  if (s === "ace") return { backgroundColor: BLUE_ACE, color: "white" };
+  if (s === "eagle") return { backgroundColor: BLUE_EAGLE, color: "white" };
+  if (s === "birdie") return { backgroundColor: BLUE_BIRDIE, color: "white" };
+  return undefined;
 }
 
-function asSingle<T>(v: T | T[] | null | undefined): T | null {
-  if (!v) return null;
-  return Array.isArray(v) ? v[0] ?? null : v;
+async function loadParsForCourse(courseId: string) {
+  const { data, error } = await supabase
+    .from("pars")
+    .select("course_id,hole_number,tee,par,stroke_index")
+    .eq("course_id", courseId)
+    .in("tee", ["M", "F"])
+    .order("hole_number", { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []) as ParRow[];
 }
 
-function formatDate(iso: string | null | undefined) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-AU", {
-    weekday: "short",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
-  if (pickup) return "P";
-  if (strokes === null || strokes === undefined) return "";
-  const n = Number(strokes);
-  return Number.isFinite(n) ? String(n) : "";
-}
-
-function sumNumericOrZero(values: Array<number | null | undefined>) {
-  let s = 0;
-  for (const v of values) {
-    const n = Number(v);
-    if (Number.isFinite(n)) s += n;
-  }
-  return s;
-}
-
-function cellBaseClasses() {
-  return "h-10 min-w-[52px] px-2 flex items-center justify-end rounded-md text-sm font-extrabold";
-}
-
-function GrossBox({
-  shade,
-  label,
-}: {
-  shade: Shade;
-  label: string;
-}) {
+function GrossBox({ shade, label }: { shade: Shade; label: string }) {
   const isBlue = shade === "ace" || shade === "eagle" || shade === "birdie";
-
-  const base = cellBaseClasses();
-  const cls =
+  const base = "inline-flex min-w-[22px] justify-center rounded px-1 py-[1px] text-[12px] font-extrabold leading-5";
+  const className =
     shade === "par"
       ? `${base} bg-white text-gray-900 border border-gray-300`
       : shade === "bogey"
       ? `${base} bg-[#f8cfcf] text-gray-900`
       : shade === "dbogey"
       ? `${base} bg-[#c0392b] text-white`
-      : `${base} bg-transparent text-gray-900 border border-transparent`;
+      : `${base} bg-transparent text-gray-900`;
 
   return (
-    <div className={cls} style={isBlue ? blueStyleForShade(shade) : undefined}>
+    <span className={className} style={isBlue ? blueStyleForShade(shade) : undefined}>
       {label}
-    </div>
+    </span>
   );
 }
 
-function PointsBox({
+function StablefordBox({
   value,
-  contributed,
+  contributes,
   tied,
 }: {
   value: number;
-  contributed: boolean;
+  contributes: boolean;
   tied: boolean;
 }) {
-  const base = cellBaseClasses();
-
-  // Stableford cell itself is NOT coloured; only outline rules apply.
-  // - contributed => dashed outline
-  // - tied + contributed => solid outline (around both)
-  const outline = tied
-    ? "border-2 border-gray-900"
-    : contributed
-    ? "border-2 border-dashed border-gray-600"
-    : "border border-transparent";
-
-  return <div className={`${base} bg-white text-gray-900 ${outline}`}>{value}</div>;
+  const base =
+    "inline-flex min-w-[22px] justify-center rounded px-1 py-[1px] text-[12px] font-extrabold leading-5";
+  const border = contributes ? "border-2 border-dotted border-slate-700" : "border border-transparent";
+  const ring = tied ? "ring-2 ring-slate-400 ring-inset" : "";
+  return <span className={`${base} ${border} ${ring}`}>{value}</span>;
 }
 
-export default function PairsRoundDetailPage() {
+export default function MobilePairsRoundDetailPage() {
   const params = useParams<{ id?: string; groupId?: string; roundId?: string }>();
   const router = useRouter();
 
@@ -188,15 +172,16 @@ export default function PairsRoundDetailPage() {
   const [errorMsg, setErrorMsg] = useState("");
 
   const [round, setRound] = useState<RoundRow | null>(null);
-  const [members, setMembers] = useState<Player[]>([]);
-
-  const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
-  const [scores, setScores] = useState<ScoreRow[]>([]);
+  const [members, setMembers] = useState<PlayerLite[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
+  const [scores, setScores] = useState<ScoreRow[]>([]);
+  const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
 
   function goBack() {
-    // back to leaderboards (pairs tab)
-    router.push(`/m/tours/${tourId}/leaderboards`);
+    router.back();
+    queueMicrotask(() => {
+      if (tourId) router.push(`/m/tours/${tourId}/leaderboards`);
+    });
   }
 
   useEffect(() => {
@@ -209,93 +194,70 @@ export default function PairsRoundDetailPage() {
       setErrorMsg("");
 
       try {
-        // Round
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
-          .select("id,tour_id,name,round_no,played_on,created_at,course_id,courses(name)")
+          .select("id,tour_id,name,created_at,played_on,round_no,course_id,courses(name)")
           .eq("id", roundId)
           .eq("tour_id", tourId)
           .single();
         if (rErr) throw rErr;
 
         const courseId = String((rData as any)?.course_id ?? "");
+        if (!courseId) throw new Error("Round has no course_id.");
 
-        // Group members (+ players)
         const { data: gmData, error: gmErr } = await supabase
           .from("tour_group_members")
           .select("group_id,player_id,position,players(id,name,gender)")
           .eq("group_id", groupId);
-
         if (gmErr) throw gmErr;
 
-        const gm = (gmData ?? []) as unknown as GroupMemberRowRaw[];
+        const gm = (gmData ?? []) as unknown as GroupMemberRow[];
         gm.sort(
           (a, b) =>
             (a.position ?? 999) - (b.position ?? 999) ||
-            String(a.player_id).localeCompare(String(b.player_id))
+            String(a.player_id ?? "").localeCompare(String(b.player_id ?? ""))
         );
 
-        const ppl: Player[] = gm
-          .map((row) => {
-            const pl = asSingle(row.players) as any;
-            const id = String(pl?.id ?? row.player_id);
-            const name = String(pl?.name ?? "(player)");
-            const gender = pl?.gender ?? null;
-            return { id, name, gender };
-          })
-          .filter((x) => !!x.id);
+        const players: PlayerLite[] = gm
+          .map((m) => asSingle(m.players))
+          .filter(Boolean)
+          .map((p) => ({
+            id: String((p as any).id),
+            name: String((p as any).name ?? "(player)"),
+            gender: (p as any).gender ?? null,
+          }));
 
-        // We only support 2-player pairs for this page
-        const pair = ppl.slice(0, 2);
+        if (players.length < 2) throw new Error("Pair does not have 2 members.");
 
-        // round_players for those 2 players
-        const playerIds = pair.map((p) => p.id);
-        const rpRes =
-          playerIds.length > 0
-            ? await supabase
-                .from("round_players")
-                .select("round_id,player_id,playing,playing_handicap")
-                .eq("round_id", roundId)
-                .in("player_id", playerIds)
-            : { data: [], error: null as any };
+        const p1 = players[0];
+        const p2 = players[1];
 
-        if (rpRes.error) throw rpRes.error;
+        const { data: rpData, error: rpErr } = await supabase
+          .from("round_players")
+          .select("round_id,player_id,playing,playing_handicap")
+          .eq("round_id", roundId)
+          .in("player_id", [p1.id, p2.id]);
+        if (rpErr) throw rpErr;
 
-        // scores for those 2 players
-        const scRes =
-          playerIds.length > 0
-            ? await supabase
-                .from("scores")
-                .select("round_id,player_id,hole_number,strokes,pickup")
-                .eq("round_id", roundId)
-                .in("player_id", playerIds)
-            : { data: [], error: null as any };
+        const { data: sData, error: sErr } = await supabase
+          .from("scores")
+          .select("round_id,player_id,hole_number,strokes,pickup")
+          .eq("round_id", roundId)
+          .in("player_id", [p1.id, p2.id]);
+        if (sErr) throw sErr;
 
-        if (scRes.error) throw scRes.error;
-
-        // pars for course (both tees)
-        const prRes =
-          courseId
-            ? await supabase
-                .from("pars")
-                .select("course_id,hole_number,tee,par,stroke_index")
-                .eq("course_id", courseId)
-                .in("tee", ["M", "F"])
-                .order("hole_number", { ascending: true })
-            : { data: [], error: null as any };
-
-        if (prRes.error) throw prRes.error;
+        const ps = await loadParsForCourse(courseId);
 
         if (cancelled) return;
 
         setRound(rData as any);
-        setMembers(pair);
-        setRoundPlayers((rpRes.data ?? []) as any);
-        setScores((scRes.data ?? []) as any);
-        setPars((prRes.data ?? []) as any);
+        setMembers(players.slice(0, 2));
+        setRoundPlayers((rpData ?? []) as any);
+        setScores((sData ?? []) as any);
+        setPars(ps);
       } catch (e: any) {
         if (cancelled) return;
-        setErrorMsg(e?.message ?? "Failed to load pair round detail.");
+        setErrorMsg(e?.message ?? "Failed to load pairs round detail.");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -307,414 +269,315 @@ export default function PairsRoundDetailPage() {
     };
   }, [tourId, groupId, roundId]);
 
-  const courseName = useMemo(() => {
-    const c = asSingle(round?.courses as any)?.name;
-    return String(c ?? "").trim();
-  }, [round]);
+  const p1 = members[0] ?? null;
+  const p2 = members[1] ?? null;
 
-  const dateText = useMemo(() => formatDate(round?.played_on ?? null), [round?.played_on]);
+  const hcpByPlayer = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const rp of roundPlayers) {
+      const h = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
+      m.set(String(rp.player_id), h);
+    }
+    return m;
+  }, [roundPlayers]);
 
-  const parsByTeeHole = useMemo(() => {
-    const m = new Map<Tee, Map<number, { par: number; si: number }>>();
-    for (const p of pars) {
-      const tee = normalizeTee((p as any).tee);
+  const parByTeeHole = useMemo(() => {
+    const m = new Map<string, Map<number, { par: number; si: number }>>();
+    for (const pr of pars) {
+      const tee = normalizeTee(pr.tee);
       if (!m.has(tee)) m.set(tee, new Map());
-      m.get(tee)!.set(Number((p as any).hole_number), {
-        par: Number((p as any).par),
-        si: Number((p as any).stroke_index),
-      });
+      m.get(tee)!.set(Number(pr.hole_number), { par: Number(pr.par), si: Number(pr.stroke_index) });
     }
     return m;
   }, [pars]);
 
-  const rpByPlayer = useMemo(() => {
-    const m = new Map<string, RoundPlayerRow>();
-    for (const rp of roundPlayers) m.set(String(rp.player_id), rp);
-    return m;
-  }, [roundPlayers]);
-
   const scoreByPlayerHole = useMemo(() => {
     const m = new Map<string, ScoreRow>();
-    for (const s of scores) m.set(`${s.player_id}|${Number(s.hole_number)}`, s);
+    for (const s of scores) m.set(`${String(s.player_id)}|${Number(s.hole_number)}`, s);
     return m;
   }, [scores]);
 
-  const computed = useMemo(() => {
-    const p1 = members[0] ?? null;
-    const p2 = members[1] ?? null;
+  const rows = useMemo(() => {
+    if (!p1 || !p2) return [];
 
-    const p1Tee: Tee = normalizeTee(p1?.gender);
-    const p2Tee: Tee = normalizeTee(p2?.gender);
+    const p1tee = normalizeTee(p1.gender);
+    const p2tee = normalizeTee(p2.gender);
 
-    const p1Pars = parsByTeeHole.get(p1Tee);
-    const p2Pars = parsByTeeHole.get(p2Tee);
+    const p1pars = parByTeeHole.get(p1tee);
+    const p2pars = parByTeeHole.get(p2tee);
 
-    const p1Hcp = Number.isFinite(Number(rpByPlayer.get(p1?.id ?? "")?.playing_handicap))
-      ? Number(rpByPlayer.get(p1?.id ?? "")?.playing_handicap)
-      : 0;
+    const p1hcp = hcpByPlayer.get(p1.id) ?? 0;
+    const p2hcp = hcpByPlayer.get(p2.id) ?? 0;
 
-    const p2Hcp = Number.isFinite(Number(rpByPlayer.get(p2?.id ?? "")?.playing_handicap))
-      ? Number(rpByPlayer.get(p2?.id ?? "")?.playing_handicap)
-      : 0;
+    const out: any[] = [];
+    for (let hole = 1; hole <= 18; hole++) {
+      const p1pr = p1pars?.get(hole) ?? { par: 0, si: 0 };
+      const p2pr = p2pars?.get(hole) ?? { par: 0, si: 0 };
 
-    const holes = Array.from({ length: 18 }, (_, i) => i + 1).map((hole) => {
-      // For Better Ball, we use each player's own tee pars for net stableford.
-      const p1Par = Number(p1Pars?.get(hole)?.par ?? 0);
-      const p1Si = Number(p1Pars?.get(hole)?.si ?? 0);
+      const s1 = scoreByPlayerHole.get(`${p1.id}|${hole}`);
+      const s2 = scoreByPlayerHole.get(`${p2.id}|${hole}`);
 
-      const p2Par = Number(p2Pars?.get(hole)?.par ?? 0);
-      const p2Si = Number(p2Pars?.get(hole)?.si ?? 0);
+      const p1pickup = s1?.pickup === true;
+      const p2pickup = s2?.pickup === true;
 
-      const s1 = p1 ? scoreByPlayerHole.get(`${p1.id}|${hole}`) : undefined;
-      const s2 = p2 ? scoreByPlayerHole.get(`${p2.id}|${hole}`) : undefined;
+      const p1gross = Number.isFinite(Number(s1?.strokes)) ? Number(s1?.strokes) : null;
+      const p2gross = Number.isFinite(Number(s2?.strokes)) ? Number(s2?.strokes) : null;
 
-      const p1Pickup = s1?.pickup === true;
-      const p2Pickup = s2?.pickup === true;
+      const p1raw = rawScoreFor(p1gross, p1pickup);
+      const p2raw = rawScoreFor(p2gross, p2pickup);
 
-      const p1Gross = Number.isFinite(Number(s1?.strokes)) ? Number(s1?.strokes) : null;
-      const p2Gross = Number.isFinite(Number(s2?.strokes)) ? Number(s2?.strokes) : null;
-
-      const p1Raw = normalizeRawScore(s1?.strokes ?? null, s1?.pickup ?? null);
-      const p2Raw = normalizeRawScore(s2?.strokes ?? null, s2?.pickup ?? null);
-
-      const p1Pts =
-        p1Raw && p1Par > 0 && p1Si > 0
+      const p1net =
+        p1raw && p1pr.par > 0 && p1pr.si > 0
           ? netStablefordPointsForHole({
-              rawScore: p1Raw,
-              par: p1Par,
-              strokeIndex: p1Si,
-              playingHandicap: p1Hcp,
+              rawScore: p1raw,
+              par: p1pr.par,
+              strokeIndex: p1pr.si,
+              playingHandicap: p1hcp,
             })
           : 0;
 
-      const p2Pts =
-        p2Raw && p2Par > 0 && p2Si > 0
+      const p2net =
+        p2raw && p2pr.par > 0 && p2pr.si > 0
           ? netStablefordPointsForHole({
-              rawScore: p2Raw,
-              par: p2Par,
-              strokeIndex: p2Si,
-              playingHandicap: p2Hcp,
+              rawScore: p2raw,
+              par: p2pr.par,
+              strokeIndex: p2pr.si,
+              playingHandicap: p2hcp,
             })
           : 0;
 
-      const bb = Math.max(p1Pts, p2Pts);
+      const best = Math.max(p1net, p2net);
+      const tied = p1net === p2net;
 
-      const tie = bb > 0 && p1Pts === bb && p2Pts === bb;
+      const p1contrib = tied ? true : p1net === best;
+      const p2contrib = tied ? true : p2net === best;
 
-      const p1Contrib = bb > 0 && p1Pts === bb;
-      const p2Contrib = bb > 0 && p2Pts === bb;
+      const p1shade =
+        p1pr.par > 0 && (p1pickup || p1gross !== null) ? shadeForGross(p1gross, p1pickup, p1pr.par) : "none";
+      const p2shade =
+        p2pr.par > 0 && (p2pickup || p2gross !== null) ? shadeForGross(p2gross, p2pickup, p2pr.par) : "none";
 
-      // Shading based on gross strokes vs par (use THAT player's par)
-      const p1Shade = p1Par > 0 ? shadeForGross(p1Gross, p1Pickup, p1Par) : "none";
-      const p2Shade = p2Par > 0 ? shadeForGross(p2Gross, p2Pickup, p2Par) : "none";
-
-      return {
+      out.push({
         hole,
-
-        p1: { par: p1Par, si: p1Si, gross: p1Gross, pickup: p1Pickup, net: p1Pts, shade: p1Shade, contrib: p1Contrib },
-        p2: { par: p2Par, si: p2Si, gross: p2Gross, pickup: p2Pickup, net: p2Pts, shade: p2Shade, contrib: p2Contrib },
-
-        bb,
-        tie,
-      };
-    });
-
-    function split(arr: typeof holes, start: number, end: number) {
-      return arr.slice(start, end);
+        p1: { gross: p1pickup ? "P" : p1gross !== null ? String(p1gross) : "", net: p1net, shade: p1shade, contributes: p1contrib, tied },
+        p2: { gross: p2pickup ? "P" : p2gross !== null ? String(p2gross) : "", net: p2net, shade: p2shade, contributes: p2contrib, tied },
+        best,
+      });
     }
-    const front = split(holes, 0, 9);
-    const back = split(holes, 9, 18);
+    return out;
+  }, [p1, p2, parByTeeHole, hcpByPlayer, scoreByPlayerHole]);
 
-    const sumGross = (arr: typeof holes, which: "p1" | "p2") =>
-      sumNumericOrZero(arr.map((h) => (h[which].pickup ? 0 : h[which].gross)));
+  const totals = useMemo(() => {
+    const sum = (arr: typeof rows) => {
+      const grossNum = (v: string) => {
+        if (!v) return 0;
+        if (v === "P") return 0;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : 0;
+      };
 
-    const sumNet = (arr: typeof holes, which: "p1" | "p2") => sumNumericOrZero(arr.map((h) => h[which].net));
-    const sumBB = (arr: typeof holes) => sumNumericOrZero(arr.map((h) => h.bb));
+      const p1gross = arr.reduce((s, r) => s + grossNum(r.p1.gross), 0);
+      const p2gross = arr.reduce((s, r) => s + grossNum(r.p2.gross), 0);
 
-    const contribNet = (arr: typeof holes, which: "p1" | "p2") =>
-      sumNumericOrZero(arr.map((h) => (h[which].contrib ? h[which].net : 0)));
+      const p1net = arr.reduce((s, r) => s + (Number(r.p1.net) || 0), 0);
+      const p2net = arr.reduce((s, r) => s + (Number(r.p2.net) || 0), 0);
 
-    return {
-      holes,
-      front,
-      back,
-      totals: {
-        out: {
-          p1Gross: sumGross(front, "p1"),
-          p1Net: sumNet(front, "p1"),
-          p2Gross: sumGross(front, "p2"),
-          p2Net: sumNet(front, "p2"),
-          bb: sumBB(front),
-        },
-        inn: {
-          p1Gross: sumGross(back, "p1"),
-          p1Net: sumNet(back, "p1"),
-          p2Gross: sumGross(back, "p2"),
-          p2Net: sumNet(back, "p2"),
-          bb: sumBB(back),
-        },
-        total: {
-          p1Gross: sumGross(holes, "p1"),
-          p1Net: sumNet(holes, "p1"),
-          p2Gross: sumGross(holes, "p2"),
-          p2Net: sumNet(holes, "p2"),
-          bb: sumBB(holes),
-        },
-        contrib: {
-          // Contribution totals are the sum of dotted (contributing) NET cells.
-          // If tie -> both count, because both will be "contrib".
-          p1Net: contribNet(holes, "p1"),
-          p2Net: contribNet(holes, "p2"),
-        },
-      },
+      const best = arr.reduce((s, r) => s + (Number(r.best) || 0), 0);
+
+      return { p1gross, p2gross, p1net, p2net, best };
     };
-  }, [members, parsByTeeHole, rpByPlayer, scoreByPlayerHole]);
 
-  const title = useMemo(() => {
-    const rn = typeof round?.round_no === "number" && round.round_no ? `Round ${round.round_no}` : "Round";
-    const nm = String(round?.name ?? "").trim();
-    const head = nm || rn;
+    const front = rows.slice(0, 9);
+    const back = rows.slice(9, 18);
 
-    const pairName = members.length
-      ? members.map((m) => m.name).join(" / ")
-      : "Pair";
+    const out = sum(front);
+    const inn = sum(back);
+    const total = sum(rows);
 
-    const c = courseName ? ` · ${courseName}` : "";
-    return `${pairName}${c} · ${head}`;
-  }, [round, members, courseName]);
+    const contrib = (arr: typeof rows) => {
+      const p1 = arr.reduce((s, r) => s + (r.p1.contributes ? Number(r.p1.net) || 0 : 0), 0);
+      const p2 = arr.reduce((s, r) => s + (r.p2.contributes ? Number(r.p2.net) || 0 : 0), 0);
+      return { p1, p2 };
+    };
 
-  const p1 = members[0] ?? null;
-  const p2 = members[1] ?? null;
+    return { out, inn, total, contrib: contrib(rows) };
+  }, [rows]);
+
+  // -----------------------------
+  // ✅ STEP 1 ONLY: Header lines
+  // -----------------------------
+  const headerLine1 = useMemo(() => {
+    if (!p1 || !p2) return "Pair";
+    return `Pair – ${p1.name}/${p2.name}`;
+  }, [p1, p2]);
+
+  const headerLine2 = useMemo(() => {
+    const roundNo =
+      typeof round?.round_no === "number" && round.round_no ? `Round ${round.round_no}` : "Round";
+    const course = round?.courses?.name ? ` · ${round.courses.name}` : "";
+    return `${roundNo}${course}`;
+  }, [round]);
+
+  const headerLine3 = useMemo(() => formatDate(round?.played_on ?? null), [round?.played_on]);
+
+  // Existing block shading vars (unchanged)
+  const P1_BG = "bg-slate-50";
+  const P2_BG = "bg-slate-100/70";
 
   return (
-    <div className="min-h-dvh bg-white text-gray-900">
+    <div className="min-h-dvh bg-white text-slate-900">
       <main className="mx-auto w-full max-w-md px-4 py-4 pb-24">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-xl font-semibold">Pairs · Round Detail</div>
-            <div className="mt-1 truncate text-sm text-gray-700">{title}</div>
-            {dateText ? <div className="mt-1 text-sm text-gray-500">{dateText}</div> : null}
+            <div className="text-xl font-extrabold">{headerLine1}</div>
+            <div className="mt-1 truncate text-sm font-semibold text-slate-700">{headerLine2}</div>
+            {headerLine3 ? <div className="mt-1 text-sm text-slate-500">{headerLine3}</div> : null}
           </div>
 
           <button
             type="button"
             onClick={goBack}
-            className="rounded-lg border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-semibold hover:bg-gray-200 active:bg-gray-300"
+            className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-sm font-semibold hover:bg-slate-200 active:bg-slate-300"
           >
             Back
           </button>
         </div>
 
         {errorMsg ? (
-          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-            {errorMsg}
-          </div>
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMsg}</div>
         ) : null}
 
         {loading ? (
-          <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">Loading…</div>
-        ) : members.length < 2 ? (
-          <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
-            This page expects a pair with exactly 2 players. Found: {members.length}.
-            <div className="mt-2">
-              <Link className="underline" href={`/m/tours/${tourId}/leaderboards`}>
-                Go back to leaderboards
-              </Link>
-            </div>
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">Loading…</div>
+        ) : !p1 || !p2 ? (
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
+            Pair members not found.
           </div>
         ) : (
-          <div className="mt-4 overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
-            {/* Header row */}
-            <div className="grid grid-cols-[56px_1fr_1fr_1fr_1fr_1fr] bg-gray-50 text-[11px] font-extrabold text-gray-700 border-b border-gray-200">
-              <div className="px-2 py-2 text-left">Hole</div>
+          <>
+            <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="text-[12px] font-extrabold text-slate-800">
+                    <th className="border-b border-slate-200 bg-white px-2 py-2 text-center w-[44px]">Hole</th>
+                    <th colSpan={2} className={`border-b border-slate-200 px-2 py-2 text-center ${P1_BG}`}>
+                      {p1.name}
+                    </th>
+                    <th colSpan={2} className={`border-b border-slate-200 px-2 py-2 text-center ${P2_BG}`}>
+                      {p2.name}
+                    </th>
+                    <th className="border-b border-slate-200 bg-white px-2 py-2 text-center w-[70px]">Better</th>
+                  </tr>
 
-              {/* P1 block */}
-              <div className="px-2 py-2 text-right">Gross</div>
-              <div className="px-2 py-2 text-right border-r-2 border-gray-200">
-                Net
-                <div className="font-semibold text-[10px] text-gray-500 truncate">
-                  {p1?.name ?? "P1"}
-                </div>
-              </div>
+                  <tr className="bg-slate-50 text-[11px] font-semibold text-slate-700">
+                    <th className="border-b border-slate-200 px-2 py-2 text-center"> </th>
+                    <th className={`border-b border-slate-200 px-2 py-2 text-center ${P1_BG}`}>Gross</th>
+                    <th className={`border-b border-slate-200 px-2 py-2 text-center ${P1_BG}`}>Net</th>
+                    <th className={`border-b border-slate-200 px-2 py-2 text-center ${P2_BG}`}>Gross</th>
+                    <th className={`border-b border-slate-200 px-2 py-2 text-center ${P2_BG}`}>Net</th>
+                    <th className="border-b border-slate-200 px-2 py-2 text-center">BB</th>
+                  </tr>
+                </thead>
 
-              {/* P2 block */}
-              <div className="px-2 py-2 text-right">Gross</div>
-              <div className="px-2 py-2 text-right border-r-2 border-gray-200">
-                Net
-                <div className="font-semibold text-[10px] text-gray-500 truncate">
-                  {p2?.name ?? "P2"}
-                </div>
-              </div>
+                <tbody className="text-sm text-slate-900">
+                  {rows.map((r) => {
+                    const isFrontEnd = r.hole === 9;
+                    const isBackEnd = r.hole === 18;
 
-              {/* BB */}
-              <div className="px-2 py-2 text-right">Better Ball</div>
+                    return (
+                      <React.Fragment key={r.hole}>
+                        <tr className="border-b border-slate-100">
+                          <td className="px-2 py-2 text-center font-semibold">{r.hole}</td>
+
+                          <td className={`px-2 py-2 text-center ${P1_BG}`}>
+                            <GrossBox shade={r.p1.shade} label={r.p1.gross || ""} />
+                          </td>
+                          <td className={`px-2 py-2 text-center ${P1_BG}`}>
+                            <StablefordBox value={r.p1.net} contributes={r.p1.contributes} tied={r.p1.tied} />
+                          </td>
+
+                          <td className={`px-2 py-2 text-center ${P2_BG}`}>
+                            <GrossBox shade={r.p2.shade} label={r.p2.gross || ""} />
+                          </td>
+                          <td className={`px-2 py-2 text-center ${P2_BG}`}>
+                            <StablefordBox value={r.p2.net} contributes={r.p2.contributes} tied={r.p2.tied} />
+                          </td>
+
+                          <td className="px-2 py-2 text-center font-extrabold">{r.best}</td>
+                        </tr>
+
+                        {isFrontEnd ? (
+                          <tr className="border-b border-slate-200 bg-white">
+                            <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-700">Out</td>
+
+                            <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>{totals.out.p1gross}</td>
+                            <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>{totals.out.p1net}</td>
+
+                            <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>{totals.out.p2gross}</td>
+                            <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>{totals.out.p2net}</td>
+
+                            <td className="px-2 py-2 text-center text-[12px] font-extrabold">{totals.out.best}</td>
+                          </tr>
+                        ) : null}
+
+                        {isBackEnd ? (
+                          <>
+                            <tr className="border-b border-slate-100 bg-white">
+                              <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-700">In</td>
+
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>{totals.inn.p1gross}</td>
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>{totals.inn.p1net}</td>
+
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>{totals.inn.p2gross}</td>
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>{totals.inn.p2net}</td>
+
+                              <td className="px-2 py-2 text-center text-[12px] font-extrabold">{totals.inn.best}</td>
+                            </tr>
+
+                            <tr className="border-b border-slate-200 bg-slate-50">
+                              <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-900">Total</td>
+
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>{totals.total.p1gross}</td>
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>{totals.total.p1net}</td>
+
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>{totals.total.p2gross}</td>
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>{totals.total.p2net}</td>
+
+                              <td className="px-2 py-2 text-center text-[12px] font-extrabold">{totals.total.best}</td>
+                            </tr>
+
+                            <tr className="bg-white">
+                              <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-700">
+                                Contrib
+                              </td>
+
+                              <td className={`px-2 py-2 text-center ${P1_BG}`} />
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>
+                                {totals.contrib.p1}
+                              </td>
+
+                              <td className={`px-2 py-2 text-center ${P2_BG}`} />
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>
+                                {totals.contrib.p2}
+                              </td>
+
+                              <td className="px-2 py-2 text-center" />
+                            </tr>
+                          </>
+                        ) : null}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
 
-            {/* Hole rows */}
-            <div className="divide-y divide-gray-100">
-              {computed.holes.map((h) => {
-                const p1GrossLabel = h.p1.pickup ? "P" : h.p1.gross === null ? "" : String(h.p1.gross);
-                const p2GrossLabel = h.p2.pickup ? "P" : h.p2.gross === null ? "" : String(h.p2.gross);
-
-                return (
-                  <div
-                    key={h.hole}
-                    className="grid grid-cols-[56px_1fr_1fr_1fr_1fr_1fr] items-center px-2 py-1"
-                  >
-                    <div className="text-left text-sm font-extrabold text-gray-900">
-                      {h.hole}
-                    </div>
-
-                    {/* P1 gross (coloured) */}
-                    <div className="flex justify-end">
-                      <GrossBox shade={h.p1.shade} label={p1GrossLabel} />
-                    </div>
-
-                    {/* P1 net (dotted if contributes) */}
-                    <div className="flex justify-end border-r-2 border-gray-200 pr-2">
-                      <PointsBox value={h.p1.net} contributed={h.p1.contrib} tied={h.tie && h.p1.contrib} />
-                    </div>
-
-                    {/* P2 gross (coloured) */}
-                    <div className="flex justify-end">
-                      <GrossBox shade={h.p2.shade} label={p2GrossLabel} />
-                    </div>
-
-                    {/* P2 net (dotted if contributes) */}
-                    <div className="flex justify-end border-r-2 border-gray-200 pr-2">
-                      <PointsBox value={h.p2.net} contributed={h.p2.contrib} tied={h.tie && h.p2.contrib} />
-                    </div>
-
-                    {/* Better ball */}
-                    <div className="flex justify-end">
-                      <div className={`${cellBaseClasses()} bg-yellow-50 text-gray-900 border border-yellow-200`}>
-                        {h.bb}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="mt-4 text-center">
+              <Link className="text-sm font-semibold underline" href={`/m/tours/${tourId}/leaderboards`}>
+                Back to Leaderboards
+              </Link>
             </div>
-
-            {/* Totals rows */}
-            <div className="border-t border-gray-200 bg-white">
-              {[
-                { label: "Out", t: computed.totals.out },
-                { label: "In", t: computed.totals.inn },
-                { label: "Total", t: computed.totals.total },
-              ].map((row) => (
-                <div
-                  key={row.label}
-                  className="grid grid-cols-[56px_1fr_1fr_1fr_1fr_1fr] items-center px-2 py-2 border-t border-gray-100"
-                >
-                  <div className="text-left text-sm font-extrabold text-gray-900">{row.label}</div>
-
-                  <div className="flex justify-end">
-                    <div className={`${cellBaseClasses()} bg-gray-50 text-gray-900 border border-gray-200`}>
-                      {row.t.p1Gross}
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end border-r-2 border-gray-200 pr-2">
-                    <div className={`${cellBaseClasses()} bg-gray-50 text-gray-900 border border-gray-200`}>
-                      {row.t.p1Net}
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end">
-                    <div className={`${cellBaseClasses()} bg-gray-50 text-gray-900 border border-gray-200`}>
-                      {row.t.p2Gross}
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end border-r-2 border-gray-200 pr-2">
-                    <div className={`${cellBaseClasses()} bg-gray-50 text-gray-900 border border-gray-200`}>
-                      {row.t.p2Net}
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end">
-                    <div className={`${cellBaseClasses()} bg-yellow-100 text-gray-900 border border-yellow-200`}>
-                      {row.t.bb}
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              {/* Contribution row (NET ONLY in each player's NET column; BB column blank) */}
-              <div className="grid grid-cols-[56px_1fr_1fr_1fr_1fr_1fr] items-center px-2 py-2 border-t-2 border-gray-200 bg-white">
-                <div className="text-left text-sm font-extrabold text-gray-900">Contrib</div>
-
-                {/* P1 gross blank */}
-                <div className="flex justify-end">
-                  <div className={`${cellBaseClasses()} bg-white text-gray-900 border border-transparent`}></div>
-                </div>
-
-                {/* P1 net contrib */}
-                <div className="flex justify-end border-r-2 border-gray-200 pr-2">
-                  <div className={`${cellBaseClasses()} bg-white text-gray-900 border-2 border-dashed border-gray-600`}>
-                    {computed.totals.contrib.p1Net}
-                  </div>
-                </div>
-
-                {/* P2 gross blank */}
-                <div className="flex justify-end">
-                  <div className={`${cellBaseClasses()} bg-white text-gray-900 border border-transparent`}></div>
-                </div>
-
-                {/* P2 net contrib */}
-                <div className="flex justify-end border-r-2 border-gray-200 pr-2">
-                  <div className={`${cellBaseClasses()} bg-white text-gray-900 border-2 border-dashed border-gray-600`}>
-                    {computed.totals.contrib.p2Net}
-                  </div>
-                </div>
-
-                {/* Better Ball blank (per your requirement) */}
-                <div className="flex justify-end">
-                  <div className={`${cellBaseClasses()} bg-white text-gray-900 border border-transparent`}></div>
-                </div>
-              </div>
-            </div>
-
-            {/* Small legend */}
-            <div className="border-t border-gray-200 bg-gray-50 px-3 py-3 text-xs text-gray-700">
-              <div className="font-semibold text-gray-900">Legend</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <div className="rounded-md px-3 py-2 font-bold border border-gray-300 bg-white">
-                  Gross colouring: Ace/Albatross{" "}
-                  <span className="ml-2 inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: BLUE_ACE }} />
-                </div>
-                <div className="rounded-md px-3 py-2 font-bold border border-gray-300 bg-white">
-                  Eagle{" "}
-                  <span className="ml-2 inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: BLUE_EAGLE }} />
-                </div>
-                <div className="rounded-md px-3 py-2 font-bold border border-gray-300 bg-white">
-                  Birdie{" "}
-                  <span className="ml-2 inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: BLUE_BIRDIE }} />
-                </div>
-                <div className="rounded-md px-3 py-2 font-bold border border-gray-300 bg-white">
-                  Par{" "}
-                  <span className="ml-2 inline-block h-3 w-3 rounded-sm border border-gray-300 bg-white" />
-                </div>
-                <div className="rounded-md px-3 py-2 font-bold border border-gray-300 bg-white">
-                  Bogey{" "}
-                  <span className="ml-2 inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: "#f8cfcf" }} />
-                </div>
-                <div className="rounded-md px-3 py-2 font-bold border border-gray-300 bg-white">
-                  D. Bogey+ / Pickup{" "}
-                  <span className="ml-2 inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: "#c0392b" }} />
-                </div>
-                <div className="rounded-md px-3 py-2 font-bold border border-gray-300 bg-white">
-                  Contributing net{" "}
-                  <span className="ml-2 inline-block h-3 w-3 rounded-sm border-2 border-dashed border-gray-600 bg-white" />
-                </div>
-                <div className="rounded-md px-3 py-2 font-bold border border-gray-300 bg-white">
-                  Tie (both count){" "}
-                  <span className="ml-2 inline-block h-3 w-3 rounded-sm border-2 border-gray-900 bg-white" />
-                </div>
-              </div>
-            </div>
-          </div>
+          </>
         )}
       </main>
     </div>
