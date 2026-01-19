@@ -33,7 +33,7 @@ type RoundPlayerRow = {
   player_id: string;
   playing: boolean;
   playing_handicap: number | null;
-  tee: Tee; // ensure non-null in our in-memory model
+  tee: Tee; // we normalize to non-null in-memory
 };
 
 type PlayerJoin = {
@@ -112,7 +112,8 @@ export async function recalcAndSaveTourHandicaps(opts: {
     .maybeSingle();
 
   if (tourErr) return { ok: false, error: tourErr.message };
-  const rehandicappingEnabled = !tourRow || (tourRow as any).rehandicapping_enabled !== false;
+
+  const rehandicappingEnabled = (tourRow as any)?.rehandicapping_enabled === true;
 
   // 1) load rounds
   const { data: roundsData, error: roundsErr } = await supabase
@@ -141,10 +142,12 @@ export async function recalcAndSaveTourHandicaps(opts: {
     if (ca && cb && ca !== cb) return ca < cb ? -1 : 1;
     if (ca && !cb) return -1;
     if (!ca && cb) return 1;
+
     return String(a.id).localeCompare(String(b.id));
   });
 
   const roundIds = rounds.map((r) => r.id);
+  const courseIds = Array.from(new Set(rounds.map((r) => r.course_id).filter(Boolean))) as string[];
 
   // 2) load players in this tour via tour_players join
   const { data: tpData, error: tpErr } = await supabase
@@ -183,16 +186,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
   if (players.length === 0) return { ok: true, updated: 0 };
   const playerIds = players.map((p) => p.id);
 
-  // Starting handicap = tour_players.starting_handicap if set else global start_handicap
-  const startingHcpByPlayer: Record<string, number> = {};
-  const defaultTeeByPlayer: Record<string, Tee> = {};
-  for (const p of players) {
-    const sh = p.tour_start ?? p.global_start ?? 0;
-    startingHcpByPlayer[p.id] = Math.max(0, Math.floor(Number(sh) || 0));
-    defaultTeeByPlayer[p.id] = p.gender ? normalizeTee(p.gender) : "M";
-  }
-
-  // 3) load existing round_players so we preserve playing + tee
+  // 3) round_players (include tee + playing so we preserve flags and keep tee NOT NULL)
   const { data: rpData, error: rpErr } = await supabase
     .from("round_players")
     .select("round_id,player_id,playing,playing_handicap,tee")
@@ -201,7 +195,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
   if (rpErr) return { ok: false, error: rpErr.message };
 
-  const roundPlayersExisting = (rpData ?? []).map((x: any) => {
+  const roundPlayers = (rpData ?? []).map((x: any) => {
     const tee = normalizeTee(x.tee);
     return {
       round_id: String(x.round_id),
@@ -214,17 +208,24 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
   const rpKey = (rid: string, pid: string) => `${rid}::${pid}`;
   const rpByKey = new Map<string, RoundPlayerRow>();
-  for (const rp of roundPlayersExisting) rpByKey.set(rpKey(rp.round_id, rp.player_id), rp);
+  for (const rp of roundPlayers) rpByKey.set(rpKey(rp.round_id, rp.player_id), rp);
 
-  // ============================
-  // OFF MODE: reset PH everywhere
-  // ============================
+  // Starting handicap = tour_players.starting_handicap if set else global start_handicap
+  const startingHcpByPlayer: Record<string, number> = {};
+  const defaultTeeByPlayer: Record<string, Tee> = {};
+  for (const p of players) {
+    const sh = p.tour_start ?? p.global_start ?? 0;
+    startingHcpByPlayer[p.id] = Math.max(0, Math.floor(Number(sh) || 0));
+    defaultTeeByPlayer[p.id] = p.gender ? normalizeTee(p.gender) : "M";
+  }
+
+  // ✅ If rehandicapping is OFF: hard reset ALL PHs back to starting handicap
   if (!rehandicappingEnabled) {
     const payload: Array<{
       round_id: string;
       player_id: string;
       playing: boolean;
-      playing_handicap: number | null;
+      playing_handicap: number;
       tee: Tee;
     }> = [];
 
@@ -240,7 +241,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
           round_id: r.id,
           player_id: p.id,
           playing,
-          playing_handicap: sh, // ✅ reset to starting handicap
+          playing_handicap: sh,
           tee,
         });
       }
@@ -251,17 +252,10 @@ export async function recalcAndSaveTourHandicaps(opts: {
     });
 
     if (upErr) return { ok: false, error: upErr.message };
-
     return { ok: true, updated: payload.length };
   }
 
-  // ============================
-  // ON MODE: full rehandicap calc
-  // ============================
-
-  const courseIds = Array.from(new Set(rounds.map((r) => r.course_id).filter(Boolean))) as string[];
-
-  // pars (both tees; we’ll pick by player tee at runtime)
+  // 4) pars (both tees; we’ll pick by player tee at runtime)
   const { data: parsData, error: parsErr } = await supabase
     .from("pars")
     .select("course_id,hole_number,par,stroke_index,tee")
@@ -426,7 +420,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
     }
   }
 
-  // Upsert PH for all round/player combos; preserve playing; always write tee (NOT NULL)
+  // Upsert PH for ALL (round,player) combos, preserving playing, and ALWAYS writing tee (NOT NULL)
   const payload: Array<{
     round_id: string;
     player_id: string;
