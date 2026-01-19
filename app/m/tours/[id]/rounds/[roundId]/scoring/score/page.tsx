@@ -10,6 +10,59 @@ import { recalcAndSaveTourHandicaps } from "@/lib/handicaps/recalcAndSaveTourHan
 type Tee = "M" | "F";
 type TabKey = "entry" | "summary";
 
+// === Gross score colouring (shared with other mobile views) ===
+type Shade = "ace" | "eagle" | "birdie" | "par" | "bogey" | "dbogey" | "none";
+
+const BLUE_ACE = "#082B5C";
+const BLUE_EAGLE = "#1757D6";
+const BLUE_BIRDIE = "#4DA3FF";
+
+function shadeForGross(
+  gross: number | null,
+  pickup: boolean | null | undefined,
+  par: number
+): Shade {
+  if (pickup) return "dbogey";
+  if (!Number.isFinite(Number(gross))) return "none";
+
+  const diff = Number(gross) - Number(par);
+  if (diff <= -3) return "ace";
+  if (diff === -2) return "eagle";
+  if (diff === -1) return "birdie";
+  if (diff === 0) return "par";
+  if (diff === 1) return "bogey";
+  return "dbogey";
+}
+
+function blueStyleForShade(s: Shade): React.CSSProperties | undefined {
+  if (s === "ace") return { backgroundColor: BLUE_ACE, color: "white" };
+  if (s === "eagle") return { backgroundColor: BLUE_EAGLE, color: "white" };
+  if (s === "birdie") return { backgroundColor: BLUE_BIRDIE, color: "white" };
+  return undefined;
+}
+
+function GrossBox({ shade, label }: { shade: Shade; label: string }) {
+  const isBlue = shade === "ace" || shade === "eagle" || shade === "birdie";
+  const base =
+    "inline-flex min-w-[44px] justify-center rounded-md px-2 py-[2px] text-[14px] font-extrabold";
+
+  const className =
+    shade === "par"
+      ? `${base} bg-white text-gray-900 border border-gray-300`
+      : shade === "bogey"
+      ? `${base} bg-[#f8cfcf] text-gray-900`
+      : shade === "dbogey"
+      ? `${base} bg-[#c0392b] text-white`
+      : `${base} bg-transparent text-gray-900`;
+
+  return (
+    <span className={className} style={isBlue ? blueStyleForShade(shade) : undefined}>
+      {label}
+    </span>
+  );
+}
+
+
 type CourseRel = { name: string };
 
 type Round = {
@@ -717,19 +770,7 @@ export default function MobileScoreEntryPage() {
 
     // Coloured box for STROKES, using the same Stableford meaning:
     // 4+ = eagle or better, 3 = birdie, 2 = par, 1 = bogey, 0 = double+.
-    function strokesBoxClass(disp: string, pts: number) {
-      const d = String(disp ?? "").trim().toUpperCase();
-      if (!d || d === "—" || d === "P") {
-        return "bg-slate-100 text-slate-400 border border-slate-200";
-      }
-
-      if (pts >= 4) return "bg-emerald-200 text-emerald-950 border border-emerald-300"; // eagle+
-      if (pts === 3) return "bg-lime-200 text-lime-950 border border-lime-300"; // birdie
-      if (pts === 2) return "bg-slate-100 text-slate-900 border border-slate-200"; // par
-      if (pts === 1) return "bg-amber-200 text-amber-950 border border-amber-300"; // bogey
-      return "bg-rose-200 text-rose-950 border border-rose-300"; // double+
-    }
-
+    
     return (
       <div className="rounded-lg overflow-hidden bg-white shadow-sm text-slate-900 border border-slate-200">
         <div className="bg-slate-100 px-3 py-2 text-xs font-bold tracking-wide text-slate-700 grid grid-cols-5 gap-2">
@@ -766,16 +807,17 @@ export default function MobileScoreEntryPage() {
                 <div className="text-center">{info.si || "—"}</div>
 
                 {/* ✅ ONLY CHANGE: coloured box behind strokes display (no logic/layout changes elsewhere) */}
-                <div className="text-center font-bold">
-                  <span
-                    className={`inline-flex min-w-[44px] justify-center rounded-md px-2 ${strokesBoxClass(
-                      disp,
-                      pts
-                    )}`}
-                  >
-                    {disp}
-                  </span>
-                </div>
+                <div className="text-center">
+  <GrossBox
+    shade={shadeForGross(
+      disp === "P" ? null : Number(disp),
+      disp === "P",
+      info.par
+    )}
+    label={disp}
+  />
+</div>
+
 
                 <div className="text-center font-bold">{pts}</div>
               </div>
