@@ -9,7 +9,11 @@ import MobileNav from "../../_components/MobileNav";
 // ✅ Updated import path per your note: lib/handicaps/recalc...
 import { recalcAndSaveTourHandicaps } from "@/lib/handicaps/recalcAndSaveTourHandicaps";
 
-type Tour = { id: string; name: string };
+type Tour = {
+  id: string;
+  name: string;
+  rehandicapping_enabled: boolean | null;
+};
 
 type PlayerRow = {
   id: string;
@@ -86,13 +90,15 @@ function validateSiSet(values: number[]) {
   return { ok: true as const, error: "" };
 }
 
-export default function MobileTourAdminStartingHandicapsPage() {
+export default function MobileTourAdminPage() {
   const params = useParams<{ id?: string }>();
   const router = useRouter();
   const tourId = String(params?.id ?? "").trim();
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
+
+  // Starting handicaps state
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
 
@@ -106,6 +112,16 @@ export default function MobileTourAdminStartingHandicapsPage() {
       dirty: boolean;
     }>
   >([]);
+
+  // Rehandicapping toggle state
+  const [rhSaving, setRhSaving] = useState(false);
+  const [rhError, setRhError] = useState("");
+  const [rhMsg, setRhMsg] = useState("");
+  const [rhEnabledInput, setRhEnabledInput] = useState<boolean | null>(null);
+  const rhDirty = useMemo(() => {
+    if (!tour) return false;
+    return (tour.rehandicapping_enabled === true) !== (rhEnabledInput === true);
+  }, [tour, rhEnabledInput]);
 
   // Course editor state
   const [courseLoading, setCourseLoading] = useState(false);
@@ -127,14 +143,20 @@ export default function MobileTourAdminStartingHandicapsPage() {
       setErrorMsg("");
       setSaveMsg("");
 
-      // Course editor messages reset on full load
+      // Reset messages
+      setRhError("");
+      setRhMsg("");
       setCourseError("");
       setCourseSaveMsg("");
       setCourseLoading(false);
       setCourseSaving(false);
 
       try {
-        const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
+        const { data: tData, error: tErr } = await supabase
+          .from("tours")
+          .select("id,name,rehandicapping_enabled")
+          .eq("id", tourId)
+          .single();
         if (tErr) throw tErr;
 
         const { data: tpData, error: tpErr } = await supabase
@@ -165,7 +187,6 @@ export default function MobileTourAdminStartingHandicapsPage() {
 
         // Load tour courses (only those used by rounds in this tour)
         const { data: roundData, error: roundErr } = await supabase.from("rounds").select("course_id").eq("tour_id", tourId);
-
         if (roundErr) throw roundErr;
 
         const courseIds = Array.from(
@@ -174,9 +195,11 @@ export default function MobileTourAdminStartingHandicapsPage() {
 
         let courses: CourseOption[] = [];
         if (courseIds.length > 0) {
-          const { data: cData, error: cErr } = await supabase.from("courses").select("id,name").in("id", courseIds).order("name", {
-            ascending: true,
-          });
+          const { data: cData, error: cErr } = await supabase
+            .from("courses")
+            .select("id,name")
+            .in("id", courseIds)
+            .order("name", { ascending: true });
 
           if (cErr) throw cErr;
 
@@ -188,11 +211,14 @@ export default function MobileTourAdminStartingHandicapsPage() {
 
         if (!alive) return;
 
-        setTour(tData as Tour);
+        const t = tData as Tour;
+        setTour(t);
+        setRhEnabledInput(t.rehandicapping_enabled === true);
+
         setRows(list);
         setCourseOptions(courses);
 
-        // Important: do NOT auto-select a course. User must choose.
+        // Do NOT auto-select course
         setSelectedCourseId("");
         setHoleRows(makeEmptyHoles());
       } catch (e: any) {
@@ -358,6 +384,33 @@ export default function MobileTourAdminStartingHandicapsPage() {
     }
   }
 
+  async function saveRehandicappingEnabled() {
+    if (!tour) return;
+
+    setRhSaving(true);
+    setRhError("");
+    setRhMsg("");
+
+    try {
+      const nextEnabled = rhEnabledInput === true;
+
+      const { error } = await supabase
+        .from("tours")
+        .update({ rehandicapping_enabled: nextEnabled })
+        .eq("id", tour.id);
+
+      if (error) throw error;
+
+      // Update local state so other saves / UI show the committed value
+      setTour((prev) => (prev ? { ...prev, rehandicapping_enabled: nextEnabled } : prev));
+      setRhMsg(`Saved. Rehandicapping is now ${nextEnabled ? "enabled" : "disabled"}.`);
+    } catch (e: any) {
+      setRhError(e?.message ?? "Failed to save rehandicapping setting.");
+    } finally {
+      setRhSaving(false);
+    }
+  }
+
   function setHoleCell(hole: number, key: keyof Omit<HoleEditRow, "hole">, value: string) {
     setHoleRows((prev) =>
       prev.map((r) => {
@@ -382,7 +435,6 @@ export default function MobileTourAdminStartingHandicapsPage() {
     setCourseSaveMsg("");
 
     try {
-      // Validate completeness + parse values
       const mSIs: number[] = [];
       const fSIs: number[] = [];
 
@@ -422,10 +474,6 @@ export default function MobileTourAdminStartingHandicapsPage() {
       const fVal = validateSiSet(fSIs);
       if (!fVal.ok) throw new Error(`SI – F invalid: ${fVal.error}`);
 
-      // IMPORTANT:
-      // Your DB has a uniqueness constraint on (course_id, stroke_index, tee).
-      // When swapping SIs between holes, an UPSERT can temporarily violate that constraint.
-      // Safer approach: delete all rows for this course+tee, then insert fresh (after validation).
       const { error: delErr } = await supabase.from("pars").delete().eq("course_id", selectedCourseId).in("tee", ["M", "F"]);
       if (delErr) throw delErr;
 
@@ -465,6 +513,10 @@ export default function MobileTourAdminStartingHandicapsPage() {
   const parOptions = ["3", "4", "5"];
   const siOptions = Array.from({ length: 18 }, (_, i) => String(i + 1));
 
+  const pillBase = "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
+  const pillActive = "border-gray-900 bg-gray-900 text-white";
+  const pillIdle = "border-gray-200 bg-white text-gray-900";
+
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       {/* Header */}
@@ -495,6 +547,64 @@ export default function MobileTourAdminStartingHandicapsPage() {
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
+            {/* Rehandicapping toggle */}
+            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+              <div className="p-4 border-b">
+                <div className="text-sm font-semibold text-gray-900">Rehandicapping</div>
+                <div className="mt-1 text-xs text-gray-600">Controls whether rehandicapping is applied and displayed for this tour.</div>
+              </div>
+
+              <div className="p-4 space-y-3">
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className={`${pillBase} ${rhEnabledInput === true ? pillActive : pillIdle}`}
+                    onClick={() => {
+                      setRhMsg("");
+                      setRhError("");
+                      setRhEnabledInput(true);
+                    }}
+                    aria-pressed={rhEnabledInput === true}
+                  >
+                    Yes
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`${pillBase} ${rhEnabledInput === false ? pillActive : pillIdle}`}
+                    onClick={() => {
+                      setRhMsg("");
+                      setRhError("");
+                      setRhEnabledInput(false);
+                    }}
+                    aria-pressed={rhEnabledInput === false}
+                  >
+                    No
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs text-gray-600">{rhDirty ? "Change pending" : "No pending change"}</div>
+
+                  <button
+                    type="button"
+                    onClick={saveRehandicappingEnabled}
+                    disabled={rhSaving || !rhDirty}
+                    className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                      rhSaving || !rhDirty
+                        ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                        : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                    }`}
+                  >
+                    {rhSaving ? "Saving…" : "Save"}
+                  </button>
+                </div>
+
+                {rhError ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{rhError}</div> : null}
+                {rhMsg ? <div className="text-sm text-green-700">{rhMsg}</div> : null}
+              </div>
+            </section>
+
             {/* Starting handicaps (existing) */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b">
@@ -584,7 +694,6 @@ export default function MobileTourAdminStartingHandicapsPage() {
                       ))}
                     </select>
 
-                    {/* Do not show grid until a course is selected */}
                     {!selectedCourseId ? (
                       <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
                         Choose a course to edit par and stroke index.
