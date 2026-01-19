@@ -242,20 +242,24 @@ export default function MobileTourRehandicappingPage() {
     return { players, roundsSorted, hcpByRoundPlayer, fallbackStartByPlayerId };
   }, [tourPlayers, rounds, roundPlayers]);
 
+  // === Rule text (plain-English) ===
+  const enabledFlag = tour?.rehandicapping_enabled;
+  const enabled = enabledFlag === true;
+
+  const ruleSource = enabled ? "plain-english-v1" : "disabled";
   const ruleText = useMemo(() => {
     if (!tour) return "";
 
-    const enabled = tour.rehandicapping_enabled === true;
     if (!enabled) return "No rehandicapping.";
 
-    // Final approved plain-English rule text
     return (
       "After each completed round, the Playing Handicap (PH) for the next round is recalculated using Stableford results.\n\n" +
       "The rounded average Stableford score for the round is calculated across all players who completed the round. Each player’s Stableford score is compared to this average, and the difference is multiplied by one-third. The result is rounded to the nearest whole number, with .5 rounding up, and applied as an adjustment to the player’s PH.\n\n" +
       "The resulting Playing Handicap cannot exceed Starting Handicap + 3, and cannot be lower than half the Starting Handicap, rounded up if the Starting Handicap is odd.\n\n" +
       "If a player does not play a round, their Playing Handicap carries forward unchanged to the next round."
     );
-  }, [tour]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tour, enabled]);
 
   if (!tourId || !isLikelyUuid(tourId)) {
     return (
@@ -306,6 +310,21 @@ export default function MobileTourRehandicappingPage() {
                   Key: <span className="font-medium">{tour.rehandicapping_rule_key ?? "—"}</span>
                 </div>
               ) : null}
+
+              {/* DEBUG FOOTER: confirms which bundle/path is actually rendering */}
+              <div className="mt-3 rounded-xl border border-dashed border-gray-300 bg-gray-50 px-3 py-2 text-[11px] text-gray-600">
+                <div className="font-semibold text-gray-700">Debug</div>
+                <div className="mt-1">
+                  enabled: <span className="font-mono">{String(enabledFlag)}</span> · source:{" "}
+                  <span className="font-mono">{ruleSource}</span>
+                </div>
+                <div className="mt-1">
+                  rule_key: <span className="font-mono">{tour?.rehandicapping_rule_key ?? "—"}</span>
+                </div>
+                <div className="mt-1">
+                  build: <span className="font-mono">reh-v1-debug</span>
+                </div>
+              </div>
             </section>
 
             {/* Handicap table */}
