@@ -1,10 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
-import MobileNav from "../../../_components/MobileNav";
+import MobileNav from "../../_components/MobileNav";
 
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
@@ -14,9 +13,25 @@ export default function MobileAppUserGuidePage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
 
-  const guideText = useMemo(() => {
+  if (!tourId || !isLikelyUuid(tourId)) {
     return (
-      `How to Use the Golf Tour App (Mobile)
+      <div className="min-h-dvh bg-white text-gray-900 pb-24">
+        <div className="mx-auto max-w-md px-4 py-6">
+          <div className="rounded-2xl border p-4 text-sm">
+            Missing or invalid tour id in route.
+            <div className="mt-2">
+              <Link className="underline" href="/m">
+                Go to mobile home
+              </Link>
+            </div>
+          </div>
+        </div>
+        <MobileNav />
+      </div>
+    );
+  }
+
+  const guide = `How to Use the Golf Tour App (Mobile)
 
 This app is designed to manage a multi-round golf tour, record hole-by-hole scores, calculate Stableford points, and automatically adjust playing handicaps between rounds using a defined rehandicapping rule.
 
@@ -164,6 +179,11 @@ This allows full transparency from leaderboard position down to hole-level scori
 Purpose
 Display special tour competitions.
 
+Examples
+- Napoleon (Par 3 / 4 / 5 averages)
+- Eclectic
+- Other derived Stableford-based competitions
+
 Navigation
 - Tap a competition to see rankings.
 - Where applicable, tap into a player to see contributing holes or rounds.
@@ -250,27 +270,8 @@ The rounded average Stableford score for the round is calculated across all play
 
 The resulting Playing Handicap cannot exceed Starting Handicap + 3, and cannot be lower than half the Starting Handicap, rounded up if the Starting Handicap is odd.
 
-If a player does not play a round, their Playing Handicap carries forward unchanged to the next round.`
-    );
-  }, []);
-
-  if (!tourId || !isLikelyUuid(tourId)) {
-    return (
-      <div className="min-h-dvh bg-white text-gray-900 pb-24">
-        <div className="mx-auto max-w-md px-4 py-6">
-          <div className="rounded-2xl border p-4 text-sm">
-            Missing or invalid tour id in route.
-            <div className="mt-2">
-              <Link className="underline" href="/m">
-                Go to mobile home
-              </Link>
-            </div>
-          </div>
-        </div>
-        <MobileNav />
-      </div>
-    );
-  }
+If a player does not play a round, their Playing Handicap carries forward unchanged to the next round.
+`;
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
@@ -279,7 +280,7 @@ If a player does not play a round, their Playing Handicap carries forward unchan
         <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-base font-semibold text-gray-900">App User Guide</div>
-            <div className="truncate text-sm text-gray-500">Tour: {tourId}</div>
+            <div className="truncate text-sm text-gray-500">Tour</div>
           </div>
 
           <Link
@@ -291,10 +292,10 @@ If a player does not play a round, their Playing Handicap carries forward unchan
         </div>
       </div>
 
-      <main className="mx-auto w-full max-w-md px-4 py-4">
-        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
-          <div className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{guideText}</div>
-        </div>
+      <main className="mx-auto w-full max-w-md px-4 py-4 space-y-4">
+        <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
+          <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{guide}</div>
+        </section>
       </main>
 
       <MobileNav />
