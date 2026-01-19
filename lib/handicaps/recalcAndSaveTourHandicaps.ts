@@ -1,7 +1,13 @@
+// lib/handicaps/recalcAndSaveTourHandicaps.ts
 import { netStablefordPointsForHole } from "@/lib/stableford";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 type Tee = "M" | "F";
+
+type TourRow = {
+  id: string;
+  rehandicapping_enabled: boolean | null;
+};
 
 type Round = {
   id: string;
@@ -33,7 +39,7 @@ type RoundPlayerRow = {
   player_id: string;
   playing: boolean;
   playing_handicap: number | null;
-  tee: Tee; // we normalize to non-null in-memory
+  tee: Tee; // non-null in our in-memory model
 };
 
 type PlayerJoin = {
@@ -104,7 +110,10 @@ export async function recalcAndSaveTourHandicaps(opts: {
 }): Promise<{ ok: true; updated: number } | { ok: false; error: string }> {
   const { supabase, tourId } = opts;
 
-  // 0) Read tour flag
+  // --- Helpers used by both paths ---
+  const rpKey = (rid: string, pid: string) => `${rid}::${pid}`;
+
+  // 0) Load tour flag
   const { data: tourRow, error: tourErr } = await supabase
     .from("tours")
     .select("id,rehandicapping_enabled")
@@ -112,10 +121,9 @@ export async function recalcAndSaveTourHandicaps(opts: {
     .maybeSingle();
 
   if (tourErr) return { ok: false, error: tourErr.message };
+  const enabled = (tourRow as TourRow | null)?.rehandicapping_enabled === true;
 
-  const rehandicappingEnabled = (tourRow as any)?.rehandicapping_enabled === true;
-
-  // 1) load rounds
+  // 1) Load rounds
   const { data: roundsData, error: roundsErr } = await supabase
     .from("rounds")
     .select("id,tour_id,course_id,round_no,played_on,created_at")
@@ -126,7 +134,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
   const roundsRaw = (roundsData ?? []) as Round[];
   if (roundsRaw.length === 0) return { ok: true, updated: 0 };
 
-  // Stable ordering: round_no → played_on → created_at
+  // Stable ordering: round_no → played_on → created_at → id
   const rounds = [...roundsRaw].sort((a, b) => {
     const c1 = cmpNullableNum(a.round_no, b.round_no);
     if (c1 !== 0) return c1;
@@ -147,9 +155,8 @@ export async function recalcAndSaveTourHandicaps(opts: {
   });
 
   const roundIds = rounds.map((r) => r.id);
-  const courseIds = Array.from(new Set(rounds.map((r) => r.course_id).filter(Boolean))) as string[];
 
-  // 2) load players in this tour via tour_players join
+  // 2) Load tour players (and global player join)
   const { data: tpData, error: tpErr } = await supabase
     .from("tour_players")
     .select("tour_id,player_id,starting_handicap, players(id,name,start_handicap,gender)")
@@ -186,7 +193,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
   if (players.length === 0) return { ok: true, updated: 0 };
   const playerIds = players.map((p) => p.id);
 
-  // 3) round_players (include tee + playing so we preserve flags and keep tee NOT NULL)
+  // 3) Load existing round_players for playing + tee preservation
   const { data: rpData, error: rpErr } = await supabase
     .from("round_players")
     .select("round_id,player_id,playing,playing_handicap,tee")
@@ -195,20 +202,16 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
   if (rpErr) return { ok: false, error: rpErr.message };
 
-  const roundPlayers = (rpData ?? []).map((x: any) => {
-    const tee = normalizeTee(x.tee);
-    return {
-      round_id: String(x.round_id),
-      player_id: String(x.player_id),
-      playing: x.playing === true,
-      playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
-      tee,
-    } as RoundPlayerRow;
-  });
+  const existingRoundPlayers: RoundPlayerRow[] = (rpData ?? []).map((x: any) => ({
+    round_id: String(x.round_id),
+    player_id: String(x.player_id),
+    playing: x.playing === true,
+    playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
+    tee: normalizeTee(x.tee),
+  }));
 
-  const rpKey = (rid: string, pid: string) => `${rid}::${pid}`;
   const rpByKey = new Map<string, RoundPlayerRow>();
-  for (const rp of roundPlayers) rpByKey.set(rpKey(rp.round_id, rp.player_id), rp);
+  for (const rp of existingRoundPlayers) rpByKey.set(rpKey(rp.round_id, rp.player_id), rp);
 
   // Starting handicap = tour_players.starting_handicap if set else global start_handicap
   const startingHcpByPlayer: Record<string, number> = {};
@@ -219,21 +222,22 @@ export async function recalcAndSaveTourHandicaps(opts: {
     defaultTeeByPlayer[p.id] = p.gender ? normalizeTee(p.gender) : "M";
   }
 
-  // ✅ If rehandicapping is OFF: hard reset ALL PHs back to starting handicap
-  if (!rehandicappingEnabled) {
+  // === PATH A: Rehandicapping DISABLED ===
+  // Snap EVERY round_players.playing_handicap back to starting handicap (tour override if set else global).
+  if (!enabled) {
     const payload: Array<{
       round_id: string;
       player_id: string;
       playing: boolean;
-      playing_handicap: number;
+      playing_handicap: number | null;
       tee: Tee;
     }> = [];
 
     for (const r of rounds) {
       for (const p of players) {
         const existing = rpByKey.get(rpKey(r.id, p.id));
-        const playing = existing?.playing === true;
 
+        const playing = existing?.playing === true;
         const tee = existing?.tee ? normalizeTee(existing.tee) : defaultTeeByPlayer[p.id] ?? "M";
         const sh = startingHcpByPlayer[p.id];
 
@@ -241,7 +245,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
           round_id: r.id,
           player_id: p.id,
           playing,
-          playing_handicap: sh,
+          playing_handicap: Number.isFinite(Number(sh)) ? Number(sh) : null,
           tee,
         });
       }
@@ -255,7 +259,11 @@ export async function recalcAndSaveTourHandicaps(opts: {
     return { ok: true, updated: payload.length };
   }
 
-  // 4) pars (both tees; we’ll pick by player tee at runtime)
+  // === PATH B: Rehandicapping ENABLED (existing behaviour, but uses same loaded rounds/players/rp rows) ===
+
+  const courseIds = Array.from(new Set(rounds.map((r) => r.course_id).filter(Boolean))) as string[];
+
+  // pars (both tees)
   const { data: parsData, error: parsErr } = await supabase
     .from("pars")
     .select("course_id,hole_number,par,stroke_index,tee")
@@ -264,7 +272,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
   if (parsErr) return { ok: false, error: parsErr.message };
   const pars = (parsData ?? []) as ParRow[];
 
-  // Build pars by course + tee + hole
   const parsByCourseTee: Record<string, Record<Tee, Record<number, { par: number; si: number }>>> = {};
   for (const row of pars) {
     const cid = String(row.course_id);
@@ -274,7 +281,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
     parsByCourseTee[cid][tee][hole] = { par: Number(row.par), si: Number(row.stroke_index) };
   }
 
-  // 5) scores
+  // scores
   const { data: scoresData, error: scoresErr } = await supabase
     .from("scores")
     .select("round_id,player_id,hole_number,strokes,pickup")
@@ -284,7 +291,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
   if (scoresErr) return { ok: false, error: scoresErr.message };
   const scores = (scoresData ?? []) as ScoreRow[];
 
-  // Build score map
   const scoreMap: Record<string, Record<string, Record<number, string>>> = {};
   for (const s of scores) {
     const rid = String(s.round_id);
@@ -295,7 +301,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
     scoreMap[rid][pid][hole] = rawScoreString(s);
   }
 
-  // Playing map (default false unless round_players says playing=true)
+  // playingMap: default false unless round_players says playing=true
   const playingMap: Record<string, Record<string, boolean>> = {};
   for (const p of players) {
     for (const r of rounds) {
@@ -317,14 +323,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
     }
     return true;
   }
-
-  // Compute PH per round/player
-  const phByRoundPlayer: Record<string, Record<string, number>> = {};
-
-  // init Round 1 PH = SH
-  const r1 = rounds[0];
-  phByRoundPlayer[r1.id] = {};
-  for (const p of players) phByRoundPlayer[r1.id][p.id] = startingHcpByPlayer[p.id];
 
   const teeForRoundPlayer = (roundId: string, playerId: string): Tee => {
     const existing = rpByKey.get(rpKey(roundId, playerId));
@@ -352,6 +350,14 @@ export async function recalcAndSaveTourHandicaps(opts: {
     }
     return total;
   };
+
+  // Compute PH per round/player
+  const phByRoundPlayer: Record<string, Record<string, number>> = {};
+
+  // init Round 1 PH = SH
+  const r1 = rounds[0];
+  phByRoundPlayer[r1.id] = {};
+  for (const p of players) phByRoundPlayer[r1.id][p.id] = startingHcpByPlayer[p.id];
 
   // sequential recalculation; stop at first incomplete round
   for (let i = 0; i < rounds.length; i++) {
@@ -420,7 +426,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
     }
   }
 
-  // Upsert PH for ALL (round,player) combos, preserving playing, and ALWAYS writing tee (NOT NULL)
+  // Upsert PH for ALL (round,player) combinations, preserving playing, ALWAYS writing tee (NOT NULL)
   const payload: Array<{
     round_id: string;
     player_id: string;
