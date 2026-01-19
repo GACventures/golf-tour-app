@@ -114,7 +114,7 @@ export default function MobileTourAdminStartingHandicapsPage() {
   const [courseSaving, setCourseSaving] = useState(false);
 
   const [courseOptions, setCourseOptions] = useState<CourseOption[]>([]);
-  const [selectedCourseId, setSelectedCourseId] = useState<string>("");
+  const [selectedCourseId, setSelectedCourseId] = useState<string>(""); // empty = not selected yet
   const [holeRows, setHoleRows] = useState<HoleEditRow[]>(makeEmptyHoles());
 
   useEffect(() => {
@@ -126,8 +126,12 @@ export default function MobileTourAdminStartingHandicapsPage() {
       setLoading(true);
       setErrorMsg("");
       setSaveMsg("");
+
+      // Course editor messages reset on full load
       setCourseError("");
       setCourseSaveMsg("");
+      setCourseLoading(false);
+      setCourseSaving(false);
 
       try {
         const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
@@ -160,10 +164,7 @@ export default function MobileTourAdminStartingHandicapsPage() {
           .filter(Boolean) as any[];
 
         // Load tour courses (only those used by rounds in this tour)
-        const { data: roundData, error: roundErr } = await supabase
-          .from("rounds")
-          .select("course_id")
-          .eq("tour_id", tourId);
+        const { data: roundData, error: roundErr } = await supabase.from("rounds").select("course_id").eq("tour_id", tourId);
 
         if (roundErr) throw roundErr;
 
@@ -173,11 +174,9 @@ export default function MobileTourAdminStartingHandicapsPage() {
 
         let courses: CourseOption[] = [];
         if (courseIds.length > 0) {
-          const { data: cData, error: cErr } = await supabase
-            .from("courses")
-            .select("id,name")
-            .in("id", courseIds)
-            .order("name", { ascending: true });
+          const { data: cData, error: cErr } = await supabase.from("courses").select("id,name").in("id", courseIds).order("name", {
+            ascending: true,
+          });
 
           if (cErr) throw cErr;
 
@@ -193,11 +192,9 @@ export default function MobileTourAdminStartingHandicapsPage() {
         setRows(list);
         setCourseOptions(courses);
 
-        // If current selected course is not available, default to first
-        setSelectedCourseId((prev) => {
-          if (prev && courses.some((c) => c.id === prev)) return prev;
-          return courses[0]?.id ?? "";
-        });
+        // Important: do NOT auto-select a course. User must choose.
+        setSelectedCourseId("");
+        setHoleRows(makeEmptyHoles());
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load Tour Admin page.");
@@ -212,10 +209,21 @@ export default function MobileTourAdminStartingHandicapsPage() {
     };
   }, [tourId]);
 
-  // Load pars for selected course
+  // Load pars for selected course (only after user selects)
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
-    if (!selectedCourseId || !isLikelyUuid(selectedCourseId)) {
+
+    if (!selectedCourseId) {
+      setCourseError("");
+      setCourseSaveMsg("");
+      setCourseLoading(false);
+      setCourseSaving(false);
+      setHoleRows(makeEmptyHoles());
+      return;
+    }
+
+    if (!isLikelyUuid(selectedCourseId)) {
+      setCourseError("Selected course id is invalid.");
       setHoleRows(makeEmptyHoles());
       return;
     }
@@ -378,7 +386,7 @@ export default function MobileTourAdminStartingHandicapsPage() {
       const mSIs: number[] = [];
       const fSIs: number[] = [];
 
-      const toUpsert: Array<{
+      const toInsert: Array<{
         course_id: string;
         hole_number: number;
         tee: "M" | "F";
@@ -404,8 +412,8 @@ export default function MobileTourAdminStartingHandicapsPage() {
         mSIs.push(siM);
         fSIs.push(siF);
 
-        toUpsert.push({ course_id: selectedCourseId, hole_number: r.hole, tee: "M", par: parM, stroke_index: siM });
-        toUpsert.push({ course_id: selectedCourseId, hole_number: r.hole, tee: "F", par: parF, stroke_index: siF });
+        toInsert.push({ course_id: selectedCourseId, hole_number: r.hole, tee: "M", par: parM, stroke_index: siM });
+        toInsert.push({ course_id: selectedCourseId, hole_number: r.hole, tee: "F", par: parF, stroke_index: siF });
       }
 
       const mVal = validateSiSet(mSIs);
@@ -414,27 +422,15 @@ export default function MobileTourAdminStartingHandicapsPage() {
       const fVal = validateSiSet(fSIs);
       if (!fVal.ok) throw new Error(`SI – F invalid: ${fVal.error}`);
 
-      // Prefer upsert (safe). If schema lacks a unique constraint for onConflict, fall back to delete+insert.
-      const { error: upErr } = await supabase.from("pars").upsert(toUpsert, {
-        onConflict: "course_id,hole_number,tee",
-      });
+      // IMPORTANT:
+      // Your DB has a uniqueness constraint on (course_id, stroke_index, tee).
+      // When swapping SIs between holes, an UPSERT can temporarily violate that constraint.
+      // Safer approach: delete all rows for this course+tee, then insert fresh (after validation).
+      const { error: delErr } = await supabase.from("pars").delete().eq("course_id", selectedCourseId).in("tee", ["M", "F"]);
+      if (delErr) throw delErr;
 
-      if (upErr) {
-        const msg = String(upErr.message ?? "");
-        const lacksConstraint =
-          msg.toLowerCase().includes("no unique") ||
-          msg.toLowerCase().includes("no unique or exclusion") ||
-          msg.toLowerCase().includes("there is no unique");
-
-        if (!lacksConstraint) throw upErr;
-
-        // Fallback: delete existing rows for this course and tees M/F, then insert fresh.
-        const { error: delErr } = await supabase.from("pars").delete().eq("course_id", selectedCourseId).in("tee", ["M", "F"]);
-        if (delErr) throw delErr;
-
-        const { error: insErr } = await supabase.from("pars").insert(toUpsert);
-        if (insErr) throw insErr;
-      }
+      const { error: insErr } = await supabase.from("pars").insert(toInsert);
+      if (insErr) throw insErr;
 
       setCourseSaveMsg(`Saved course par/SI for ${selectedCourseName || "selected course"}.`);
     } catch (e: any) {
@@ -466,8 +462,8 @@ export default function MobileTourAdminStartingHandicapsPage() {
     );
   }
 
-  const parOptions = ["", "3", "4", "5"];
-  const siOptions = ["", ...Array.from({ length: 18 }, (_, i) => String(i + 1))];
+  const parOptions = ["3", "4", "5"];
+  const siOptions = Array.from({ length: 18 }, (_, i) => String(i + 1));
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
@@ -556,7 +552,7 @@ export default function MobileTourAdminStartingHandicapsPage() {
 
             {saveMsg ? <div className="text-sm text-green-700">{saveMsg}</div> : null}
 
-            {/* NEW: Course Par/SI Editor */}
+            {/* Course Par/SI Editor */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b">
                 <div className="text-sm font-semibold text-gray-900">Course par &amp; stroke index (global)</div>
@@ -580,6 +576,7 @@ export default function MobileTourAdminStartingHandicapsPage() {
                       value={selectedCourseId}
                       onChange={(e) => setSelectedCourseId(e.target.value)}
                     >
+                      <option value="">Select a course…</option>
                       {courseOptions.map((c) => (
                         <option key={c.id} value={c.id}>
                           {c.name}
@@ -587,131 +584,131 @@ export default function MobileTourAdminStartingHandicapsPage() {
                       ))}
                     </select>
 
-                    {courseLoading ? (
-                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading hole data…</div>
-                    ) : null}
-
-                    {courseError ? (
-                      <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{courseError}</div>
-                    ) : null}
-
-                    {/* Grid */}
-                    <div className="overflow-hidden rounded-2xl border border-gray-200">
-                      <div className="grid grid-cols-5 gap-0 border-b bg-gray-50">
-                        <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Hole</div>
-                        <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Par M</div>
-                        <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">SI M</div>
-                        <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Par F</div>
-                        <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">SI F</div>
+                    {/* Do not show grid until a course is selected */}
+                    {!selectedCourseId ? (
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                        Choose a course to edit par and stroke index.
                       </div>
+                    ) : (
+                      <>
+                        {courseLoading ? (
+                          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading hole data…</div>
+                        ) : null}
 
-                      <div className="divide-y">
-                        {holeRows.map((r) => (
-                          <div key={r.hole} className="grid grid-cols-5 gap-0 items-center">
-                            <div className="px-2 py-2 text-sm font-semibold text-gray-900">{r.hole}</div>
+                        {courseError ? (
+                          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{courseError}</div>
+                        ) : null}
 
-                            <div className="px-1 py-1">
-                              <select
-                                className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                value={r.parM}
-                                onChange={(e) => setHoleCell(r.hole, "parM", e.target.value)}
-                                aria-label={`Par M hole ${r.hole}`}
-                              >
-                                <option value="">—</option>
-                                {parOptions
-                                  .filter((x) => x !== "")
-                                  .map((p) => (
-                                    <option key={p} value={p}>
-                                      {p}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-
-                            <div className="px-1 py-1">
-                              <select
-                                className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                value={r.siM}
-                                onChange={(e) => setHoleCell(r.hole, "siM", e.target.value)}
-                                aria-label={`SI M hole ${r.hole}`}
-                              >
-                                <option value="">—</option>
-                                {siOptions
-                                  .filter((x) => x !== "")
-                                  .map((si) => (
-                                    <option key={si} value={si}>
-                                      {si}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-
-                            <div className="px-1 py-1">
-                              <select
-                                className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                value={r.parF}
-                                onChange={(e) => setHoleCell(r.hole, "parF", e.target.value)}
-                                aria-label={`Par F hole ${r.hole}`}
-                              >
-                                <option value="">—</option>
-                                {parOptions
-                                  .filter((x) => x !== "")
-                                  .map((p) => (
-                                    <option key={p} value={p}>
-                                      {p}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-
-                            <div className="px-1 py-1">
-                              <select
-                                className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                value={r.siF}
-                                onChange={(e) => setHoleCell(r.hole, "siF", e.target.value)}
-                                aria-label={`SI F hole ${r.hole}`}
-                              >
-                                <option value="">—</option>
-                                {siOptions
-                                  .filter((x) => x !== "")
-                                  .map((si) => (
-                                    <option key={si} value={si}>
-                                      {si}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
+                        <div className="overflow-hidden rounded-2xl border border-gray-200">
+                          <div className="grid grid-cols-5 gap-0 border-b bg-gray-50">
+                            <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Hole</div>
+                            <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Par M</div>
+                            <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">SI M</div>
+                            <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Par F</div>
+                            <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">SI F</div>
                           </div>
-                        ))}
-                      </div>
-                    </div>
 
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-xs text-gray-600">
-                        {selectedCourseName ? (
-                          <>
-                            Editing: <span className="font-medium">{selectedCourseName}</span>
-                          </>
-                        ) : (
-                          "Select a course to edit"
-                        )}
-                      </div>
+                          <div className="divide-y">
+                            {holeRows.map((r) => (
+                              <div key={r.hole} className="grid grid-cols-5 gap-0 items-center">
+                                <div className="px-2 py-2 text-sm font-semibold text-gray-900">{r.hole}</div>
 
-                      <button
-                        type="button"
-                        onClick={saveCoursePars}
-                        disabled={courseSaving || courseLoading || !selectedCourseId}
-                        className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                          courseSaving || courseLoading || !selectedCourseId
-                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                            : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                        }`}
-                      >
-                        {courseSaving ? "Saving…" : "Save course"}
-                      </button>
-                    </div>
+                                <div className="px-1 py-1">
+                                  <select
+                                    className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                    value={r.parM}
+                                    onChange={(e) => setHoleCell(r.hole, "parM", e.target.value)}
+                                    aria-label={`Par M hole ${r.hole}`}
+                                  >
+                                    <option value="">—</option>
+                                    {parOptions.map((p) => (
+                                      <option key={p} value={p}>
+                                        {p}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
 
-                    {courseSaveMsg ? <div className="text-sm text-green-700">{courseSaveMsg}</div> : null}
+                                <div className="px-1 py-1">
+                                  <select
+                                    className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                    value={r.siM}
+                                    onChange={(e) => setHoleCell(r.hole, "siM", e.target.value)}
+                                    aria-label={`SI M hole ${r.hole}`}
+                                  >
+                                    <option value="">—</option>
+                                    {siOptions.map((si) => (
+                                      <option key={si} value={si}>
+                                        {si}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <div className="px-1 py-1">
+                                  <select
+                                    className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                    value={r.parF}
+                                    onChange={(e) => setHoleCell(r.hole, "parF", e.target.value)}
+                                    aria-label={`Par F hole ${r.hole}`}
+                                  >
+                                    <option value="">—</option>
+                                    {parOptions.map((p) => (
+                                      <option key={p} value={p}>
+                                        {p}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <div className="px-1 py-1">
+                                  <select
+                                    className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                    value={r.siF}
+                                    onChange={(e) => setHoleCell(r.hole, "siF", e.target.value)}
+                                    aria-label={`SI F hole ${r.hole}`}
+                                  >
+                                    <option value="">—</option>
+                                    {siOptions.map((si) => (
+                                      <option key={si} value={si}>
+                                        {si}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs text-gray-600">
+                            {selectedCourseName ? (
+                              <>
+                                Editing: <span className="font-medium">{selectedCourseName}</span>
+                              </>
+                            ) : (
+                              "Select a course to edit"
+                            )}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={saveCoursePars}
+                            disabled={courseSaving || courseLoading || !selectedCourseId}
+                            className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                              courseSaving || courseLoading || !selectedCourseId
+                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                            }`}
+                          >
+                            {courseSaving ? "Saving…" : "Save course"}
+                          </button>
+                        </div>
+
+                        {courseSaveMsg ? <div className="text-sm text-green-700">{courseSaveMsg}</div> : null}
+                      </>
+                    )}
                   </>
                 )}
               </div>
