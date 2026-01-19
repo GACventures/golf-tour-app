@@ -715,6 +715,21 @@ export default function MobileScoreEntryPage() {
     const totalShots = frontShots + backShots;
     const totalPts = frontPts + backPts;
 
+    // Coloured box for STROKES, using the same Stableford meaning:
+    // 4+ = eagle or better, 3 = birdie, 2 = par, 1 = bogey, 0 = double+.
+    function strokesBoxClass(disp: string, pts: number) {
+      const d = String(disp ?? "").trim().toUpperCase();
+      if (!d || d === "—" || d === "P") {
+        return "bg-slate-100 text-slate-400 border border-slate-200";
+      }
+
+      if (pts >= 4) return "bg-emerald-200 text-emerald-950 border border-emerald-300"; // eagle+
+      if (pts === 3) return "bg-lime-200 text-lime-950 border border-lime-300"; // birdie
+      if (pts === 2) return "bg-slate-100 text-slate-900 border border-slate-200"; // par
+      if (pts === 1) return "bg-amber-200 text-amber-950 border border-amber-300"; // bogey
+      return "bg-rose-200 text-rose-950 border border-rose-300"; // double+
+    }
+
     return (
       <div className="rounded-lg overflow-hidden bg-white shadow-sm text-slate-900 border border-slate-200">
         <div className="bg-slate-100 px-3 py-2 text-xs font-bold tracking-wide text-slate-700 grid grid-cols-5 gap-2">
@@ -749,7 +764,19 @@ export default function MobileScoreEntryPage() {
 
                 <div className="text-center font-semibold">{info.par || "—"}</div>
                 <div className="text-center">{info.si || "—"}</div>
-                <div className="text-center font-bold">{disp}</div>
+
+                {/* ✅ ONLY CHANGE: coloured box behind strokes display (no logic/layout changes elsewhere) */}
+                <div className="text-center font-bold">
+                  <span
+                    className={`inline-flex min-w-[44px] justify-center rounded-md px-2 ${strokesBoxClass(
+                      disp,
+                      pts
+                    )}`}
+                  >
+                    {disp}
+                  </span>
+                </div>
+
                 <div className="text-center font-bold">{pts}</div>
               </div>
 
