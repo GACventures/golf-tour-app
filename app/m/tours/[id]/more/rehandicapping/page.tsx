@@ -11,7 +11,7 @@ type Tour = {
   id: string;
   name: string;
   rehandicapping_enabled: boolean | null;
-  rehandicapping_rules_summary: string | null;
+  rehandicapping_rules_summary: string | null; // kept in type (DB), but intentionally NOT used for display
   rehandicapping_rule_key: string | null;
 };
 
@@ -72,6 +72,12 @@ function fmtRoundLabel(r: RoundRow, idx: number) {
   return `R${idx + 1}`;
 }
 
+const PLAIN_ENGLISH_RULE_V1 =
+  "After each completed round, the Playing Handicap (PH) for the next round is recalculated using Stableford results.\n\n" +
+  "The rounded average Stableford score for the round is calculated across all players who completed the round. Each player’s Stableford score is compared to this average, and the difference is multiplied by one-third. The result is rounded to the nearest whole number, with .5 rounding up, and applied as an adjustment to the player’s PH.\n\n" +
+  "The resulting Playing Handicap cannot exceed Starting Handicap + 3, and cannot be lower than half the Starting Handicap, rounded up if the Starting Handicap is odd.\n\n" +
+  "If a player does not play a round, their Playing Handicap carries forward unchanged to the next round.";
+
 export default function MobileTourRehandicappingPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -84,7 +90,7 @@ export default function MobileTourRehandicappingPage() {
   const [tourPlayers, setTourPlayers] = useState<TourPlayerJoinRow[]>([]);
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
 
-  // Guard against duplicate rapid refetches (focus/visibility can fire in bursts)
+  // Prevent bursts of duplicate refetches (focus/visibility can fire in quick succession)
   const inFlightRef = useRef(false);
   const lastRunMsRef = useRef(0);
 
@@ -92,8 +98,7 @@ export default function MobileTourRehandicappingPage() {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
     const now = Date.now();
-    // simple throttle: ignore if called too frequently
-    if (now - lastRunMsRef.current < 350) return;
+    if (now - lastRunMsRef.current < 250) return;
     lastRunMsRef.current = now;
 
     if (inFlightRef.current) return;
@@ -125,7 +130,7 @@ export default function MobileTourRehandicappingPage() {
       const rr = (rData ?? []) as RoundRow[];
       setRounds(rr);
 
-      // Players in this tour (tour_players join players)
+      // Players in this tour
       const { data: tpData, error: tpErr } = await supabase
         .from("tour_players")
         .select("tour_id,player_id,starting_handicap, players(id,name,start_handicap)")
@@ -139,7 +144,7 @@ export default function MobileTourRehandicappingPage() {
       const roundIds = rr.map((r) => r.id);
       const playerIds = tps.map((x) => String(x.player_id)).filter(Boolean);
 
-      // round_players: per-round handicap display
+      // round_players: the per-round handicap we want to display
       if (roundIds.length > 0 && playerIds.length > 0) {
         const { data: rpData, error: rpErr } = await supabase
           .from("round_players")
@@ -176,19 +181,11 @@ export default function MobileTourRehandicappingPage() {
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
-    const onFocus = () => {
-      void loadAll();
-    };
-
+    const onFocus = () => void loadAll();
     const onVis = () => {
-      if (document.visibilityState === "visible") {
-        void loadAll();
-      }
+      if (document.visibilityState === "visible") void loadAll();
     };
-
-    const onPageShow = () => {
-      void loadAll();
-    };
+    const onPageShow = () => void loadAll();
 
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVis);
@@ -242,24 +239,12 @@ export default function MobileTourRehandicappingPage() {
     return { players, roundsSorted, hcpByRoundPlayer, fallbackStartByPlayerId };
   }, [tourPlayers, rounds, roundPlayers]);
 
-  // === Rule text (plain-English) ===
   const enabledFlag = tour?.rehandicapping_enabled;
   const enabled = enabledFlag === true;
 
-  const ruleSource = enabled ? "plain-english-v1" : "disabled";
-  const ruleText = useMemo(() => {
-    if (!tour) return "";
-
-    if (!enabled) return "No rehandicapping.";
-
-    return (
-      "After each completed round, the Playing Handicap (PH) for the next round is recalculated using Stableford results.\n\n" +
-      "The rounded average Stableford score for the round is calculated across all players who completed the round. Each player’s Stableford score is compared to this average, and the difference is multiplied by one-third. The result is rounded to the nearest whole number, with .5 rounding up, and applied as an adjustment to the player’s PH.\n\n" +
-      "The resulting Playing Handicap cannot exceed Starting Handicap + 3, and cannot be lower than half the Starting Handicap, rounded up if the Starting Handicap is odd.\n\n" +
-      "If a player does not play a round, their Playing Handicap carries forward unchanged to the next round."
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tour, enabled]);
+  // IMPORTANT: always show plain-English rule when enabled; never use DB summary text for display.
+  const ruleHeaderSuffix = enabled ? " (plain-english-v1)" : "";
+  const ruleText = enabled ? PLAIN_ENGLISH_RULE_V1 : "No rehandicapping.";
 
   if (!tourId || !isLikelyUuid(tourId)) {
     return (
@@ -302,29 +287,14 @@ export default function MobileTourRehandicappingPage() {
           <>
             {/* Rule summary */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
-              <div className="text-sm font-semibold text-gray-900">Rule</div>
+              <div className="text-sm font-semibold text-gray-900">Rule{ruleHeaderSuffix}</div>
               <div className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{ruleText}</div>
 
-              {tour?.rehandicapping_enabled ? (
+              {enabled ? (
                 <div className="mt-2 text-[11px] text-gray-500">
-                  Key: <span className="font-medium">{tour.rehandicapping_rule_key ?? "—"}</span>
+                  Key: <span className="font-medium">{tour?.rehandicapping_rule_key ?? "—"}</span>
                 </div>
               ) : null}
-
-              {/* DEBUG FOOTER: confirms which bundle/path is actually rendering */}
-              <div className="mt-3 rounded-xl border border-dashed border-gray-300 bg-gray-50 px-3 py-2 text-[11px] text-gray-600">
-                <div className="font-semibold text-gray-700">Debug</div>
-                <div className="mt-1">
-                  enabled: <span className="font-mono">{String(enabledFlag)}</span> · source:{" "}
-                  <span className="font-mono">{ruleSource}</span>
-                </div>
-                <div className="mt-1">
-                  rule_key: <span className="font-mono">{tour?.rehandicapping_rule_key ?? "—"}</span>
-                </div>
-                <div className="mt-1">
-                  build: <span className="font-mono">reh-v1-debug</span>
-                </div>
-              </div>
             </section>
 
             {/* Handicap table */}
