@@ -138,30 +138,10 @@ export default function MobileCompetitionsPage() {
 
   const fixedComps: FixedCompMeta[] = useMemo(
     () => [
-      {
-        key: "napoleon",
-        label: "Napoleon",
-        competitionId: "tour_napoleon_par3_avg",
-        format: (v) => fmt2(v),
-      },
-      {
-        key: "bigGeorge",
-        label: "Big George",
-        competitionId: "tour_big_george_par4_avg",
-        format: (v) => fmt2(v),
-      },
-      {
-        key: "grandCanyon",
-        label: "Grand Canyon",
-        competitionId: "tour_grand_canyon_par5_avg",
-        format: (v) => fmt2(v),
-      },
-      {
-        key: "wizard",
-        label: "Wizard",
-        competitionId: "tour_wizard_four_plus_pct",
-        format: (v) => fmtPct0(v),
-      },
+      { key: "napoleon", label: "Napoleon", competitionId: "tour_napoleon_par3_avg", format: (v) => fmt2(v) },
+      { key: "bigGeorge", label: "Big George", competitionId: "tour_big_george_par4_avg", format: (v) => fmt2(v) },
+      { key: "grandCanyon", label: "Grand Canyon", competitionId: "tour_grand_canyon_par5_avg", format: (v) => fmt2(v) },
+      { key: "wizard", label: "Wizard", competitionId: "tour_wizard_four_plus_pct", format: (v) => fmtPct0(v) },
       {
         key: "bagelMan",
         label: "Bagel Man",
@@ -169,12 +149,7 @@ export default function MobileCompetitionsPage() {
         lowerIsBetter: true,
         format: (v) => fmtPct0(v),
       },
-      {
-        key: "eclectic",
-        label: "Eclectic",
-        competitionId: "tour_eclectic_total",
-        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
-      },
+      { key: "eclectic", label: "Eclectic", competitionId: "tour_eclectic_total", format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)) },
     ],
     []
   );
@@ -201,6 +176,7 @@ export default function MobileCompetitionsPage() {
           .order("round_no", { ascending: true, nullsFirst: false })
           .order("created_at", { ascending: true });
         if (rErr) throw rErr;
+
         const rr = (rData ?? []) as RoundRow[];
         if (!alive) return;
         setRounds(rr);
@@ -358,7 +334,6 @@ export default function MobileCompetitionsPage() {
   }, [sortedRounds, players, roundPlayers, scores, pars]);
 
   const compMatrix = useMemo(() => {
-    // Build { playerId: { compKey: { value, rank } } }
     const out: Record<string, Record<FixedCompKey, { value: number | null; rank: number | null }>> = {};
     for (const p of players) {
       out[p.id] = {
@@ -378,15 +353,12 @@ export default function MobileCompetitionsPage() {
       const result = runCompetition(def, ctx as unknown as CompetitionContext);
       const rows = (result?.rows ?? []).filter((r) => !!r?.entryId);
 
-      // value map
       const entries: Array<{ id: string; value: number }> = [];
       for (const r of rows) {
         const v = Number(r.total);
         if (!Number.isFinite(v)) continue;
         entries.push({ id: String(r.entryId), value: v });
-        if (out[String(r.entryId)]) {
-          out[String(r.entryId)][meta.key].value = v;
-        }
+        if (out[String(r.entryId)]) out[String(r.entryId)][meta.key].value = v;
       }
 
       const rankById = rankWithTies(entries, !!meta.lowerIsBetter);
@@ -470,18 +442,32 @@ export default function MobileCompetitionsPage() {
                         const value = cell?.value ?? null;
                         const rank = cell?.rank ?? null;
 
+                        const inner =
+                          value === null ? (
+                            <span className="text-gray-400">—</span>
+                          ) : (
+                            <>
+                              {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
+                            </>
+                          );
+
+                        // ✅ Only Eclectic is a link to the existing breakdown page
+                        if (c.key === "eclectic" && value !== null) {
+                          return (
+                            <td key={c.key} className="px-3 py-2 text-right text-sm text-gray-900">
+                              <Link
+                                href={`/m/tours/${tourId}/competitions/eclectic/${p.id}`}
+                                className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1 underline decoration-gray-300 underline-offset-2 hover:decoration-gray-600"
+                              >
+                                {inner}
+                              </Link>
+                            </td>
+                          );
+                        }
+
                         return (
                           <td key={c.key} className="px-3 py-2 text-right text-sm text-gray-900">
-                            <span className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1">
-                              {value === null ? (
-                                <span className="text-gray-400">—</span>
-                              ) : (
-                                <>
-                                  {c.format(value)}{" "}
-                                  <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
-                                </>
-                              )}
-                            </span>
+                            <span className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1">{inner}</span>
                           </td>
                         );
                       })}
@@ -492,7 +478,7 @@ export default function MobileCompetitionsPage() {
             </table>
 
             <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
-              Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better.
+              Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Tap Eclectic to see hole-by-hole breakdown.
             </div>
           </div>
         )}
