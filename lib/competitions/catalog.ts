@@ -31,13 +31,6 @@ function isTourContext(ctx: CompetitionContext): ctx is CompetitionContext & Tou
   return Array.isArray(c?.rounds);
 }
 
-function titleCaseKey(key: string) {
-  return key
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (m) => m.toUpperCase())
-    .replace(/\bPct\b/i, "%");
-}
-
 function memberNamesLabel(ctx: TourLikeCtx, memberIds: string[]) {
   const byId = new Map(ctx.players.map((p) => [p.id, p.name]));
   return memberIds.map((id) => byId.get(id) ?? id).join(" / ");
@@ -51,7 +44,9 @@ function getEntitiesForKind(ctx: TourLikeCtx, kind: "pair" | "team") {
     for (const e of ctx.entities) {
       const ids = (e as any)?.memberPlayerIds ?? [];
       if (!Array.isArray(ids) || ids.length === 0) continue;
-      const label = String((e as any)?.label ?? (ctx.entityLabelsById?.[(e as any)?.entityId] ?? (e as any)?.entityId));
+      const label = String(
+        (e as any)?.label ?? (ctx.entityLabelsById?.[(e as any)?.entityId] ?? (e as any)?.entityId)
+      );
       out.push({ entityId: String((e as any)?.entityId), label, memberPlayerIds: ids.map(String) });
     }
     return out;
@@ -75,6 +70,8 @@ function getEntitiesForKind(ctx: TourLikeCtx, kind: "pair" | "team") {
 /**
  * Helper for “Napoleon-style” averages by par (3/4/5).
  * Tour scope, individual.
+ *
+ * ✅ UPDATED: par classification is tee-specific if round context provides parForPlayerHole().
  */
 function avgStablefordByPar(parTarget: 3 | 4 | 5, id: string, name: string): CompetitionDefinition {
   return {
@@ -97,12 +94,17 @@ function avgStablefordByPar(parTarget: 3 | 4 | 5, id: string, name: string): Com
           const holes: number[] = (r as any)?.holes ?? [];
           const parsByHole: number[] = (r as any)?.parsByHole ?? [];
           const isComplete = (r as any)?.isComplete;
+          const parForPlayerHole: ((playerId: string, holeIndex: number) => number) | undefined = (r as any)
+            ?.parForPlayerHole;
 
           // requireComplete for this player in this round
           if (typeof isComplete === "function" && !isComplete(p.id)) continue;
 
           for (let i = 0; i < holes.length; i++) {
-            const par = Number(parsByHole[i] ?? 0);
+            const par = Number(
+              typeof parForPlayerHole === "function" ? parForPlayerHole(p.id, i) : Number(parsByHole[i] ?? 0)
+            );
+
             if (par !== parTarget) continue;
 
             holesPlayed += 1;
@@ -277,10 +279,8 @@ function eclectic(id: string, name: string): CompetitionDefinition {
   };
 }
 
-/**
- * PAIR: Best Ball Stableford across tour
- * For each hole: take max(points of the two players), sum across all eligible rounds.
- */
+// ----- Pair/Team comps unchanged -----
+
 function tourPairBestBallStableford(id: string, name: string): CompetitionDefinition {
   return {
     id,
@@ -288,8 +288,8 @@ function tourPairBestBallStableford(id: string, name: string): CompetitionDefini
     scope: "tour",
     kind: "pair",
     eligibility: {
-      onlyPlaying: false, // handled by entities
-      requireComplete: true, // will skip any round where a member is incomplete
+      onlyPlaying: false,
+      requireComplete: true,
     },
     compute: (ctx: CompetitionContext) => {
       if (!isTourContext(ctx)) return [];
@@ -306,7 +306,6 @@ function tourPairBestBallStableford(id: string, name: string): CompetitionDefini
           const holes: number[] = (r as any)?.holes ?? [];
           const isComplete = (r as any)?.isComplete;
 
-          // requireComplete: if any member incomplete in this round, skip this round
           if (typeof isComplete === "function") {
             const ok = members.every((pid) => isComplete(pid));
             if (!ok) continue;
@@ -335,10 +334,6 @@ function tourPairBestBallStableford(id: string, name: string): CompetitionDefini
   };
 }
 
-/**
- * PAIR: Aggregate Stableford across tour
- * For each hole: sum(points of both), sum across rounds.
- */
 function tourPairAggregateStableford(id: string, name: string): CompetitionDefinition {
   return {
     id,
@@ -392,11 +387,6 @@ function tourPairAggregateStableford(id: string, name: string): CompetitionDefin
   };
 }
 
-/**
- * TEAM: Best M per hole, minus zeros (your custom team comp)
- * For each hole:
- *   sum top M member points, then subtract number of 0-point scores on that hole.
- */
 function tourTeamBestMMinusZeros(id: string, name: string): CompetitionDefinition {
   return {
     id,
@@ -464,9 +454,6 @@ function tourTeamBestMMinusZeros(id: string, name: string): CompetitionDefinitio
   };
 }
 
-/**
- * TEAM: Aggregate Stableford across tour (simple baseline)
- */
 function tourTeamAggregateStableford(id: string, name: string): CompetitionDefinition {
   return {
     id,
@@ -530,11 +517,11 @@ export const competitionCatalog: CompetitionDefinition[] = [
   wizard("tour_wizard_four_plus_pct", "Wizard (% 4+ holes)"),
   eclectic("tour_eclectic_total", "Eclectic (best per hole)"),
 
-  // ✅ Pair tour comps
+  // Pair tour comps
   tourPairBestBallStableford("tour_pair_best_ball_stableford", "Pairs: Best Ball (Stableford)"),
   tourPairAggregateStableford("tour_pair_aggregate_stableford", "Pairs: Aggregate (Stableford)"),
 
-  // ✅ Team tour comps
+  // Team tour comps
   tourTeamBestMMinusZeros("tour_team_best_m_minus_zeros", "Teams: Best M per hole − zeros"),
   tourTeamAggregateStableford("tour_team_aggregate_stableford", "Teams: Aggregate (Stableford)"),
 ];
