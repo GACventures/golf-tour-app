@@ -1,17 +1,17 @@
-export type CompetitionScope = 'round' | 'tour';
+export type CompetitionScope = "round" | "tour";
 
-export type CompetitionKind = 'individual' | 'pair' | 'team';
+export type CompetitionKind = "individual" | "pair" | "team";
 
 export type TeamSize = 2 | 3 | 4;
 
 export type TieBreakRule =
-  | 'back9'
-  | 'front9'
-  | 'last6'
-  | 'last3'
-  | 'last1'
-  | 'countback' // generic “countback” preference
-  | 'none';
+  | "back9"
+  | "front9"
+  | "last6"
+  | "last3"
+  | "last1"
+  | "countback" // generic “countback” preference
+  | "none";
 
 export type Eligibility = {
   /** include only players marked playing=true for the round(s) */
@@ -31,6 +31,9 @@ export type LeaderboardRow = {
 
   // Optional per-hole totals (useful for team formats & countback)
   holeTotals?: number[]; // length 18
+
+  // ✅ Used heavily by your catalog + UI (Bagel Man, Wizard, etc.)
+  stats?: Record<string, any>;
 };
 
 export type CompetitionResult = {

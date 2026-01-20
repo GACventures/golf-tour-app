@@ -1,13 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
 import { supabase } from "@/lib/supabaseClient";
 import MobileNav from "../_components/MobileNav";
 
-type Tee = "M" | "F";
+import { competitionCatalog } from "@/lib/competitions/catalog";
+import { runCompetition } from "@/lib/competitions/engine";
+
+import type { CompetitionDefinition, CompetitionKind, CompetitionContext } from "@/lib/competitions/types";
+
+import { resolveEntities, type LeaderboardEntity } from "@/lib/competitions/entities/resolveEntities";
+import { buildTourCompetitionContext, type Tee, type TourRoundInput, type PlayerInput, type RoundPlayerInput, type ScoreInput, type ParInput } from "@/lib/competitions/buildTourCompetitionContext";
 
 type Tour = { id: string; name: string };
 
@@ -24,6 +30,7 @@ type PlayerRow = {
   id: string;
   name: string;
   gender?: Tee | null;
+  start_handicap?: number | null;
 };
 
 type RoundPlayerRow = {
@@ -49,16 +56,6 @@ type ParRow = {
   stroke_index: number;
 };
 
-type CompKey = "napoleon" | "bigGeorge" | "grandCanyon" | "wizard" | "bagelMan" | "eclectic";
-
-type CompMeta = {
-  key: CompKey;
-  label: string;
-  lowerIsBetter?: boolean;
-  format: (v: number) => string;
-  description: string;
-};
-
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
@@ -73,74 +70,45 @@ function normalizeTee(v: any): Tee {
   return s === "F" ? "F" : "M";
 }
 
-function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
-  if (pickup) return "P";
-  if (strokes === null || strokes === undefined) return "";
-  const n = Number(strokes);
-  return Number.isFinite(n) ? String(n) : "";
+function titleCaseKey(key: string) {
+  return key
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (m) => m.toUpperCase())
+    .replace(/\bPct\b/i, "%");
 }
 
-function netStablefordPointsForHole(params: {
-  rawScore: string;
-  par: number;
-  strokeIndex: number;
-  playingHandicap: number;
-}) {
-  const { rawScore, par, strokeIndex, playingHandicap } = params;
-
-  const raw = String(rawScore ?? "").trim().toUpperCase();
-  if (!raw) return 0;
-  if (raw === "P") return 0;
-
-  const strokes = Number(raw);
-  if (!Number.isFinite(strokes)) return 0;
-
-  const hcp = Math.max(0, Math.floor(Number(playingHandicap) || 0));
-  const base = Math.floor(hcp / 18);
-  const rem = hcp % 18;
-  const extra = strokeIndex <= rem ? 1 : 0;
-  const shotsReceived = base + extra;
-
-  const net = strokes - shotsReceived;
-  const pts = 2 + (par - net);
-  return Math.max(0, Math.min(pts, 10));
+function isPercentish(def: CompetitionDefinition) {
+  const id = String(def.id ?? "").toLowerCase();
+  const name = String(def.name ?? "").toLowerCase();
+  return id.includes("_pct") || id.includes("percent") || name.includes("%");
 }
 
-function fmt2(x: number) {
-  if (!Number.isFinite(x)) return "0.00";
-  return x.toFixed(2);
+function formatTotal(def: CompetitionDefinition, n: number) {
+  if (!Number.isFinite(n)) return "0";
+  if (isPercentish(def)) return `${n.toFixed(2)}%`;
+  return Number.isInteger(n) ? String(n) : n.toFixed(2);
 }
 
-function fmtPct(x: number) {
-  if (!Number.isFinite(x)) return "0%";
-  return `${x.toFixed(0)}%`;
-}
-
-function rankWithTies(entries: Array<{ id: string; value: number }>, lowerIsBetter: boolean) {
-  const sorted = [...entries].sort((a, b) => {
-    const av = Number.isFinite(a.value) ? a.value : 0;
-    const bv = Number.isFinite(b.value) ? b.value : 0;
-    if (av === bv) return a.id.localeCompare(b.id);
-    return lowerIsBetter ? av - bv : bv - av;
+function sortCompColumns(keys: string[]) {
+  const preferred = [
+    "members",
+    "holes_played",
+    "points_total",
+    "avg_points",
+    "zero_count",
+    "zero_pct",
+    "four_plus_count",
+    "four_plus_pct",
+    "eclectic_total",
+  ];
+  const out = [...keys];
+  out.sort((a, b) => {
+    const ia = preferred.indexOf(a);
+    const ib = preferred.indexOf(b);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    return a.localeCompare(b);
   });
-
-  const rankById = new Map<string, number>();
-  let currentRank = 0;
-  let lastValue: number | null = null;
-  let seen = 0;
-
-  for (const e of sorted) {
-    seen += 1;
-    const v = Number.isFinite(e.value) ? e.value : 0;
-
-    if (lastValue === null || v !== lastValue) {
-      currentRank = seen; // 1,1,3 style
-      lastValue = v;
-    }
-    rankById.set(e.id, currentRank);
-  }
-
-  return rankById;
+  return out;
 }
 
 export default function MobileCompetitionsPage() {
@@ -157,29 +125,24 @@ export default function MobileCompetitionsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
-  const comps: CompMeta[] = useMemo(
-    () => [
-      { key: "napoleon", label: "Napoleon", format: (v) => fmt2(v), description: "Average Stableford points on Par 3 holes." },
-      { key: "bigGeorge", label: "Big George", format: (v) => fmt2(v), description: "Average Stableford points on Par 4 holes." },
-      { key: "grandCanyon", label: "Grand Canyon", format: (v) => fmt2(v), description: "Average Stableford points on Par 5 holes." },
-      { key: "wizard", label: "Wizard", format: (v) => fmtPct(v), description: "% of holes with 4+ Stableford points." },
-      {
-        key: "bagelMan",
-        label: "Bagel Man",
-        lowerIsBetter: true,
-        format: (v) => fmtPct(v),
-        description: "% of holes with 0 Stableford points (lower is better).",
-      },
-      {
-        key: "eclectic",
-        label: "Eclectic",
-        format: (v) => String(Math.round(v)),
-        description:
-          "Best Stableford score on each hole across the tour, summed. To see hole-by-hole Eclectic, tap the score in the Eclectic column.",
-      },
-    ],
-    []
-  );
+  const tourCompetitions = useMemo(() => {
+    return (competitionCatalog ?? []).filter((c: any) => c?.scope === "tour") as CompetitionDefinition[];
+  }, []);
+
+  const [selectedCompId, setSelectedCompId] = useState<string>(() => {
+    const first = (competitionCatalog ?? []).find((c: any) => c?.scope === "tour");
+    return String(first?.id ?? "tour_napoleon_par3_avg");
+  });
+
+  const selectedDef = useMemo(() => {
+    return tourCompetitions.find((c) => c.id === selectedCompId) ?? (tourCompetitions[0] ?? null);
+  }, [tourCompetitions, selectedCompId]);
+
+  // Pair/team entities
+  const [entities, setEntities] = useState<LeaderboardEntity[]>([]);
+  const [entityMembersById, setEntityMembersById] = useState<Record<string, string[]>>({});
+  const [entityLabelsById, setEntityLabelsById] = useState<Record<string, string>>({});
+  const [entitiesError, setEntitiesError] = useState("");
 
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
@@ -209,19 +172,24 @@ export default function MobileCompetitionsPage() {
 
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
-          .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
+          .select("tour_id,player_id,starting_handicap,players(id,name,gender,start_handicap)")
           .eq("tour_id", tourId)
           .order("name", { ascending: true, foreignTable: "players" });
         if (tpErr) throw tpErr;
 
         const ps: PlayerRow[] = (tpData ?? [])
-          .map((row: any) => row.players)
-          .filter(Boolean)
-          .map((p: any) => ({
-            id: String(p.id),
-            name: safeName(p.name, "(unnamed)"),
-            gender: p.gender ? normalizeTee(p.gender) : null,
-          }));
+          .map((row: any) => ({
+            id: String(row.players?.id ?? row.player_id),
+            name: safeName(row.players?.name, "(unnamed)"),
+            gender: row.players?.gender ? normalizeTee(row.players.gender) : null,
+            // Prefer tour starting handicap; fallback to global start_handicap if present
+            start_handicap: Number.isFinite(Number(row.starting_handicap))
+              ? Number(row.starting_handicap)
+              : Number.isFinite(Number(row.players?.start_handicap))
+              ? Number(row.players.start_handicap)
+              : 0,
+          }))
+          .filter((p) => !!p.id);
 
         if (!alive) return;
         setPlayers(ps);
@@ -303,140 +271,93 @@ export default function MobileCompetitionsPage() {
     };
   }, [tourId]);
 
-  const sortedRounds = useMemo(() => {
-    const arr = [...rounds];
-    arr.sort((a, b) => {
-      const an = a.round_no ?? 999999;
-      const bn = b.round_no ?? 999999;
-      if (an !== bn) return an - bn;
-      return (a.created_at ?? "").localeCompare(b.created_at ?? "");
-    });
-    return arr;
-  }, [rounds]);
+  // Resolve entities when selected comp is pair/team
+  useEffect(() => {
+    let cancelled = false;
 
-  const rpByRoundPlayer = useMemo(() => {
-    const m = new Map<string, RoundPlayerRow>();
-    for (const rp of roundPlayers) m.set(`${rp.round_id}|${rp.player_id}`, rp);
-    return m;
-  }, [roundPlayers]);
+    async function loadEntities() {
+      setEntitiesError("");
 
-  const parsByCourseTeeHole = useMemo(() => {
-    const m = new Map<string, Map<Tee, Map<number, { par: number; si: number }>>>();
-    for (const p of pars) {
-      if (!m.has(p.course_id)) m.set(p.course_id, new Map());
-      const byTee = m.get(p.course_id)!;
-      if (!byTee.has(p.tee)) byTee.set(p.tee, new Map());
-      byTee.get(p.tee)!.set(p.hole_number, { par: p.par, si: p.stroke_index });
-    }
-    return m;
-  }, [pars]);
-
-  const scoreByRoundPlayerHole = useMemo(() => {
-    const m = new Map<string, ScoreRow>();
-    for (const s of scores) m.set(`${s.round_id}|${s.player_id}|${Number(s.hole_number)}`, s);
-    return m;
-  }, [scores]);
-
-  const compValuesByPlayer = useMemo(() => {
-    const out: Record<string, Record<CompKey, number>> = {};
-
-    for (const p of players) {
-      out[p.id] = { napoleon: 0, bigGeorge: 0, grandCanyon: 0, wizard: 0, bagelMan: 0, eclectic: 0 };
-
-      let par3Sum = 0,
-        par3Count = 0;
-      let par4Sum = 0,
-        par4Count = 0;
-      let par5Sum = 0,
-        par5Count = 0;
-
-      let holesWithScore = 0;
-      let holesWith4plus = 0;
-      let holesWith0 = 0;
-
-      const bestByHole = new Map<number, number>();
-      for (let h = 1; h <= 18; h++) bestByHole.set(h, 0);
-
-      for (const r of sortedRounds) {
-        const courseId = r.course_id;
-        if (!courseId) continue;
-
-        const rp = rpByRoundPlayer.get(`${r.id}|${p.id}`);
-        if (!rp?.playing) continue;
-
-        const tee: Tee = normalizeTee(p.gender);
-        const parsMap = parsByCourseTeeHole.get(courseId)?.get(tee);
-        if (!parsMap) continue;
-
-        const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
-
-        for (let h = 1; h <= 18; h++) {
-          const pr = parsMap.get(h);
-          if (!pr) continue;
-
-          const sc = scoreByRoundPlayerHole.get(`${r.id}|${p.id}|${h}`);
-          if (!sc) continue;
-
-          const raw = normalizeRawScore(sc.strokes, sc.pickup);
-          const pts = netStablefordPointsForHole({
-            rawScore: raw,
-            par: pr.par,
-            strokeIndex: pr.si,
-            playingHandicap: hcp,
-          });
-
-          holesWithScore += 1;
-          if (pts >= 4) holesWith4plus += 1;
-          if (pts === 0) holesWith0 += 1;
-
-          if (pr.par === 3) {
-            par3Sum += pts;
-            par3Count += 1;
-          } else if (pr.par === 4) {
-            par4Sum += pts;
-            par4Count += 1;
-          } else if (pr.par === 5) {
-            par5Sum += pts;
-            par5Count += 1;
-          }
-
-          const prev = bestByHole.get(h) ?? 0;
-          if (pts > prev) bestByHole.set(h, pts);
-        }
+      const kind = (selectedDef?.kind ?? "individual") as CompetitionKind;
+      if (kind === "individual") {
+        setEntities([]);
+        setEntityMembersById({});
+        setEntityLabelsById({});
+        return;
       }
 
-      out[p.id].napoleon = par3Count > 0 ? par3Sum / par3Count : 0;
-      out[p.id].bigGeorge = par4Count > 0 ? par4Sum / par4Count : 0;
-      out[p.id].grandCanyon = par5Count > 0 ? par5Sum / par5Count : 0;
+      try {
+        const res = await resolveEntities({ tourId, scope: "tour", kind });
+        if (cancelled) return;
 
-      out[p.id].wizard = holesWithScore > 0 ? (holesWith4plus / holesWithScore) * 100 : 0;
-      out[p.id].bagelMan = holesWithScore > 0 ? (holesWith0 / holesWithScore) * 100 : 0;
+        const list = res.entities ?? [];
+        setEntities(list);
 
-      let ecoTotal = 0;
-      for (let h = 1; h <= 18; h++) ecoTotal += bestByHole.get(h) ?? 0;
-      out[p.id].eclectic = ecoTotal;
+        const membersById: Record<string, string[]> = {};
+        const labelsById: Record<string, string> = {};
+        for (const e of list) {
+          membersById[e.entityId] = e.memberPlayerIds;
+          labelsById[e.entityId] = e.name;
+        }
+        setEntityMembersById(membersById);
+        setEntityLabelsById(labelsById);
+
+        // resolveEntities can return an informational error string (e.g. explicit groups missing)
+        if (res.error) setEntitiesError(res.error);
+      } catch (e: any) {
+        if (!cancelled) {
+          setEntities([]);
+          setEntityMembersById({});
+          setEntityLabelsById({});
+          setEntitiesError(e?.message ?? "Failed to resolve pairs/teams.");
+        }
+      }
     }
 
-    return out;
-  }, [players, sortedRounds, rpByRoundPlayer, parsByCourseTeeHole, scoreByRoundPlayerHole]);
+    if (tourId && isLikelyUuid(tourId)) void loadEntities();
 
-  const ranksByComp = useMemo(() => {
-    const byComp: Record<CompKey, Map<string, number>> = {
-      napoleon: new Map(),
-      bigGeorge: new Map(),
-      grandCanyon: new Map(),
-      wizard: new Map(),
-      bagelMan: new Map(),
-      eclectic: new Map(),
+    return () => {
+      cancelled = true;
     };
+  }, [tourId, selectedDef]);
 
-    for (const meta of comps) {
-      const entries = players.map((p) => ({ id: p.id, value: compValuesByPlayer[p.id]?.[meta.key] ?? 0 }));
-      byComp[meta.key] = rankWithTies(entries, !!meta.lowerIsBetter);
+  // Build context + run competition
+  const { resultRows, statColumns } = useMemo(() => {
+    if (!selectedDef) return { resultRows: [] as any[], statColumns: [] as string[] };
+    if (players.length === 0 || rounds.length === 0) return { resultRows: [] as any[], statColumns: [] as string[] };
+
+    const ctx = buildTourCompetitionContext({
+      rounds: rounds as unknown as TourRoundInput[],
+      players: players as unknown as PlayerInput[],
+      roundPlayers: roundPlayers as unknown as RoundPlayerInput[],
+      scores: scores as unknown as ScoreInput[],
+      pars: pars as unknown as ParInput[],
+      entities:
+        (entities ?? []).map((e) => ({
+          entityId: e.entityId,
+          label: e.name,
+          memberPlayerIds: e.memberPlayerIds,
+        })) ?? [],
+      entityMembersById,
+      entityLabelsById,
+      team_best_m: 2, // mobile read-only for now; default 2
+    });
+
+    const res = runCompetition(selectedDef, ctx as unknown as CompetitionContext);
+    const rows = ((res as any)?.rows ?? []) as Array<{ entryId: string; label: string; total: number; stats?: Record<string, any> }>;
+
+    // Derive stat columns present in results
+    const keySet = new Set<string>();
+    for (const row of rows) {
+      const stats = row?.stats ?? {};
+      for (const k of Object.keys(stats)) keySet.add(k);
     }
 
-    return byComp;
-  }, [players, comps, compValuesByPlayer]);
+    return {
+      resultRows: rows,
+      statColumns: sortCompColumns(Array.from(keySet)),
+    };
+  }, [selectedDef, players, rounds, roundPlayers, scores, pars, entities, entityMembersById, entityLabelsById]);
 
   if (!tourId || !isLikelyUuid(tourId)) {
     return (
@@ -461,6 +382,7 @@ export default function MobileCompetitionsPage() {
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-sm font-semibold text-gray-900">Competitions</div>
+          <div className="mt-1 text-xs text-gray-600">{tour?.name ?? ""}</div>
         </div>
       </div>
 
@@ -472,87 +394,90 @@ export default function MobileCompetitionsPage() {
           </div>
         ) : errorMsg ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
-        ) : players.length === 0 ? (
-          <div className="rounded-2xl border p-4 text-sm text-gray-700">No players found for this tour.</div>
-        ) : sortedRounds.length === 0 ? (
-          <div className="rounded-2xl border p-4 text-sm text-gray-700">No rounds found for this tour.</div>
+        ) : tourCompetitions.length === 0 ? (
+          <div className="rounded-2xl border p-4 text-sm text-gray-700">No tour competitions found in catalog.</div>
         ) : (
           <>
-            <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <table className="min-w-full border-collapse">
-                <thead>
-                  <tr className="bg-gray-50">
-                    <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
-                      Player
-                    </th>
-                    {comps.map((c) => (
-                      <th
-                        key={c.key}
-                        className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700"
-                      >
-                        {c.label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
+            <div className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm">
+              <div className="text-xs font-semibold text-gray-700">Select competition</div>
+              <select
+                className="mt-2 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm"
+                value={selectedCompId}
+                onChange={(e) => setSelectedCompId(e.target.value)}
+              >
+                {tourCompetitions.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
 
-                <tbody>
-                  {players.map((p) => {
-                    const vals = compValuesByPlayer[p.id] ?? ({} as Record<CompKey, number>);
-                    return (
-                      <tr key={p.id} className="border-b last:border-b-0">
-                        <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                          {p.name}
-                        </td>
+              {selectedDef ? (
+                <div className="mt-2 text-xs text-gray-600">
+                  Kind: <span className="font-semibold">{selectedDef.kind}</span>
+                </div>
+              ) : null}
 
-                        {comps.map((c) => {
-                          const v = Number.isFinite(Number(vals[c.key])) ? Number(vals[c.key]) : 0;
-                          const rk = ranksByComp[c.key].get(p.id) ?? 0;
-
-                          const cellInner =
-                            c.key === "eclectic" ? (
-                              <Link
-                                className="underline decoration-gray-300 underline-offset-2"
-                                href={`/m/tours/${tourId}/competitions/eclectic/${p.id}`}
-                                title="Tap to see hole-by-hole Eclectic"
-                              >
-                                {c.format(v)} <span className="text-gray-500">&nbsp;({rk})</span>
-                              </Link>
-                            ) : (
-                              <>
-                                {c.format(v)} <span className="text-gray-500">&nbsp;({rk})</span>
-                              </>
-                            );
-
-                          return (
-                            <td key={c.key} className="px-3 py-2 text-right text-sm text-gray-900">
-                              <span className="inline-flex min-w-[76px] justify-end rounded-md px-2 py-1">
-                                {cellInner}
-                              </span>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              {entitiesError ? (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">{entitiesError}</div>
+              ) : null}
             </div>
 
-            <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm">
-              <div className="font-semibold text-gray-900">Competition descriptions</div>
-              <div className="mt-2 space-y-2 text-gray-700">
-                {comps.map((c) => (
-                  <div key={c.key}>
-                    {/* ✅ FORMAT CHANGE: description starts on next line */}
-                    <div className="font-semibold">{c.label}:</div>
-                    <div>{c.description}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 text-xs text-gray-500">
-                Note: ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better.
-              </div>
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
+              {resultRows.length === 0 ? (
+                <div className="p-4 text-sm text-gray-700">No results yet for this competition.</div>
+              ) : (
+                <table className="min-w-full border-collapse">
+                  <thead>
+                    <tr className="bg-gray-50">
+                      <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
+                        Entry
+                      </th>
+                      {statColumns.map((k) => (
+                        <th key={k} className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700">
+                          {titleCaseKey(k)}
+                        </th>
+                      ))}
+                      <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700">Total</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {resultRows.map((r) => {
+                      const stats = r.stats ?? {};
+                      return (
+                        <tr key={r.entryId} className="border-b last:border-b-0">
+                          <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                            {r.label}
+                          </td>
+
+                          {statColumns.map((k) => (
+                            <td key={k} className="px-3 py-2 text-right text-sm text-gray-900">
+                              <span className="inline-flex min-w-[76px] justify-end rounded-md px-2 py-1">
+                                {typeof stats[k] === "number"
+                                  ? isPercentish(selectedDef!)
+                                    ? `${Number(stats[k]).toFixed(2)}%`
+                                    : Number.isInteger(stats[k])
+                                    ? String(stats[k])
+                                    : Number(stats[k]).toFixed(2)
+                                  : String(stats[k] ?? "")}
+                              </span>
+                            </td>
+                          ))}
+
+                          <td className="px-3 py-2 text-right text-sm font-semibold text-gray-900">
+                            {formatTotal(selectedDef!, Number(r.total))}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 text-xs text-gray-600">
+              This page is read-only. It runs the same competition engine as desktop and will automatically include new competitions added to the catalog.
             </div>
           </>
         )}
