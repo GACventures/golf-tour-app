@@ -32,7 +32,7 @@ export type LeaderboardRow = {
   // Optional per-hole totals (useful for team formats & countback)
   holeTotals?: number[]; // length 18
 
-  // ✅ Used heavily by your catalog + UI (Bagel Man, Wizard, etc.)
+  // ✅ Many of your existing competitions return stats; keep typings aligned.
   stats?: Record<string, any>;
 };
 
