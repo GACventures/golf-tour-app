@@ -1,3 +1,4 @@
+// app/m/tours/[id]/competitions/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -112,7 +113,17 @@ function rankWithTies(entries: Array<{ id: string; value: number }>, lowerIsBett
   return rankById;
 }
 
-type FixedCompKey = "napoleon" | "bigGeorge" | "grandCanyon" | "wizard" | "bagelMan" | "eclectic";
+type FixedCompKey =
+  | "napoleon"
+  | "bigGeorge"
+  | "grandCanyon"
+  | "wizard"
+  | "bagelMan"
+  | "eclectic"
+  | "schumacher"
+  | "closer"
+  | "hotStreak"
+  | "coldStreak";
 
 type FixedCompMeta = {
   key: FixedCompKey;
@@ -120,6 +131,16 @@ type FixedCompMeta = {
   competitionId: string; // matches catalog id
   lowerIsBetter?: boolean;
   format: (v: number) => string;
+
+  // optional: the stats key we want for tap detail
+  detailFromStatsKey?: string; // e.g. "streak_where"
+  tappable?: boolean;
+};
+
+type MatrixCell = {
+  value: number | null;
+  rank: number | null;
+  detail?: string | null; // e.g. "R1: H4–H8"
 };
 
 export default function MobileCompetitionsPage() {
@@ -136,12 +157,35 @@ export default function MobileCompetitionsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
+  // Toggle state for inline detail popup (Hot/Cold only)
+  const [openDetail, setOpenDetail] = useState<{ playerId: string; key: FixedCompKey } | null>(null);
+
   const fixedComps: FixedCompMeta[] = useMemo(
     () => [
-      { key: "napoleon", label: "Napoleon", competitionId: "tour_napoleon_par3_avg", format: (v) => fmt2(v) },
-      { key: "bigGeorge", label: "Big George", competitionId: "tour_big_george_par4_avg", format: (v) => fmt2(v) },
-      { key: "grandCanyon", label: "Grand Canyon", competitionId: "tour_grand_canyon_par5_avg", format: (v) => fmt2(v) },
-      { key: "wizard", label: "Wizard", competitionId: "tour_wizard_four_plus_pct", format: (v) => fmtPct0(v) },
+      {
+        key: "napoleon",
+        label: "Napoleon",
+        competitionId: "tour_napoleon_par3_avg",
+        format: (v) => fmt2(v),
+      },
+      {
+        key: "bigGeorge",
+        label: "Big George",
+        competitionId: "tour_big_george_par4_avg",
+        format: (v) => fmt2(v),
+      },
+      {
+        key: "grandCanyon",
+        label: "Grand Canyon",
+        competitionId: "tour_grand_canyon_par5_avg",
+        format: (v) => fmt2(v),
+      },
+      {
+        key: "wizard",
+        label: "Wizard",
+        competitionId: "tour_wizard_four_plus_pct",
+        format: (v) => fmtPct0(v),
+      },
       {
         key: "bagelMan",
         label: "Bagel Man",
@@ -149,7 +193,44 @@ export default function MobileCompetitionsPage() {
         lowerIsBetter: true,
         format: (v) => fmtPct0(v),
       },
-      { key: "eclectic", label: "Eclectic", competitionId: "tour_eclectic_total", format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)) },
+      {
+        key: "eclectic",
+        label: "Eclectic",
+        competitionId: "tour_eclectic_total",
+        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
+      },
+
+      // ✅ NEW
+      {
+        key: "schumacher",
+        label: "Schumacher",
+        competitionId: "tour_schumacher_first3_avg",
+        format: (v) => fmt2(v),
+      },
+      {
+        key: "closer",
+        label: "Closer",
+        competitionId: "tour_closer_last3_avg",
+        format: (v) => fmt2(v),
+      },
+      {
+        key: "hotStreak",
+        label: "Hot Streak",
+        competitionId: "tour_hot_streak_best_run",
+        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
+        tappable: true,
+        detailFromStatsKey: "streak_where",
+      },
+      {
+        key: "coldStreak",
+        label: "Cold Streak",
+        competitionId: "tour_cold_streak_best_run",
+        // ✅ lower is better per your instruction
+        lowerIsBetter: true,
+        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
+        tappable: true,
+        detailFromStatsKey: "streak_where",
+      },
     ],
     []
   );
@@ -176,7 +257,6 @@ export default function MobileCompetitionsPage() {
           .order("round_no", { ascending: true, nullsFirst: false })
           .order("created_at", { ascending: true });
         if (rErr) throw rErr;
-
         const rr = (rData ?? []) as RoundRow[];
         if (!alive) return;
         setRounds(rr);
@@ -334,7 +414,8 @@ export default function MobileCompetitionsPage() {
   }, [sortedRounds, players, roundPlayers, scores, pars]);
 
   const compMatrix = useMemo(() => {
-    const out: Record<string, Record<FixedCompKey, { value: number | null; rank: number | null }>> = {};
+    // Build { playerId: { compKey: { value, rank, detail? } } }
+    const out: Record<string, Record<FixedCompKey, MatrixCell>> = {};
     for (const p of players) {
       out[p.id] = {
         napoleon: { value: null, rank: null },
@@ -343,6 +424,10 @@ export default function MobileCompetitionsPage() {
         wizard: { value: null, rank: null },
         bagelMan: { value: null, rank: null },
         eclectic: { value: null, rank: null },
+        schumacher: { value: null, rank: null },
+        closer: { value: null, rank: null },
+        hotStreak: { value: null, rank: null, detail: null },
+        coldStreak: { value: null, rank: null, detail: null },
       };
     }
 
@@ -351,14 +436,26 @@ export default function MobileCompetitionsPage() {
       if (!def) continue;
 
       const result = runCompetition(def, ctx as unknown as CompetitionContext);
-      const rows = (result?.rows ?? []).filter((r) => !!r?.entryId);
+      const rows = (result?.rows ?? []).filter((r: any) => !!r?.entryId);
 
+      // value map
       const entries: Array<{ id: string; value: number }> = [];
-      for (const r of rows) {
+
+      for (const r of rows as any[]) {
+        const pid = String(r.entryId);
         const v = Number(r.total);
         if (!Number.isFinite(v)) continue;
-        entries.push({ id: String(r.entryId), value: v });
-        if (out[String(r.entryId)]) out[String(r.entryId)][meta.key].value = v;
+
+        entries.push({ id: pid, value: v });
+
+        if (out[pid]) {
+          out[pid][meta.key].value = v;
+
+          if (meta.detailFromStatsKey) {
+            const detail = String((r as any)?.stats?.[meta.detailFromStatsKey] ?? "").trim();
+            out[pid][meta.key].detail = detail || null;
+          }
+        }
       }
 
       const rankById = rankWithTies(entries, !!meta.lowerIsBetter);
@@ -370,6 +467,13 @@ export default function MobileCompetitionsPage() {
 
     return out;
   }, [players, fixedComps, ctx]);
+
+  function toggleDetail(playerId: string, key: FixedCompKey) {
+    setOpenDetail((prev) => {
+      if (prev && prev.playerId === playerId && prev.key === key) return null;
+      return { playerId, key };
+    });
+  }
 
   if (!tourId || !isLikelyUuid(tourId)) {
     return (
@@ -438,36 +542,40 @@ export default function MobileCompetitionsPage() {
                       </td>
 
                       {fixedComps.map((c) => {
-                        const cell = row?.[c.key] as { value: number | null; rank: number | null } | undefined;
+                        const cell = row?.[c.key] as MatrixCell | undefined;
                         const value = cell?.value ?? null;
                         const rank = cell?.rank ?? null;
 
-                        const inner =
-                          value === null ? (
-                            <span className="text-gray-400">—</span>
-                          ) : (
-                            <>
-                              {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
-                            </>
-                          );
-
-                        // ✅ Only Eclectic is a link to the existing breakdown page
-                        if (c.key === "eclectic" && value !== null) {
-                          return (
-                            <td key={c.key} className="px-3 py-2 text-right text-sm text-gray-900">
-                              <Link
-                                href={`/m/tours/${tourId}/competitions/eclectic/${p.id}`}
-                                className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1 underline decoration-gray-300 underline-offset-2 hover:decoration-gray-600"
-                              >
-                                {inner}
-                              </Link>
-                            </td>
-                          );
-                        }
+                        const tappable = c.tappable === true;
+                        const isOpen = openDetail?.playerId === p.id && openDetail?.key === c.key;
+                        const detail = (cell?.detail ?? "").trim();
 
                         return (
-                          <td key={c.key} className="px-3 py-2 text-right text-sm text-gray-900">
-                            <span className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1">{inner}</span>
+                          <td key={c.key} className="px-3 py-2 text-right text-sm text-gray-900 align-top">
+                            <div className="inline-flex flex-col items-end gap-1">
+                              {value === null ? (
+                                <span className="text-gray-400">—</span>
+                              ) : tappable ? (
+                                <button
+                                  type="button"
+                                  className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1 hover:bg-gray-50 active:bg-gray-100"
+                                  onClick={() => toggleDetail(p.id, c.key)}
+                                  aria-label={`${c.label} detail`}
+                                >
+                                  {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
+                                </button>
+                              ) : (
+                                <span className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1">
+                                  {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
+                                </span>
+                              )}
+
+                              {tappable && isOpen ? (
+                                <div className="max-w-[140px] rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm">
+                                  {detail ? detail : <span className="text-gray-400">No streak found</span>}
+                                </div>
+                              ) : null}
+                            </div>
                           </td>
                         );
                       })}
@@ -478,7 +586,8 @@ export default function MobileCompetitionsPage() {
             </table>
 
             <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
-              Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Tap Eclectic to see hole-by-hole breakdown.
+              Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as better. Tap Hot/Cold cells for
+              the round+hole range.
             </div>
           </div>
         )}

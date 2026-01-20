@@ -131,6 +131,215 @@ function avgStablefordByPar(parTarget: 3 | 4 | 5, id: string, name: string): Com
 }
 
 /**
+ * Schumacher / Closer helper:
+ * For each round: sum net Stableford points for a hole range (inclusive),
+ * then return the average of those per-round sums across all qualifying rounds.
+ */
+function avgSumStablefordForHoleRange(params: {
+  id: string;
+  name: string;
+  startHole: number; // 1..18
+  endHole: number; // 1..18
+}): CompetitionDefinition {
+  const { id, name, startHole, endHole } = params;
+
+  const startIdx = Math.max(0, Math.min(17, Math.floor(startHole - 1)));
+  const endIdx = Math.max(0, Math.min(17, Math.floor(endHole - 1)));
+
+  const lo = Math.min(startIdx, endIdx);
+  const hi = Math.max(startIdx, endIdx);
+
+  return {
+    id,
+    name,
+    scope: "tour",
+    kind: "individual",
+    eligibility: {
+      onlyPlaying: true,
+      requireComplete: true,
+    },
+    compute: (ctx: CompetitionContext) => {
+      if (!isTourContext(ctx)) return [];
+
+      return ctx.players.map((p) => {
+        let roundsCount = 0;
+        let sumOfRoundSums = 0;
+
+        for (const r of ctx.rounds ?? []) {
+          const isComplete = (r as any)?.isComplete;
+          if (typeof isComplete === "function" && !isComplete(p.id)) continue;
+
+          let roundSum = 0;
+          for (let i = lo; i <= hi; i++) {
+            const pts = Number((r as any)?.netPointsForHole?.(p.id, i) ?? 0) || 0;
+            roundSum += pts;
+          }
+
+          roundsCount += 1;
+          sumOfRoundSums += roundSum;
+        }
+
+        const avg = roundsCount > 0 ? sumOfRoundSums / roundsCount : 0;
+
+        return {
+          entryId: p.id,
+          label: p.name,
+          total: avg,
+          stats: {
+            rounds_count: roundsCount,
+            sum_of_round_sums: sumOfRoundSums,
+            avg_round_sum: round2(avg),
+            holes_range: `${startHole}-${endHole}`,
+          },
+        };
+      });
+    },
+  };
+}
+
+function parseGrossStrokes(raw: any): number | null {
+  const s = String(raw ?? "").trim().toUpperCase();
+  if (!s) return null;
+  if (s === "P") return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function roundLabel(idx: number) {
+  // idx is 0-based
+  return `R${idx + 1}`;
+}
+
+function fmtWhere(rIdx: number, startHole: number, endHole: number) {
+  const a = Math.max(1, Math.min(18, Math.floor(startHole)));
+  const b = Math.max(1, Math.min(18, Math.floor(endHole)));
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  return `${roundLabel(rIdx)}: H${lo}\u2013H${hi}`;
+}
+
+type StreakResult = {
+  len: number;
+  roundIdx: number; // 0-based index in ctx.rounds
+  startHole: number; // 1..18
+  endHole: number; // 1..18
+};
+
+function betterStreakDisplay(a: StreakResult | null, b: StreakResult): StreakResult {
+  // Prefer larger len; if tie, earliest round; if tie, earliest startHole.
+  if (!a) return b;
+  if (b.len > a.len) return b;
+  if (b.len < a.len) return a;
+  if (b.roundIdx < a.roundIdx) return b;
+  if (b.roundIdx > a.roundIdx) return a;
+  if (b.startHole < a.startHole) return b;
+  return a;
+}
+
+/**
+ * Hot/Cold streak competition:
+ * - For each round, compute the longest consecutive run meeting a predicate on gross strokes vs tee-par.
+ * - Tour total = max run length across rounds.
+ * - Store the "where" string for UI toggles.
+ *
+ * Tie-break for displayed where: earliest round, earliest start hole.
+ */
+function streakCompetition(params: {
+  id: string;
+  name: string;
+  // predicate returns true if this hole counts towards the streak
+  qualifies: (gross: number, par: number) => boolean;
+}): CompetitionDefinition {
+  const { id, name, qualifies } = params;
+
+  return {
+    id,
+    name,
+    scope: "tour",
+    kind: "individual",
+    eligibility: {
+      onlyPlaying: true,
+      requireComplete: true,
+    },
+    compute: (ctx: CompetitionContext) => {
+      if (!isTourContext(ctx)) return [];
+
+      return ctx.players.map((p) => {
+        let best: StreakResult | null = null;
+
+        for (let rIdx = 0; rIdx < (ctx.rounds ?? []).length; rIdx++) {
+          const r = (ctx.rounds ?? [])[rIdx];
+
+          const isComplete = (r as any)?.isComplete;
+          if (typeof isComplete === "function" && !isComplete(p.id)) continue;
+
+          const scoresMatrix: Record<string, string[]> = (r as any)?.scores ?? {};
+          const parForPlayerHole: ((playerId: string, holeIndex: number) => number) | undefined = (r as any)
+            ?.parForPlayerHole;
+
+          if (typeof parForPlayerHole !== "function") {
+            // We rely on tee-specific par; if missing, treat as no streaks.
+            continue;
+          }
+
+          const arr = scoresMatrix?.[p.id] ?? [];
+          let curLen = 0;
+          let curStart = 1;
+
+          let roundBestLen = 0;
+          let roundBestStart = 1;
+          let roundBestEnd = 1;
+
+          for (let i = 0; i < 18; i++) {
+            const gross = parseGrossStrokes(arr[i]);
+            const par = Number(parForPlayerHole(p.id, i) ?? 0);
+
+            const ok = gross !== null && Number.isFinite(par) && par > 0 && qualifies(gross, par);
+
+            if (ok) {
+              if (curLen === 0) curStart = i + 1;
+              curLen += 1;
+
+              if (curLen > roundBestLen) {
+                roundBestLen = curLen;
+                roundBestStart = curStart;
+                roundBestEnd = i + 1;
+              }
+            } else {
+              curLen = 0;
+            }
+          }
+
+          if (roundBestLen > 0) {
+            best = betterStreakDisplay(best, {
+              len: roundBestLen,
+              roundIdx: rIdx,
+              startHole: roundBestStart,
+              endHole: roundBestEnd,
+            });
+          }
+        }
+
+        const len = best?.len ?? 0;
+
+        return {
+          entryId: p.id,
+          label: p.name,
+          total: len,
+          stats: {
+            streak_len: len,
+            streak_round: best ? roundLabel(best.roundIdx) : "",
+            streak_start_hole: best ? best.startHole : null,
+            streak_end_hole: best ? best.endHole : null,
+            streak_where: best ? fmtWhere(best.roundIdx, best.startHole, best.endHole) : "",
+          },
+        };
+      });
+    },
+  };
+}
+
+/**
  * Bagel Man: % of holes with 0 Stableford points
  * Tour scope, individual.
  */
@@ -516,6 +725,32 @@ export const competitionCatalog: CompetitionDefinition[] = [
   bagelMan("tour_bagel_man_zero_pct", "Bagel Man (% zero holes)"),
   wizard("tour_wizard_four_plus_pct", "Wizard (% 4+ holes)"),
   eclectic("tour_eclectic_total", "Eclectic (best per hole)"),
+
+  // ✅ NEW: Schumacher + Closer
+  avgSumStablefordForHoleRange({
+    id: "tour_schumacher_first3_avg",
+    name: "Schumacher (Avg Stableford holes 1–3)",
+    startHole: 1,
+    endHole: 3,
+  }),
+  avgSumStablefordForHoleRange({
+    id: "tour_closer_last3_avg",
+    name: "Closer (Avg Stableford holes 16–18)",
+    startHole: 16,
+    endHole: 18,
+  }),
+
+  // ✅ NEW: Hot/Cold streaks (gross vs tee-par)
+  streakCompetition({
+    id: "tour_hot_streak_best_run",
+    name: "Hot Streak (Best par-or-better run)",
+    qualifies: (gross, par) => gross <= par,
+  }),
+  streakCompetition({
+    id: "tour_cold_streak_best_run",
+    name: "Cold Streak (Best bogey-or-worse run)",
+    qualifies: (gross, par) => gross >= par + 1,
+  }),
 
   // Pair tour comps
   tourPairBestBallStableford("tour_pair_best_ball_stableford", "Pairs: Best Ball (Stableford)"),
