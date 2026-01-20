@@ -199,8 +199,6 @@ export default function MobileCompetitionsPage() {
         competitionId: "tour_eclectic_total",
         format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
       },
-
-      // ✅ NEW
       {
         key: "schumacher",
         label: "Schumacher",
@@ -225,11 +223,56 @@ export default function MobileCompetitionsPage() {
         key: "coldStreak",
         label: "Cold Streak",
         competitionId: "tour_cold_streak_best_run",
-        // ✅ lower is better per your instruction
         lowerIsBetter: true,
         format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
         tappable: true,
         detailFromStatsKey: "streak_where",
+      },
+    ],
+    []
+  );
+
+  const definitions = useMemo(
+    () => [
+      {
+        label: "Napoleon",
+        text: "Average Stableford points on Par 3 holes",
+      },
+      {
+        label: "Big George",
+        text: "Average Stableford points on Par 4 holes",
+      },
+      {
+        label: "Grand Canyon",
+        text: "Average Stableford points on Par 5 holes",
+      },
+      {
+        label: "Wizard",
+        text: "Percentage of holes where Stableford points are 4+",
+      },
+      {
+        label: "Bagel Man",
+        text: "Percentage of holes where Stableford points are 0",
+      },
+      {
+        label: "Eclectic",
+        text: "Total of each player’s best Stableford points per hole",
+      },
+      {
+        label: "Schumacher",
+        text: "Average Stableford points on holes 1–3",
+      },
+      {
+        label: "Closer",
+        text: "Average Stableford points on holes 16–18",
+      },
+      {
+        label: "Hot Streak",
+        text: "Longest run in any round of consecutive holes where gross strokes is par or better",
+      },
+      {
+        label: "Cold Streak",
+        text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse",
       },
     ],
     []
@@ -414,7 +457,6 @@ export default function MobileCompetitionsPage() {
   }, [sortedRounds, players, roundPlayers, scores, pars]);
 
   const compMatrix = useMemo(() => {
-    // Build { playerId: { compKey: { value, rank, detail? } } }
     const out: Record<string, Record<FixedCompKey, MatrixCell>> = {};
     for (const p of players) {
       out[p.id] = {
@@ -438,7 +480,6 @@ export default function MobileCompetitionsPage() {
       const result = runCompetition(def, ctx as unknown as CompetitionContext);
       const rows = (result?.rows ?? []).filter((r: any) => !!r?.entryId);
 
-      // value map
       const entries: Array<{ id: string; value: number }> = [];
 
       for (const r of rows as any[]) {
@@ -516,80 +557,100 @@ export default function MobileCompetitionsPage() {
         ) : sortedRounds.length === 0 ? (
           <div className="rounded-2xl border p-4 text-sm text-gray-700">No rounds found for this tour.</div>
         ) : (
-          <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
-            <table className="min-w-full border-collapse">
-              <thead>
-                <tr className="bg-gray-50">
-                  <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
-                    Player
-                  </th>
-                  {fixedComps.map((c) => (
-                    <th key={c.key} className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700">
-                      {c.label}
+          <>
+            <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
+              <table className="min-w-full border-collapse">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
+                      Player
                     </th>
-                  ))}
-                </tr>
-              </thead>
+                    {fixedComps.map((c) => (
+                      <th
+                        key={c.key}
+                        className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700"
+                      >
+                        {c.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
 
-              <tbody>
-                {players.map((p) => {
-                  const row = compMatrix[p.id] ?? ({} as any);
+                <tbody>
+                  {players.map((p) => {
+                    const row = compMatrix[p.id] ?? ({} as any);
 
-                  return (
-                    <tr key={p.id} className="border-b last:border-b-0">
-                      <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                        {p.name}
-                      </td>
+                    return (
+                      <tr key={p.id} className="border-b last:border-b-0">
+                        <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                          {p.name}
+                        </td>
 
-                      {fixedComps.map((c) => {
-                        const cell = row?.[c.key] as MatrixCell | undefined;
-                        const value = cell?.value ?? null;
-                        const rank = cell?.rank ?? null;
+                        {fixedComps.map((c) => {
+                          const cell = row?.[c.key] as MatrixCell | undefined;
+                          const value = cell?.value ?? null;
+                          const rank = cell?.rank ?? null;
 
-                        const tappable = c.tappable === true;
-                        const isOpen = openDetail?.playerId === p.id && openDetail?.key === c.key;
-                        const detail = (cell?.detail ?? "").trim();
+                          const tappable = c.tappable === true;
+                          const isOpen = openDetail?.playerId === p.id && openDetail?.key === c.key;
+                          const detail = (cell?.detail ?? "").trim();
 
-                        return (
-                          <td key={c.key} className="px-3 py-2 text-right text-sm text-gray-900 align-top">
-                            <div className="inline-flex flex-col items-end gap-1">
-                              {value === null ? (
-                                <span className="text-gray-400">—</span>
-                              ) : tappable ? (
-                                <button
-                                  type="button"
-                                  className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1 hover:bg-gray-50 active:bg-gray-100"
-                                  onClick={() => toggleDetail(p.id, c.key)}
-                                  aria-label={`${c.label} detail`}
-                                >
-                                  {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
-                                </button>
-                              ) : (
-                                <span className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1">
-                                  {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
-                                </span>
-                              )}
+                          return (
+                            <td key={c.key} className="px-3 py-2 text-right text-sm text-gray-900 align-top">
+                              <div className="inline-flex flex-col items-end gap-1">
+                                {value === null ? (
+                                  <span className="text-gray-400">—</span>
+                                ) : tappable ? (
+                                  <button
+                                    type="button"
+                                    className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1 hover:bg-gray-50 active:bg-gray-100"
+                                    onClick={() => toggleDetail(p.id, c.key)}
+                                    aria-label={`${c.label} detail`}
+                                  >
+                                    {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
+                                  </button>
+                                ) : (
+                                  <span className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1">
+                                    {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
+                                  </span>
+                                )}
 
-                              {tappable && isOpen ? (
-                                <div className="max-w-[140px] rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm">
-                                  {detail ? detail : <span className="text-gray-400">No streak found</span>}
-                                </div>
-                              ) : null}
-                            </div>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                                {tappable && isOpen ? (
+                                  <div className="max-w-[140px] rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm">
+                                    {detail ? detail : <span className="text-gray-400">No streak found</span>}
+                                  </div>
+                                ) : null}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
 
-            <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
-              Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as better. Tap Hot/Cold cells for
-              the round+hole range.
+              <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as
+                better. Tap Hot/Cold cells for the round+hole range.
+              </div>
             </div>
-          </div>
+
+            {/* ✅ Definitions restored under the table */}
+            <div className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
+              <div className="border-b bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-700">Definitions</div>
+              <div className="px-4 py-3">
+                <ul className="space-y-2 text-sm text-gray-800">
+                  {definitions.map((d) => (
+                    <li key={d.label} className="leading-snug">
+                      <span className="font-semibold text-gray-900">{d.label}</span>{" "}
+                      <span className="text-gray-600">—</span> <span className="text-gray-800">{d.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </>
         )}
       </main>
 
