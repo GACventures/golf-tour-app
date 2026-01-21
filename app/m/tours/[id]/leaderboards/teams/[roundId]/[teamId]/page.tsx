@@ -33,7 +33,6 @@ type ScoreRow = {
   pickup: boolean | null;
 };
 
-/* tee-based par rows are stored in a map */
 type TeamRule = {
   bestY: number;
 };
@@ -56,7 +55,7 @@ function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
   return Number.isFinite(n) ? String(n) : "";
 }
 
-// Stableford (net) per hole (same rules as mobile leaderboards page)
+// Stableford (net) per hole (same as mobile leaderboards page)
 function netStablefordPointsForHole(params: {
   rawScore: string; // "" | "P" | "number"
   par: number;
@@ -87,6 +86,25 @@ function clampInt(n: any, min: number, max: number) {
   const x = Math.floor(Number(n));
   if (!Number.isFinite(x)) return min;
   return Math.max(min, Math.min(max, x));
+}
+
+/**
+ * Deterministic selection of EXACTLY top N positives per hole (no tie expansion).
+ * Tie-break: higher points first, then table order (lower orderIndex wins).
+ */
+function pickTopNPositivesExact(args: {
+  entries: Array<{ playerId: string; pts: number; orderIndex: number }>;
+  n: number;
+}) {
+  const N = clampInt(args.n, 1, 99);
+  const positives = args.entries.filter((e) => e.pts > 0);
+
+  positives.sort((a, b) => {
+    if (b.pts !== a.pts) return b.pts - a.pts;
+    return a.orderIndex - b.orderIndex; // table order tie-break
+  });
+
+  return positives.slice(0, Math.min(N, positives.length));
 }
 
 /* ---------------- Page ---------------- */
@@ -121,7 +139,7 @@ export default function TeamRoundDetailPage() {
       setError("");
 
       try {
-        // 1) Team meta (name)
+        // 1) Team meta
         const { data: teamRow, error: teamErr } = await supabase
           .from("tour_groups")
           .select("id,name")
@@ -129,7 +147,7 @@ export default function TeamRoundDetailPage() {
           .maybeSingle();
         if (teamErr) throw teamErr;
 
-        // 2) Team members (+ player details)
+        // 2) Members + player info (ordered)
         const { data: memRows, error: memErr } = await supabase
           .from("tour_group_members")
           .select("group_id,player_id,position,players(id,name,gender)")
@@ -146,19 +164,18 @@ export default function TeamRoundDetailPage() {
             gender: p.gender ? normalizeTee(p.gender) : null,
           }));
 
-        // 3) Round -> ONLY fetch course_id (avoid non-existent columns)
+        // 3) Round (only course_id)
         const { data: rRow, error: rErr } = await supabase
           .from("rounds")
           .select("id,course_id")
           .eq("id", roundId)
           .single();
         if (rErr) throw rErr;
-
         const rr = rRow as RoundRow;
 
-        // 4) Round players (playing + handicap) for the team members
         const playerIds = ps.map((p) => p.id);
 
+        // 4) Round players (playing + handicap)
         let rpMap = new Map<string, RoundPlayer>();
         if (playerIds.length > 0) {
           const { data: rpRows, error: rpErr } = await supabase
@@ -168,7 +185,7 @@ export default function TeamRoundDetailPage() {
             .in("player_id", playerIds);
           if (rpErr) throw rpErr;
 
-          rpMap = new Map<string, RoundPlayer>();
+          rpMap = new Map();
           (rpRows ?? []).forEach((x: any) => {
             rpMap.set(String(x.player_id), {
               player_id: String(x.player_id),
@@ -178,7 +195,7 @@ export default function TeamRoundDetailPage() {
           });
         }
 
-        // 5) Scores for the round + team members
+        // 5) Scores
         let scRows: ScoreRow[] = [];
         if (playerIds.length > 0) {
           const { data: sRows, error: sErr } = await supabase
@@ -197,7 +214,7 @@ export default function TeamRoundDetailPage() {
             })) ?? [];
         }
 
-        // 6) Pars for the course (both tees)
+        // 6) Pars (both tees)
         const courseId = rr.course_id;
         let parsMap = new Map<Tee, Map<number, { par: number; si: number }>>();
         if (courseId) {
@@ -220,7 +237,7 @@ export default function TeamRoundDetailPage() {
           });
         }
 
-        // 7) Team scoring rule Y from settings (fallback to 1)
+        // 7) Team rule bestY
         const { data: setRow, error: setErr } = await supabase
           .from("tour_grouping_settings")
           .select("default_team_best_m")
@@ -306,32 +323,32 @@ export default function TeamRoundDetailPage() {
   }, [players, round, roundPlayers, parsByTeeHole, scoreByPlayerHole]);
 
   /**
-   * Determine, for each hole:
-   * - which players are "counted" positives for totals (includes ties at cutoff)
-   * - which players get a "counted box" (only first Y in display order)
-   * - which players have zero (for red box)
-   *
-   * Also compute:
-   * - per-hole team total (counted positives including ties) minus zero count
-   * - per-player total contribution = counted positives (including ties) minus 1 per zero
+   * Corrected rules:
+   * - Exactly N positives counted per hole (no tie expansion)
+   * - Exactly N blue boxes (match counted positives)
+   * - Zeros always get red box
+   * - Player totals: counted positives (even if not boxed; but now counted==boxed) minus 1 per zero
+   * - Team hole total: sum(counted positives) minus zeroCount
    */
   const computed = useMemo(() => {
-    const Y = clampInt(teamRule.bestY, 1, 99);
+    const N = clampInt(teamRule.bestY, 1, 99);
 
     const teamHoleTotals: number[] = Array.from({ length: 19 }).map(() => 0); // index 1..18
+    const teamTotalBySum = { value: 0 };
+
     const playerContributionTotals = new Map<string, number>();
     for (const p of players) playerContributionTotals.set(p.id, 0);
 
-    const countedSetByHole = new Map<number, Set<string>>(); // includes ties at cutoff
-    const boxedCountedSetByHole = new Map<number, Set<string>>(); // only first Y in display order
-    const zeroSetByHole = new Map<number, Set<string>>();
+    const boxedBlueByHole = new Map<number, Set<string>>(); // exactly N (or fewer)
+    const zeroByHole = new Map<number, Set<string>>(); // red
 
     for (let h = 1; h <= 18; h++) {
       const zeroSet = new Set<string>();
-      const positives: { playerId: string; pts: number }[] = [];
+      const entries: Array<{ playerId: string; pts: number; orderIndex: number }> = [];
 
-      // Collect in DISPLAY ORDER (players array order)
-      for (const p of players) {
+      // collect in table order
+      for (let idx = 0; idx < players.length; idx++) {
+        const p = players[idx];
         const rp = roundPlayers.get(p.id);
         if (!rp?.playing) continue;
 
@@ -342,71 +359,40 @@ export default function TeamRoundDetailPage() {
           zeroSet.add(p.id);
           playerContributionTotals.set(p.id, (playerContributionTotals.get(p.id) || 0) - 1);
         } else if (pts > 0) {
-          positives.push({ playerId: p.id, pts });
+          entries.push({ playerId: p.id, pts, orderIndex: idx });
         }
       }
 
-      // Determine "counted positives" for totals, INCLUDING ties at cutoff
-      const positivesSorted = [...positives].sort((a, b) => b.pts - a.pts);
+      // pick EXACTLY top N positives (ties broken by table order)
+      const picked = pickTopNPositivesExact({ entries, n: N });
 
-      const countedSet = new Set<string>();
-      if (positivesSorted.length > 0) {
-        const cutoffIndex = Math.min(Y, positivesSorted.length) - 1; // 0-based
-        const cutoffPts = positivesSorted[cutoffIndex]?.pts;
+      // blue boxes correspond exactly to picked positives
+      const blueSet = new Set<string>(picked.map((x) => x.playerId));
 
-        for (const item of positivesSorted) {
-          if (countedSet.size < Y) {
-            countedSet.add(item.playerId);
-            continue;
-          }
-          // if we already hit Y, include ties at cutoff
-          if (cutoffPts !== undefined && item.pts === cutoffPts) {
-            countedSet.add(item.playerId);
-          } else {
-            break;
-          }
-        }
+      // add picked positives to player totals
+      let posSum = 0;
+      for (const x of picked) {
+        posSum += x.pts;
+        playerContributionTotals.set(x.playerId, (playerContributionTotals.get(x.playerId) || 0) + x.pts);
       }
 
-      // Add counted positives into per-player totals (INCLUDING ties beyond Y)
-      for (const pid of countedSet) {
-        const pts = ptsByPlayerHole.get(`${pid}|${h}`) ?? 0;
-        playerContributionTotals.set(pid, (playerContributionTotals.get(pid) || 0) + pts);
-      }
-
-      // Determine which counted scores get a BLUE BOX:
-      // rule: only put squares around the first Y counted (in DISPLAY order)
-      const boxedSet = new Set<string>();
-      if (countedSet.size > 0) {
-        for (const p of players) {
-          if (boxedSet.size >= Y) break;
-          if (countedSet.has(p.id)) boxedSet.add(p.id);
-        }
-      }
-
-      // Team hole total: sum counted positives (including ties) minus zeros count
-      let holePosSum = 0;
-      for (const pid of countedSet) {
-        holePosSum += ptsByPlayerHole.get(`${pid}|${h}`) ?? 0;
-      }
-      const holeTotal = holePosSum - zeroSet.size;
+      // team hole total
+      const holeTotal = posSum - zeroSet.size;
 
       teamHoleTotals[h] = holeTotal;
-
-      countedSetByHole.set(h, countedSet);
-      boxedCountedSetByHole.set(h, boxedSet);
-      zeroSetByHole.set(h, zeroSet);
+      boxedBlueByHole.set(h, blueSet);
+      zeroByHole.set(h, zeroSet);
     }
 
     const teamTotal = teamHoleTotals.slice(1, 19).reduce((a, b) => a + b, 0);
+    teamTotalBySum.value = teamTotal;
 
     return {
       teamHoleTotals,
       teamTotal,
       playerContributionTotals,
-      countedSetByHole,
-      boxedCountedSetByHole,
-      zeroSetByHole,
+      boxedBlueByHole,
+      zeroByHole,
     };
   }, [players, roundPlayers, ptsByPlayerHole, teamRule.bestY]);
 
@@ -437,22 +423,17 @@ export default function TeamRoundDetailPage() {
 
   function Cell({
     pts,
-    boxedCounted,
+    boxedBlue,
     boxedZero,
   }: {
     pts: number | null;
-    boxedCounted: boolean;
+    boxedBlue: boolean;
     boxedZero: boolean;
   }) {
     const base = "inline-flex min-w-[24px] justify-center rounded-sm px-1 py-0.5";
 
-    if (boxedZero) {
-      return <span className={`${base} border-2 border-red-500`}>{pts === null ? "" : pts}</span>;
-    }
-
-    if (boxedCounted) {
-      return <span className={`${base} border-2 border-blue-500`}>{pts === null ? "" : pts}</span>;
-    }
+    if (boxedZero) return <span className={`${base} border-2 border-red-500`}>{pts === null ? "" : pts}</span>;
+    if (boxedBlue) return <span className={`${base} border-2 border-blue-500`}>{pts === null ? "" : pts}</span>;
 
     return <span className="inline-flex min-w-[24px] justify-center">{pts === null ? "" : pts}</span>;
   }
@@ -468,7 +449,7 @@ export default function TeamRoundDetailPage() {
             </div>
             <div className="mt-2 text-[11px] text-gray-600">
               <span className="inline-flex items-center gap-2">
-                <span className="inline-block h-3 w-3 rounded-sm border-2 border-blue-500" /> Counted (boxed for first Y)
+                <span className="inline-block h-3 w-3 rounded-sm border-2 border-blue-500" /> Counted (top N)
                 <span className="inline-block h-3 w-3 rounded-sm border-2 border-red-500 ml-3" /> Zero
               </span>
             </div>
@@ -520,12 +501,12 @@ export default function TeamRoundDetailPage() {
                       const pts = ptsByPlayerHole.get(`${p.id}|${hole}`);
                       const val = pts === undefined ? null : pts;
 
-                      const boxedCounted = computed.boxedCountedSetByHole.get(hole)?.has(p.id) ?? false;
-                      const boxedZero = computed.zeroSetByHole.get(hole)?.has(p.id) ?? false;
+                      const boxedBlue = computed.boxedBlueByHole.get(hole)?.has(p.id) ?? false;
+                      const boxedZero = computed.zeroByHole.get(hole)?.has(p.id) ?? false;
 
                       return (
                         <td key={hole} className="px-2 py-2 text-center text-sm text-gray-900">
-                          <Cell pts={val} boxedCounted={boxedCounted} boxedZero={boxedZero} />
+                          <Cell pts={val} boxedBlue={boxedBlue} boxedZero={boxedZero} />
                         </td>
                       );
                     })}
@@ -566,8 +547,8 @@ export default function TeamRoundDetailPage() {
         </div>
 
         <div className="mt-3 text-xs text-gray-600">
-          Note: if more than Y players tie at the cutoff, all tied scores are counted in totals, but only the first Y (in
-          display order) get blue boxes.
+          Rule: only the top N positive scores are counted (ties are resolved by table order). Blue boxes show exactly N counted
+          positives (or fewer if fewer positives exist). Zeros are always boxed red and count as −1.
         </div>
       </div>
     </div>
