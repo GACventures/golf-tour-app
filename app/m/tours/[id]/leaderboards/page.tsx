@@ -263,7 +263,7 @@ export default function MobileLeaderboardsPage() {
   // UI selection
   const [kind, setKind] = useState<LeaderboardKind>("individual");
 
-  // ✅ NEW: separate leaderboard by gender toggle (only used for individual)
+  // ✅ separate leaderboard by gender toggle (only used for individual)
   const [separateByGender, setSeparateByGender] = useState(false);
 
   // Rules (mobile read-only, loaded from DB)
@@ -757,14 +757,13 @@ export default function MobileLeaderboardsPage() {
     finalRoundId,
   ]);
 
-  // ✅ NEW: split rows into Girls then Boys (for display only)
+  // split rows into Girls then Boys (for display only)
   const genderSplitIndividualRows = useMemo(() => {
     if (!separateByGender) return null;
 
     const girls = individualRows.filter((r) => normalizeTee(playerById.get(r.playerId)?.gender) === "F");
     const boys = individualRows.filter((r) => normalizeTee(playerById.get(r.playerId)?.gender) !== "F");
 
-    // preserve exact ordering rules inside each group
     girls.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
     boys.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
 
@@ -1002,13 +1001,11 @@ export default function MobileLeaderboardsPage() {
           const dx = Math.abs(t.clientX - s.x);
           const dy = Math.abs(t.clientY - s.y);
 
-          // treat as tap only if finger didn't move much
           if (dx <= 10 && dy <= 10) {
             router.push(href);
           }
         }}
         onClick={() => {
-          // desktop / non-touch fallback
           router.push(href);
         }}
         onKeyDown={(e) => {
@@ -1042,7 +1039,8 @@ export default function MobileLeaderboardsPage() {
   }
 
   return (
-    <div className="min-h-dvh bg-white text-gray-900 pb-24">
+    // ✅ Increased padding so bottom controls are not hidden behind MobileNav
+    <div className="min-h-dvh bg-white text-gray-900 pb-40">
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="grid grid-cols-3 gap-2">
@@ -1180,7 +1178,6 @@ export default function MobileLeaderboardsPage() {
                             {row.name}
                           </td>
 
-                          {/* TOUR total NOT clickable */}
                           <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
                             <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
                               {row.tourTotal}
@@ -1205,7 +1202,6 @@ export default function MobileLeaderboardsPage() {
                     )
                   ) : separateByGender && genderSplitIndividualRows ? (
                     <>
-                      {/* Girls */}
                       {genderSplitIndividualRows.girls.map((row) => (
                         <tr key={row.playerId} className="border-b last:border-b-0">
                           <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
@@ -1234,7 +1230,6 @@ export default function MobileLeaderboardsPage() {
                         </tr>
                       ))}
 
-                      {/* Divider */}
                       <tr className="bg-gray-50">
                         <td
                           colSpan={2 + sortedRounds.length}
@@ -1248,7 +1243,6 @@ export default function MobileLeaderboardsPage() {
                         </td>
                       </tr>
 
-                      {/* Boys */}
                       {genderSplitIndividualRows.boys.map((row) => (
                         <tr key={row.playerId} className="border-b last:border-b-0">
                           <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
@@ -1278,7 +1272,6 @@ export default function MobileLeaderboardsPage() {
                       ))}
                     </>
                   ) : (
-                    // default (unchanged)
                     individualRows.map((row) => (
                       <tr key={row.playerId} className="border-b last:border-b-0">
                         <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
@@ -1342,9 +1335,9 @@ export default function MobileLeaderboardsPage() {
               </div>
             </div>
 
-            {/* ✅ NEW toggle at very bottom (below round details) */}
+            {/* ✅ Toggle at very bottom, now with extra margin so it clears MobileNav */}
             {kind === "individual" ? (
-              <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm">
+              <div id="gender-toggle" className="mt-4 mb-10 rounded-2xl border border-gray-200 bg-white p-4 text-sm">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="font-semibold text-gray-900">Separate Boys and Girls leaderboards?</div>
