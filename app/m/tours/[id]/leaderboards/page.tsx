@@ -1,3 +1,4 @@
+// app/m/tours/[id]/leaderboards/page.tsx
 // PRODUCTION
 "use client";
 
@@ -263,8 +264,8 @@ export default function MobileLeaderboardsPage() {
   // UI selection
   const [kind, setKind] = useState<LeaderboardKind>("individual");
 
-  // ✅ separate leaderboard by gender toggle (only used for individual)
-  const [separateByGender, setSeparateByGender] = useState(false);
+  // ✅ NEW: separate genders toggle (individual only)
+  const [separateGender, setSeparateGender] = useState(false);
 
   // Rules (mobile read-only, loaded from DB)
   const [individualRule, setIndividualRule] = useState<IndividualRule>({ mode: "ALL" });
@@ -660,9 +661,7 @@ export default function MobileLeaderboardsPage() {
     if (kind === "pairs") {
       if (pairRule.mode === "ALL") return "Pairs Better Ball · Total points across all rounds";
       const r = pairRule;
-      return r.finalRequired
-        ? `Pairs Better Ball · Best ${r.q} rounds (Final required)`
-        : `Pairs Better Ball · Best ${r.q} rounds`;
+      return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
     }
 
     return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 for each zero · All rounds`;
@@ -757,18 +756,13 @@ export default function MobileLeaderboardsPage() {
     finalRoundId,
   ]);
 
-  // split rows into Girls then Boys (for display only)
-  const genderSplitIndividualRows = useMemo(() => {
-    if (!separateByGender) return null;
+  const femaleIndividualRows = useMemo(() => {
+    return individualRows.filter((r) => normalizeTee(playerById.get(r.playerId)?.gender) === "F");
+  }, [individualRows, playerById]);
 
-    const girls = individualRows.filter((r) => normalizeTee(playerById.get(r.playerId)?.gender) === "F");
-    const boys = individualRows.filter((r) => normalizeTee(playerById.get(r.playerId)?.gender) !== "F");
-
-    girls.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
-    boys.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
-
-    return { girls, boys };
-  }, [separateByGender, individualRows, playerById]);
+  const maleIndividualRows = useMemo(() => {
+    return individualRows.filter((r) => normalizeTee(playerById.get(r.playerId)?.gender) !== "F");
+  }, [individualRows, playerById]);
 
   // -----------------------------
   // Pairs scoring (Better Ball per hole)
@@ -1001,11 +995,13 @@ export default function MobileLeaderboardsPage() {
           const dx = Math.abs(t.clientX - s.x);
           const dy = Math.abs(t.clientY - s.y);
 
+          // treat as tap only if finger didn't move much
           if (dx <= 10 && dy <= 10) {
             router.push(href);
           }
         }}
         onClick={() => {
+          // desktop / non-touch fallback
           router.push(href);
         }}
         onKeyDown={(e) => {
@@ -1014,6 +1010,38 @@ export default function MobileLeaderboardsPage() {
       >
         {children}
       </span>
+    );
+  }
+
+  function IndividualRow({ row }: { row: { playerId: string; name: string; tourTotal: number; perRound: Record<string, number>; countedIds: Set<string> } }) {
+    return (
+      <tr key={row.playerId} className="border-b last:border-b-0">
+        <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+          {row.name}
+        </td>
+
+        <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
+          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
+            {row.tourTotal}
+          </span>
+        </td>
+
+        {sortedRounds.map((r) => {
+          const val = row.perRound[r.id] ?? 0;
+          const counted = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
+
+          // go to the same hole-by-hole page used by: Rounds -> (Round) -> Results -> (Player)
+          const href = `/m/tours/${tourId}/rounds/${r.id}/results/${row.playerId}`;
+
+          return (
+            <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
+              <TapCell href={href} counted={counted} ariaLabel="Open player round detail">
+                {val}
+              </TapCell>
+            </td>
+          );
+        })}
+      </tr>
     );
   }
 
@@ -1038,9 +1066,10 @@ export default function MobileLeaderboardsPage() {
     );
   }
 
+  const colCount = 2 + sortedRounds.length;
+
   return (
-    // ✅ Increased padding so bottom controls are not hidden behind MobileNav
-    <div className="min-h-dvh bg-white text-gray-900 pb-40">
+    <div className="min-h-dvh bg-white text-gray-900 pb-24">
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="grid grid-cols-3 gap-2">
@@ -1086,11 +1115,6 @@ export default function MobileLeaderboardsPage() {
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 py-4">
-<div className="mb-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800">
-  DEBUG: leaderboards/page.tsx (gender toggle build) · {new Date().toISOString()}
-</div>
-
-
         {loading ? (
           <div className="space-y-3">
             <div className="h-5 w-40 rounded bg-gray-100" />
@@ -1138,7 +1162,7 @@ export default function MobileLeaderboardsPage() {
                   {kind === "teams" ? (
                     teamRows.length === 0 ? (
                       <tr>
-                        <td colSpan={2 + sortedRounds.length} className="px-4 py-6 text-sm text-gray-700">
+                        <td colSpan={colCount} className="px-4 py-6 text-sm text-gray-700">
                           No teams found for this tour (tour_groups scope=tour type=team).
                         </td>
                       </tr>
@@ -1172,7 +1196,7 @@ export default function MobileLeaderboardsPage() {
                   ) : kind === "pairs" ? (
                     pairRows.length === 0 ? (
                       <tr>
-                        <td colSpan={2 + sortedRounds.length} className="px-4 py-6 text-sm text-gray-700">
+                        <td colSpan={colCount} className="px-4 py-6 text-sm text-gray-700">
                           No pairs found for this tour (tour_groups scope=tour type=pair).
                         </td>
                       </tr>
@@ -1183,6 +1207,7 @@ export default function MobileLeaderboardsPage() {
                             {row.name}
                           </td>
 
+                          {/* TOUR total NOT clickable */}
                           <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
                             <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
                               {row.tourTotal}
@@ -1205,105 +1230,45 @@ export default function MobileLeaderboardsPage() {
                         </tr>
                       ))
                     )
-                  ) : separateByGender && genderSplitIndividualRows ? (
+                  ) : !separateGender ? (
+                    individualRows.map((row) => <IndividualRow key={row.playerId} row={row} />)
+                  ) : (
                     <>
-                      {genderSplitIndividualRows.girls.map((row) => (
-                        <tr key={row.playerId} className="border-b last:border-b-0">
-                          <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                            {row.name}
+                      {/* ✅ Girls label directly under header row */}
+                      {femaleIndividualRows.length > 0 ? (
+                        <tr className="bg-gray-50">
+                          <td colSpan={colCount} className="px-3 py-2 text-xs font-semibold text-gray-700">
+                            Girls
                           </td>
-
-                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
-                              {row.tourTotal}
-                            </span>
-                          </td>
-
-                          {sortedRounds.map((r) => {
-                            const val = row.perRound[r.id] ?? 0;
-                            const counted = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
-                            const href = `/m/tours/${tourId}/rounds/${r.id}/results/${row.playerId}`;
-
-                            return (
-                              <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                                <TapCell href={href} counted={counted} ariaLabel="Open player round detail">
-                                  {val}
-                                </TapCell>
-                              </td>
-                            );
-                          })}
                         </tr>
+                      ) : null}
+
+                      {femaleIndividualRows.map((row) => (
+                        <IndividualRow key={row.playerId} row={row} />
                       ))}
 
-                      <tr className="bg-gray-50">
-                        <td
-                          colSpan={2 + sortedRounds.length}
-                          className="px-3 py-2 text-xs font-semibold text-gray-700 border-b border-gray-200"
-                        >
-                          <div className="flex items-center gap-3">
-                            <span>Girls</span>
-                            <span className="h-px flex-1 bg-gray-200" />
-                            <span>Boys</span>
-                          </div>
-                        </td>
-         F             </tr>
-
-                      {genderSplitIndividualRows.boys.map((row) => (
-                        <tr key={row.playerId} className="border-b last:border-b-0">
-                          <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                            {row.name}
+                      {/* divider between groups */}
+                      {femaleIndividualRows.length > 0 && maleIndividualRows.length > 0 ? (
+                        <tr>
+                          <td colSpan={colCount} className="p-0">
+                            <div className="h-[2px] bg-gray-200" />
                           </td>
-
-                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
-                              {row.tourTotal}
-                            </span>
-                          </td>
-
-                          {sortedRounds.map((r) => {
-                            const val = row.perRound[r.id] ?? 0;
-                            const counted = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
-                            const href = `/m/tours/${tourId}/rounds/${r.id}/results/${row.playerId}`;
-
-                            return (
-                              <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                                <TapCell href={href} counted={counted} ariaLabel="Open player round detail">
-                                  {val}
-                                </TapCell>
-                              </td>
-                            );
-                          })}
                         </tr>
+                      ) : null}
+
+                      {/* ✅ Boys label directly before first M row */}
+                      {maleIndividualRows.length > 0 ? (
+                        <tr className="bg-gray-50">
+                          <td colSpan={colCount} className="px-3 py-2 text-xs font-semibold text-gray-700">
+                            Boys
+                          </td>
+                        </tr>
+                      ) : null}
+
+                      {maleIndividualRows.map((row) => (
+                        <IndividualRow key={row.playerId} row={row} />
                       ))}
                     </>
-                  ) : (
-                    individualRows.map((row) => (
-                      <tr key={row.playerId} className="border-b last:border-b-0">
-                        <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                          {row.name}
-                        </td>
-
-                        <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
-                            {row.tourTotal}
-                          </span>
-                        </td>
-
-                        {sortedRounds.map((r) => {
-                          const val = row.perRound[r.id] ?? 0;
-                          const counted = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
-                          const href = `/m/tours/${tourId}/rounds/${r.id}/results/${row.playerId}`;
-
-                          return (
-                            <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                              <TapCell href={href} counted={counted} ariaLabel="Open player round detail">
-                                {val}
-                              </TapCell>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))
                   )}
                 </tbody>
               </table>
@@ -1311,8 +1276,7 @@ export default function MobileLeaderboardsPage() {
 
             {(kind === "individual" && individualRule.mode === "BEST_N") || (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
               <div className="mt-3 text-xs text-gray-600">
-                Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour
-                total.
+                Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour total.
               </div>
             ) : null}
 
@@ -1338,34 +1302,29 @@ export default function MobileLeaderboardsPage() {
                   );
                 })}
               </div>
-            </div>
 
-            {/* ✅ Toggle at very bottom, now with extra margin so it clears MobileNav */}
-            {kind === "individual" ? (
-              <div id="gender-toggle" className="mt-4 mb-10 rounded-2xl border border-gray-200 bg-white p-4 text-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="font-semibold text-gray-900">Separate Boys and Girls leaderboards?</div>
-                    <div className="mt-1 text-xs text-gray-600">
-                      Yes = Girls (F) first, then a divider, then Boys (M). Row content and tap behaviour unchanged.
-                    </div>
+              {/* ✅ Toggle at very bottom, below the rounds list */}
+              {kind === "individual" ? (
+                <div className="mt-4 border-t pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-gray-900">Separate Boys and Girls leaderboards?</div>
+                    <button
+                      type="button"
+                      onClick={() => setSeparateGender((v) => !v)}
+                      className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
+                        separateGender
+                          ? "bg-gray-900 text-white border-gray-900"
+                          : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
+                      }`}
+                      aria-label="Toggle separate boys and girls leaderboards"
+                    >
+                      {separateGender ? "Yes" : "No"}
+                    </button>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setSeparateByGender((v) => !v)}
-                    className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold border ${
-                      separateByGender
-                        ? "bg-gray-900 text-white border-gray-900"
-                        : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
-                    }`}
-                    aria-label="Toggle separate boys and girls leaderboards"
-                  >
-                    {separateByGender ? "Yes" : "No"}
-                  </button>
+                  <div className="mt-1 text-xs text-gray-600">If Yes: Girls shown first, then Boys.</div>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </>
         )}
       </main>
