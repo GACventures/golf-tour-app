@@ -46,6 +46,7 @@ type RoundPlayerRow = {
   player_id: string;
   playing: boolean;
   playing_handicap: number | null;
+  tee?: Tee | null; // ✅ IMPORTANT: round-specific tee (source of truth for scoring)
 };
 
 type ScoreRow = {
@@ -64,13 +65,9 @@ type ParRow = {
   stroke_index: number;
 };
 
-type IndividualRule =
-  | { mode: "ALL" }
-  | { mode: "BEST_N"; n: number; finalRequired: boolean };
+type IndividualRule = | { mode: "ALL" } | { mode: "BEST_N"; n: number; finalRequired: boolean };
 
-type PairRule =
-  | { mode: "ALL" }
-  | { mode: "BEST_Q"; q: number; finalRequired: boolean };
+type PairRule = | { mode: "ALL" } | { mode: "BEST_Q"; q: number; finalRequired: boolean };
 
 type TeamRule = { bestY: number };
 
@@ -264,7 +261,7 @@ export default function MobileLeaderboardsPage() {
   // UI selection
   const [kind, setKind] = useState<LeaderboardKind>("individual");
 
-  // ✅ NEW: separate genders toggle (individual only)
+  // ✅ separate genders toggle (individual only)
   const [separateGender, setSeparateGender] = useState(false);
 
   // Rules (mobile read-only, loaded from DB)
@@ -409,11 +406,11 @@ export default function MobileLeaderboardsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
-        // round_players
+        // round_players (✅ include tee)
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
-            .select("round_id,player_id,playing,playing_handicap")
+            .select("round_id,player_id,playing,playing_handicap,tee")
             .in("round_id", roundIds)
             .in("player_id", playerIds);
           if (rpErr) throw rpErr;
@@ -423,6 +420,7 @@ export default function MobileLeaderboardsPage() {
             player_id: String(x.player_id),
             playing: x.playing === true,
             playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
+            tee: x.tee ? normalizeTee(x.tee) : null,
           }));
 
           if (!alive) return;
@@ -561,6 +559,16 @@ export default function MobileLeaderboardsPage() {
     return m;
   }, [roundPlayers]);
 
+  // ✅ Tee source-of-truth for scoring:
+  //    use round_players.tee, fallback to players.gender, and finally default to "M"
+  function teeFor(roundId: string, playerId: string): Tee {
+    const rp = rpByRoundPlayer.get(`${roundId}|${playerId}`);
+    if (rp?.tee) return normalizeTee(rp.tee);
+    const pl = playerById.get(playerId);
+    if (pl?.gender) return normalizeTee(pl.gender);
+    return "M";
+  }
+
   const parsByCourseTeeHole = useMemo(() => {
     const m = new Map<string, Map<Tee, Map<number, { par: number; si: number }>>>();
     for (const p of pars) {
@@ -695,7 +703,7 @@ export default function MobileLeaderboardsPage() {
           continue;
         }
 
-        const tee: Tee = normalizeTee(p.gender);
+        const tee = teeFor(r.id, p.id); // ✅ FIX: use round_players.tee
         const parsMap = parsByCourseTeeHole.get(courseId)?.get(tee);
         if (!parsMap) {
           perRound[r.id] = 0;
@@ -754,15 +762,17 @@ export default function MobileLeaderboardsPage() {
     scoreByRoundPlayerHole,
     individualRule,
     finalRoundId,
+    rpByRoundPlayer, // teeFor uses it
+    playerById, // teeFor fallback
   ]);
 
   const femaleIndividualRows = useMemo(() => {
-    return individualRows.filter((r) => normalizeTee(playerById.get(r.playerId)?.gender) === "F");
-  }, [individualRows, playerById]);
+    return individualRows.filter((r) => teeFor(sortedRounds[0]?.id ?? "", r.playerId) === "F");
+  }, [individualRows, sortedRounds]);
 
   const maleIndividualRows = useMemo(() => {
-    return individualRows.filter((r) => normalizeTee(playerById.get(r.playerId)?.gender) !== "F");
-  }, [individualRows, playerById]);
+    return individualRows.filter((r) => teeFor(sortedRounds[0]?.id ?? "", r.playerId) !== "F");
+  }, [individualRows, sortedRounds]);
 
   // -----------------------------
   // Pairs scoring (Better Ball per hole)
@@ -801,9 +811,7 @@ export default function MobileLeaderboardsPage() {
             const sc = scoreByRoundPlayerHole.get(`${r.id}|${pid}|${h}`);
             if (!sc) continue;
 
-            const pl = playerById.get(pid);
-            const tee: Tee = normalizeTee(pl?.gender);
-
+            const tee = teeFor(r.id, pid); // ✅ FIX
             const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(h);
             if (!pr) continue;
 
@@ -903,9 +911,7 @@ export default function MobileLeaderboardsPage() {
             const sc = scoreByRoundPlayerHole.get(`${r.id}|${pid}|${h}`);
             if (!sc) continue;
 
-            const pl = playerById.get(pid);
-            const tee: Tee = normalizeTee(pl?.gender);
-
+            const tee = teeFor(r.id, pid); // ✅ FIX
             const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(h);
             if (!pr) continue;
 
@@ -1013,7 +1019,11 @@ export default function MobileLeaderboardsPage() {
     );
   }
 
-  function IndividualRow({ row }: { row: { playerId: string; name: string; tourTotal: number; perRound: Record<string, number>; countedIds: Set<string> } }) {
+  function IndividualRow({
+    row,
+  }: {
+    row: { playerId: string; name: string; tourTotal: number; perRound: Record<string, number>; countedIds: Set<string> };
+  }) {
     return (
       <tr key={row.playerId} className="border-b last:border-b-0">
         <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
@@ -1021,9 +1031,7 @@ export default function MobileLeaderboardsPage() {
         </td>
 
         <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
-            {row.tourTotal}
-          </span>
+          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">{row.tourTotal}</span>
         </td>
 
         {sortedRounds.map((r) => {
@@ -1234,7 +1242,7 @@ export default function MobileLeaderboardsPage() {
                     individualRows.map((row) => <IndividualRow key={row.playerId} row={row} />)
                   ) : (
                     <>
-                      {/* ✅ Girls label directly under header row */}
+                      {/* Girls label directly under header row */}
                       {femaleIndividualRows.length > 0 ? (
                         <tr className="bg-gray-50">
                           <td colSpan={colCount} className="px-3 py-2 text-xs font-semibold text-gray-700">
@@ -1256,7 +1264,7 @@ export default function MobileLeaderboardsPage() {
                         </tr>
                       ) : null}
 
-                      {/* ✅ Boys label directly before first M row */}
+                      {/* Boys label directly before first M row */}
                       {maleIndividualRows.length > 0 ? (
                         <tr className="bg-gray-50">
                           <td colSpan={colCount} className="px-3 py-2 text-xs font-semibold text-gray-700">
@@ -1303,7 +1311,7 @@ export default function MobileLeaderboardsPage() {
                 })}
               </div>
 
-              {/* ✅ Toggle at very bottom, below the rounds list */}
+              {/* Toggle at very bottom, below the rounds list */}
               {kind === "individual" ? (
                 <div className="mt-4 border-t pt-4">
                   <div className="flex items-center justify-between gap-3">
