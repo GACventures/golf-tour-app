@@ -1086,6 +1086,11 @@ export default function MobileLeaderboardsPage() {
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 py-4">
+<div className="mb-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800">
+  DEBUG: leaderboards/page.tsx (gender toggle build) · {new Date().toISOString()}
+</div>
+
+
         {loading ? (
           <div className="space-y-3">
             <div className="h-5 w-40 rounded bg-gray-100" />
@@ -1241,7 +1246,7 @@ export default function MobileLeaderboardsPage() {
                             <span>Boys</span>
                           </div>
                         </td>
-                      </tr>
+         F             </tr>
 
                       {genderSplitIndividualRows.boys.map((row) => (
                         <tr key={row.playerId} className="border-b last:border-b-0">
