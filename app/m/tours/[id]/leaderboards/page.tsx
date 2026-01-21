@@ -106,7 +106,9 @@ type TourGroupMemberRow = {
 // Helpers
 // -----------------------------
 function isLikelyUuid(v: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    v
+  );
 }
 
 function safeName(v: any, fallback: string) {
@@ -139,7 +141,10 @@ function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
 function isMissingColumnError(msg: string, column: string) {
   const m = String(msg ?? "").toLowerCase();
   const c = column.toLowerCase();
-  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
+  return (
+    m.includes("does not exist") &&
+    (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `))
+  );
 }
 
 function pickBestRoundDateISO(r: RoundRow): string | null {
@@ -326,7 +331,11 @@ export default function MobileLeaderboardsPage() {
       setErrorMsg("");
 
       try {
-        const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
+        const { data: tData, error: tErr } = await supabase
+          .from("tours")
+          .select("id,name")
+          .eq("id", tourId)
+          .single();
         if (tErr) throw tErr;
         if (!alive) return;
         setTour(tData as Tour);
@@ -1221,9 +1230,12 @@ export default function MobileLeaderboardsPage() {
 
                           {sortedRounds.map((r) => {
                             const val = row.perRound[r.id] ?? 0;
+                            const href = `/m/tours/${tourId}/leaderboards/teams/${r.id}/${row.groupId}`;
                             return (
                               <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                                <span className="inline-flex min-w-[44px] justify-end rounded-md px-2 py-1">{val}</span>
+                                <TapCell href={href} counted={false} ariaLabel="Open team round detail">
+                                  {val}
+                                </TapCell>
                               </td>
                             );
                           })}
