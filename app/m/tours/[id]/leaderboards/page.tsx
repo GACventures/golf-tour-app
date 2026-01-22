@@ -312,9 +312,6 @@ export default function MobileLeaderboardsPage() {
   const [pairRule, setPairRule] = useState<PairRule>({ mode: "ALL" });
   const [teamRule, setTeamRule] = useState<TeamRule>({ bestY: 1 });
 
-  // ✅ UI only: popup showing team members (no scoring logic)
-  const [openTeamPopupId, setOpenTeamPopupId] = useState<string | null>(null);
-
   // -----------------------------
   // Load
   // -----------------------------
@@ -1034,13 +1031,9 @@ export default function MobileLeaderboardsPage() {
           const dx = Math.abs(t.clientX - s.x);
           const dy = Math.abs(t.clientY - s.y);
 
-          if (dx <= 10 && dy <= 10) {
-            router.push(href);
-          }
+          if (dx <= 10 && dy <= 10) router.push(href);
         }}
-        onClick={() => {
-          router.push(href);
-        }}
+        onClick={() => router.push(href)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") router.push(href);
         }}
@@ -1053,13 +1046,7 @@ export default function MobileLeaderboardsPage() {
   function IndividualRow({
     row,
   }: {
-    row: {
-      playerId: string;
-      name: string;
-      tourTotal: number;
-      perRound: Record<string, number>;
-      countedIds: Set<string>;
-    };
+    row: { playerId: string; name: string; tourTotal: number; perRound: Record<string, number>; countedIds: Set<string> };
   }) {
     return (
       <tr key={row.playerId} className="border-b last:border-b-0">
@@ -1068,14 +1055,11 @@ export default function MobileLeaderboardsPage() {
         </td>
 
         <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
-            {row.tourTotal}
-          </span>
+          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">{row.tourTotal}</span>
         </td>
 
         {sortedRounds.map((r) => {
           const val = row.perRound[r.id] ?? 0;
-          // ✅ FIX: no _toggle, just counted
           const counted = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
           const href = `/m/tours/${tourId}/rounds/${r.id}/results/${row.playerId}`;
 
@@ -1121,10 +1105,7 @@ export default function MobileLeaderboardsPage() {
           <div className="grid grid-cols-3 gap-2">
             <button
               type="button"
-              onClick={() => {
-                setKind("individual");
-                setOpenTeamPopupId(null);
-              }}
+              onClick={() => setKind("individual")}
               className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
                 kind === "individual"
                   ? "bg-gray-900 text-white border-gray-900"
@@ -1135,10 +1116,7 @@ export default function MobileLeaderboardsPage() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setKind("pairs");
-                setOpenTeamPopupId(null);
-              }}
+              onClick={() => setKind("pairs")}
               className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
                 kind === "pairs"
                   ? "bg-gray-900 text-white border-gray-900"
@@ -1149,10 +1127,7 @@ export default function MobileLeaderboardsPage() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setKind("teams");
-                setOpenTeamPopupId(null);
-              }}
+              onClick={() => setKind("teams")}
               className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
                 kind === "teams"
                   ? "bg-gray-900 text-white border-gray-900"
@@ -1222,62 +1197,34 @@ export default function MobileLeaderboardsPage() {
                         </td>
                       </tr>
                     ) : (
-                      teamRows.map((row) => {
-                        const lab = teamLabelById.get(row.groupId);
-                        const membersText = lab?.members ?? "";
+                      teamRows.map((row) => (
+                        <tr key={row.groupId} className="border-b last:border-b-0">
+                          {/* ✅ Team name plain text (no click, no members) */}
+                          <td className="sticky left-0 z-10 bg-white px-3 py-2 whitespace-nowrap align-top">
+                            <div className="text-sm font-semibold text-gray-900">{row.title}</div>
+                          </td>
 
-                        const isOpen = openTeamPopupId === row.groupId;
+                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900 align-top">
+                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
+                              {row.tourTotal}
+                            </span>
+                          </td>
 
-                        return (
-                          <tr key={row.groupId} className="border-b last:border-b-0">
-                            <td className="sticky left-0 z-10 bg-white px-3 py-2 whitespace-nowrap align-top">
-                              <div className="relative inline-block">
-                                <button
-                                  type="button"
-                                  className="text-sm font-semibold text-gray-900 underline decoration-gray-300 underline-offset-4 hover:decoration-gray-500"
-                                  onClick={() => setOpenTeamPopupId((cur) => (cur === row.groupId ? null : row.groupId))}
-                                  aria-label="Show team members"
-                                >
-                                  {row.title}
-                                </button>
+                          {/* ✅ Round scores clickable again to detail page */}
+                          {sortedRounds.map((r) => {
+                            const val = row.perRound[r.id] ?? 0;
+                            const href = `/m/tours/${tourId}/leaderboards/teams/${r.id}/${row.groupId}`;
 
-                                {isOpen ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => setOpenTeamPopupId(null)}
-                                    className="absolute left-0 top-full mt-2 w-[260px] max-w-[80vw] rounded-xl border border-gray-200 bg-white p-3 text-left shadow-lg"
-                                    aria-label="Hide team members"
-                                  >
-                                    <div className="text-xs font-semibold text-gray-900">Team members</div>
-
-                                    {/* ✅ WRAP FIX: allow wrapping inside the box */}
-                                    <div className="mt-1 text-[12px] text-gray-700 leading-snug whitespace-normal break-words">
-                                      {membersText || "—"}
-                                    </div>
-
-                                    <div className="mt-2 text-[11px] text-gray-500">Tap this box to close</div>
-                                  </button>
-                                ) : null}
-                              </div>
-                            </td>
-
-                            <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900 align-top">
-                              <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
-                                {row.tourTotal}
-                              </span>
-                            </td>
-
-                            {sortedRounds.map((r) => {
-                              const val = row.perRound[r.id] ?? 0;
-                              return (
-                                <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900 align-top">
-                                  <span className="inline-flex min-w-[44px] justify-end rounded-md px-2 py-1">{val}</span>
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        );
-                      })
+                            return (
+                              <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900 align-top">
+                                <TapCell href={href} counted={false} ariaLabel="Open team round detail">
+                                  {val}
+                                </TapCell>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))
                     )
                   ) : kind === "pairs" ? (
                     pairRows.length === 0 ? (
