@@ -686,7 +686,6 @@ export default function MobileLeaderboardsPage() {
   // Description
   // -----------------------------
   const description = useMemo(() => {
-    // NOTE: scoring logic unchanged
     if (kind === "individual") {
       if (individualRule.mode === "ALL") return "Individual Stableford · Total points across all rounds";
       const r = individualRule;
@@ -900,7 +899,7 @@ export default function MobileLeaderboardsPage() {
   ]);
 
   // -----------------------------
-  // Teams scoring
+  // Teams scoring (unchanged)
   // -----------------------------
   const teamRows = useMemo(() => {
     const rows: Array<{
@@ -1065,7 +1064,7 @@ export default function MobileLeaderboardsPage() {
 
         {sortedRounds.map((r) => {
           const val = row.perRound[r.id] ?? 0;
-          const counted = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
+          const counted =_toggle = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
           const href = `/m/tours/${tourId}/rounds/${r.id}/results/${row.playerId}`;
 
           return (
@@ -1241,9 +1240,12 @@ export default function MobileLeaderboardsPage() {
                                     aria-label="Hide team members"
                                   >
                                     <div className="text-xs font-semibold text-gray-900">Team members</div>
-                                    <div className="mt-1 text-[12px] text-gray-700 leading-snug">
+
+                                    {/* ✅ FIX: allow wrapping inside the box */}
+                                    <div className="mt-1 text-[12px] text-gray-700 leading-snug whitespace-normal break-words">
                                       {membersText || "—"}
                                     </div>
+
                                     <div className="mt-2 text-[11px] text-gray-500">Tap this box to close</div>
                                   </button>
                                 ) : null}
