@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 
 import { supabase } from "@/lib/supabaseClient";
 import MobileNav from "../_components/MobileNav";
@@ -43,6 +43,7 @@ type RoundPlayerRow = {
 };
 
 type ScoreRow = {
+  id?: string | null; // optional
   round_id: string;
   player_id: string;
   hole_number: number;
@@ -89,36 +90,10 @@ function fmtPct(n: number) {
   return `${n.toFixed(1)}%`;
 }
 
-async function fetchScoresPerRound(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
-  const out: ScoreRow[] = [];
-  if (roundIds.length === 0 || playerIds.length === 0) return out;
-
-  // Fetch one round at a time to stay well under Supabase/PostgREST max rows.
-  for (const rid of roundIds) {
-    const { data, error } = await supabase
-      .from("scores")
-      .select("round_id,player_id,hole_number,strokes,pickup")
-      .eq("round_id", rid)
-      .in("player_id", playerIds)
-      .order("player_id", { ascending: true })
-      .order("hole_number", { ascending: true })
-      .order("id", { ascending: true });
-
-    if (error) throw error;
-
-    const rows = (data ?? []) as any[];
-    for (const x of rows) {
-      out.push({
-        round_id: String(x.round_id),
-        player_id: String(x.player_id),
-        hole_number: Number(x.hole_number),
-        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
-        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
-      });
-    }
-  }
-
-  return out;
+function clampInt(n: number, min: number, max: number) {
+  const x = Math.floor(Number(n));
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
 }
 
 type Row = {
@@ -129,13 +104,28 @@ type Row = {
 
 export default function MobileTourStatsPage() {
   const params = useParams<{ id?: string }>();
+  const searchParams = useSearchParams();
+
   const tourId = String(params?.id ?? "").trim();
+
+  // Controlled experiment: ?rounds=N
+  const roundsParamRaw = (searchParams?.get("rounds") ?? "").trim();
+  const roundsLimit = useMemo(() => {
+    if (!roundsParamRaw) return null;
+    const n = Number(roundsParamRaw);
+    if (!Number.isFinite(n)) return null;
+    return clampInt(n, 1, 99);
+  }, [roundsParamRaw]);
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
   const [tour, setTour] = useState<Tour | null>(null);
+
+  // We keep only the IN-SCOPE rounds in `rounds`
   const [rounds, setRounds] = useState<RoundRow[]>([]);
+  const [totalRoundsCount, setTotalRoundsCount] = useState<number>(0);
+
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
   const [scores, setScores] = useState<ScoreRow[]>([]);
@@ -156,6 +146,7 @@ export default function MobileTourStatsPage() {
         if (!alive) return;
         setTour(tData as Tour);
 
+        // 1) Fetch ALL rounds for the tour
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,course_id,name,round_no,created_at")
@@ -164,16 +155,28 @@ export default function MobileTourStatsPage() {
           .order("created_at", { ascending: true });
         if (rErr) throw rErr;
 
-        const rr = (rData ?? []) as RoundRow[];
+        const allRounds = (rData ?? []) as RoundRow[];
         if (!alive) return;
-        setRounds(rr);
 
+        setTotalRoundsCount(allRounds.length);
+
+        // Ensure stable sorting then apply the limit (first N rounds)
+        const sortedAll = [...allRounds].sort((a, b) => {
+          const an = a.round_no ?? 999999;
+          const bn = b.round_no ?? 999999;
+          if (an !== bn) return an - bn;
+          return (a.created_at ?? "").localeCompare(b.created_at ?? "");
+        });
+
+        const inScopeRounds = roundsLimit ? sortedAll.slice(0, roundsLimit) : sortedAll;
+        setRounds(inScopeRounds);
+
+        // 2) Players in tour
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("tour_id,player_id,players(id,name,gender)")
           .eq("tour_id", tourId)
           .order("name", { ascending: true, foreignTable: "players" });
-
         if (tpErr) throw tpErr;
 
         const ps: PlayerRow[] = (tpData ?? [])
@@ -188,17 +191,16 @@ export default function MobileTourStatsPage() {
         if (!alive) return;
         setPlayers(ps);
 
-        const roundIds = rr.map((r) => r.id);
+        const roundIds = inScopeRounds.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
-        // round_players (handicap per round)
+        // 3) round_players for in-scope rounds
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
             .select("round_id,player_id,playing_handicap")
             .in("round_id", roundIds)
             .in("player_id", playerIds);
-
           if (rpErr) throw rpErr;
 
           const rpRows: RoundPlayerRow[] = (rpData ?? []).map((x: any) => ({
@@ -213,17 +215,29 @@ export default function MobileTourStatsPage() {
           setRoundPlayers([]);
         }
 
-        // ✅ scores (per-round fetch to avoid 1000 row cap)
+        // 4) scores for in-scope rounds
+        // NOTE: This is intentionally NOT paginated for this experiment.
         if (roundIds.length > 0 && playerIds.length > 0) {
-          const allScores = await fetchScoresPerRound(roundIds, playerIds);
+          const { data: sData, error: sErr } = await supabase
+            .from("scores")
+            .select("id,round_id,player_id,hole_number,strokes,pickup")
+            .in("round_id", roundIds)
+            .in("player_id", playerIds)
+            .order("round_id", { ascending: true })
+            .order("player_id", { ascending: true })
+            .order("hole_number", { ascending: true })
+            .order("id", { ascending: true })
+            .limit(1000); // keep current known cap behavior visible in Network
+          if (sErr) throw sErr;
+
           if (!alive) return;
-          setScores(allScores);
+          setScores((sData ?? []) as ScoreRow[]);
         } else {
           setScores([]);
         }
 
-        // pars (both tees)
-        const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
+        // 5) pars for courses in in-scope rounds
+        const courseIds = Array.from(new Set(inScopeRounds.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
             .from("pars")
@@ -232,7 +246,6 @@ export default function MobileTourStatsPage() {
             .in("tee", ["M", "F"])
             .order("course_id", { ascending: true })
             .order("hole_number", { ascending: true });
-
           if (pErr) throw pErr;
 
           const pr: ParRow[] = (pData ?? []).map((x: any) => ({
@@ -262,7 +275,7 @@ export default function MobileTourStatsPage() {
     return () => {
       alive = false;
     };
-  }, [tourId]);
+  }, [tourId, roundsLimit]);
 
   const statsRows: Row[] = useMemo(() => {
     if (!players.length || !rounds.length) return [];
@@ -353,12 +366,27 @@ export default function MobileTourStatsPage() {
     );
   }
 
+  const scopeLabel =
+    roundsLimit && totalRoundsCount > 0
+      ? `Scope: first ${roundsLimit} round(s) of ${totalRoundsCount}`
+      : totalRoundsCount > 0
+      ? `Scope: all ${totalRoundsCount} rounds`
+      : `Scope: —`;
+
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Simple header (tour name removed) */}
+      {/* Simple header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">Stats</div>
+          <div className="mt-1 text-xs text-gray-600">
+            {tour?.name ? `${tour.name} · ` : ""}
+            {scopeLabel}
+          </div>
+          <div className="mt-1 text-[11px] text-gray-500">
+            Tip: add <span className="font-mono">?rounds=1</span>, <span className="font-mono">?rounds=2</span>, etc to
+            isolate the 1000-row cap.
+          </div>
         </div>
       </div>
 
@@ -404,10 +432,16 @@ export default function MobileTourStatsPage() {
                       Holes
                     </th>
 
-                    <th className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700" colSpan={5}>
+                    <th
+                      className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700"
+                      colSpan={5}
+                    >
                       Gross outcomes (%)
                     </th>
-                    <th className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700" colSpan={5}>
+                    <th
+                      className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700"
+                      colSpan={5}
+                    >
                       Net outcomes (%)
                     </th>
                   </tr>
@@ -438,12 +472,18 @@ export default function MobileTourStatsPage() {
                     </th>
 
                     {["E+", "B", "Par", "Bog", "D+"].map((h) => (
-                      <th key={`g-${h}`} className="border-b border-gray-200 px-3 py-2 text-right text-[11px] font-semibold text-gray-500">
+                      <th
+                        key={`g-${h}`}
+                        className="border-b border-gray-200 px-3 py-2 text-right text-[11px] font-semibold text-gray-500"
+                      >
                         {h}
                       </th>
                     ))}
                     {["E+", "B", "Par", "Bog", "D+"].map((h) => (
-                      <th key={`n-${h}`} className="border-b border-gray-200 px-3 py-2 text-right text-[11px] font-semibold text-gray-500">
+                      <th
+                        key={`n-${h}`}
+                        className="border-b border-gray-200 px-3 py-2 text-right text-[11px] font-semibold text-gray-500"
+                      >
                         {h}
                       </th>
                     ))}
@@ -479,11 +519,21 @@ export default function MobileTourStatsPage() {
                           {r.name}
                         </td>
 
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.roundsPlayedCompleted)}</td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmt(r.stats.rounds.avgStableford, 1)}</td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.bestStableford)}</td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.worstStableford)}</td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmt(r.stats.rounds.stdDevStableford, 2)}</td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmtInt(r.stats.rounds.roundsPlayedCompleted)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmt(r.stats.rounds.avgStableford, 1)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmtInt(r.stats.rounds.bestStableford)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmtInt(r.stats.rounds.worstStableford)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmt(r.stats.rounds.stdDevStableford, 2)}
+                        </td>
 
                         <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(holesPlayed)}</td>
 
