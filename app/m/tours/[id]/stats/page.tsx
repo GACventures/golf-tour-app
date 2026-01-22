@@ -47,8 +47,8 @@ type ScoreRow = {
   round_id: string;
   player_id: string;
   hole_number: number;
-  strokes: any;
-  pickup?: any;
+  strokes: number | null;
+  pickup?: boolean | null;
 };
 
 type ParRow = {
@@ -90,26 +90,7 @@ function fmtPct(n: number) {
   return `${n.toFixed(1)}%`;
 }
 
-function normalizePickup(v: any): boolean {
-  if (v === true) return true;
-  const s = String(v ?? "").trim().toLowerCase();
-  return s === "true" || s === "t" || s === "1" || s === "yes" || s === "y" || s === "p";
-}
-
-function normalizeStrokes(v: any): number | null {
-  if (v === null || v === undefined) return null;
-  if (typeof v === "number") return Number.isFinite(v) ? v : null;
-
-  const s = String(v).trim();
-  if (!s) return null;
-
-  if (s.toUpperCase() === "P") return null;
-
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
-}
-
-// ✅ IMPORTANT: Supabase/PostgREST can cap at 1000 rows per request.
+// ✅ IMPORTANT: Supabase/PostgREST often caps at ~1000 rows.
 // Fetch ALL score rows in pages.
 async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
   const pageSize = 1000;
@@ -124,6 +105,7 @@ async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<
       .select("round_id,player_id,hole_number,strokes,pickup")
       .in("round_id", roundIds)
       .in("player_id", playerIds)
+      // stable ordering for pagination
       .order("round_id", { ascending: true })
       .order("player_id", { ascending: true })
       .order("hole_number", { ascending: true })
@@ -137,8 +119,8 @@ async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<
         round_id: String(x.round_id),
         player_id: String(x.player_id),
         hole_number: Number(x.hole_number),
-        strokes: x.strokes,
-        pickup: x.pickup,
+        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
+        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
       }))
     );
 
@@ -201,7 +183,6 @@ export default function MobileTourStatsPage() {
           .select("tour_id,player_id,players(id,name,gender)")
           .eq("tour_id", tourId)
           .order("name", { ascending: true, foreignTable: "players" });
-
         if (tpErr) throw tpErr;
 
         const ps: PlayerRow[] = (tpData ?? [])
@@ -241,27 +222,11 @@ export default function MobileTourStatsPage() {
           setRoundPlayers([]);
         }
 
-        // ✅ scores (paginated + robust normalization)
+        // ✅ scores (PAGINATED)
         if (roundIds.length > 0 && playerIds.length > 0) {
-          const raw = await fetchAllScores(roundIds, playerIds);
+          const allScores = await fetchAllScores(roundIds, playerIds);
           if (!alive) return;
-
-          const normalized: ScoreRow[] = raw.map((s) => {
-            const strokesStr = String(s.strokes ?? "").trim();
-            const strokesIsP = strokesStr.toUpperCase() === "P";
-            const pickup = strokesIsP ? true : normalizePickup(s.pickup);
-            const strokes = pickup ? null : normalizeStrokes(s.strokes);
-
-            return {
-              round_id: s.round_id,
-              player_id: s.player_id,
-              hole_number: Number(s.hole_number),
-              strokes,
-              pickup,
-            };
-          });
-
-          setScores(normalized);
+          setScores(allScores);
         } else {
           setScores([]);
         }
@@ -319,23 +284,21 @@ export default function MobileTourStatsPage() {
       created_at: r.created_at,
     }));
 
+    // scores grouped by player
     const scoresByPlayer = new Map<string, StatsScoreRow[]>();
     for (const s of scores) {
       const pid = String(s.player_id);
       if (!scoresByPlayer.has(pid)) scoresByPlayer.set(pid, []);
-
-      const pickup = normalizePickup(s.pickup);
-      const strokes = pickup ? null : normalizeStrokes(s.strokes);
-
       scoresByPlayer.get(pid)!.push({
         round_id: String(s.round_id),
         player_id: pid,
         hole_number: Number(s.hole_number),
-        strokes,
-        pickup: pickup ? true : null,
+        strokes: s.strokes,
+        pickup: s.pickup ?? null,
       });
     }
 
+    // round_players grouped by player
     const rpByPlayer = new Map<string, StatsRoundPlayerRow[]>();
     for (const rp of roundPlayers) {
       const pid = String(rp.player_id);
@@ -347,6 +310,7 @@ export default function MobileTourStatsPage() {
       });
     }
 
+    // pars grouped by tee for the player’s gender
     const parsByTee = new Map<Tee, HoleParSI[]>();
     for (const tee of ["M", "F"] as Tee[]) parsByTee.set(tee, []);
     for (const p of pars) {
@@ -370,6 +334,7 @@ export default function MobileTourStatsPage() {
       return { playerId: p.id, name: p.name, stats };
     });
 
+    // sort by avg stableford desc, then name
     rows.sort((a, b) => {
       const av = a.stats.rounds.avgStableford ?? -999999;
       const bv = b.stats.rounds.avgStableford ?? -999999;
@@ -540,18 +505,10 @@ export default function MobileTourStatsPage() {
                         <td className="px-3 py-2 text-right text-sm tabular-nums">
                           {fmtInt(r.stats.rounds.roundsPlayedCompleted)}
                         </td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">
-                          {fmt(r.stats.rounds.avgStableford, 1)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">
-                          {fmtInt(r.stats.rounds.bestStableford)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">
-                          {fmtInt(r.stats.rounds.worstStableford)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">
-                          {fmt(r.stats.rounds.stdDevStableford, 2)}
-                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmt(r.stats.rounds.avgStableford, 1)}</td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.bestStableford)}</td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.worstStableford)}</td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmt(r.stats.rounds.stdDevStableford, 2)}</td>
 
                         <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(holesPlayed)}</td>
 

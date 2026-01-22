@@ -50,8 +50,8 @@ type ScoreRow = {
   round_id: string;
   player_id: string;
   hole_number: number;
-  strokes: any;
-  pickup?: any;
+  strokes: number | null;
+  pickup?: boolean | null;
 };
 
 type ParRow = {
@@ -113,27 +113,7 @@ function rankWithTies(entries: Array<{ id: string; value: number }>, lowerIsBett
   return rankById;
 }
 
-function normalizePickup(v: any): boolean {
-  if (v === true) return true;
-  const s = String(v ?? "").trim().toLowerCase();
-  return s === "true" || s === "t" || s === "1" || s === "yes" || s === "y" || s === "p";
-}
-
-function normalizeStrokes(v: any): number | null {
-  if (v === null || v === undefined) return null;
-  if (typeof v === "number") return Number.isFinite(v) ? v : null;
-
-  const s = String(v).trim();
-  if (!s) return null;
-
-  // If strokes column contains "P", treat as pickup (strokes null)
-  if (s.toUpperCase() === "P") return null;
-
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
-}
-
-// ✅ IMPORTANT: Supabase/PostgREST can cap at 1000 rows per request.
+// ✅ IMPORTANT: Supabase/PostgREST often caps at ~1000 rows.
 // Fetch ALL score rows in pages.
 async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
   const pageSize = 1000;
@@ -148,6 +128,7 @@ async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<
       .select("round_id,player_id,hole_number,strokes,pickup")
       .in("round_id", roundIds)
       .in("player_id", playerIds)
+      // stable ordering for pagination
       .order("round_id", { ascending: true })
       .order("player_id", { ascending: true })
       .order("hole_number", { ascending: true })
@@ -161,8 +142,8 @@ async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<
         round_id: String(x.round_id),
         player_id: String(x.player_id),
         hole_number: Number(x.hole_number),
-        strokes: x.strokes,
-        pickup: x.pickup,
+        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
+        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
       }))
     );
 
@@ -191,7 +172,6 @@ type FixedCompMeta = {
   competitionId: string; // matches catalog id
   lowerIsBetter?: boolean;
   format: (v: number) => string;
-
   detailFromStatsKey?: string; // e.g. "streak_where"
   tappable?: boolean;
 };
@@ -243,12 +223,7 @@ export default function MobileCompetitionsPage() {
         competitionId: "tour_eclectic_total",
         format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
       },
-      {
-        key: "schumacher",
-        label: "Schumacher",
-        competitionId: "tour_schumacher_first3_avg",
-        format: (v) => fmt2(v),
-      },
+      { key: "schumacher", label: "Schumacher", competitionId: "tour_schumacher_first3_avg", format: (v) => fmt2(v) },
       { key: "closer", label: "Closer", competitionId: "tour_closer_last3_avg", format: (v) => fmt2(v) },
       {
         key: "hotStreak",
@@ -281,14 +256,8 @@ export default function MobileCompetitionsPage() {
       { label: "Eclectic", text: "Total of each player’s best Stableford points per hole" },
       { label: "Schumacher", text: "Average Stableford points on holes 1–3" },
       { label: "Closer", text: "Average Stableford points on holes 16–18" },
-      {
-        label: "Hot Streak",
-        text: "Longest run in any round of consecutive holes where gross strokes is par or better",
-      },
-      {
-        label: "Cold Streak",
-        text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse",
-      },
+      { label: "Hot Streak", text: "Longest run in any round of consecutive holes where gross strokes is par or better" },
+      { label: "Cold Streak", text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse" },
     ],
     []
   );
@@ -315,6 +284,7 @@ export default function MobileCompetitionsPage() {
           .order("round_no", { ascending: true, nullsFirst: false })
           .order("created_at", { ascending: true });
         if (rErr) throw rErr;
+
         const rr = (rData ?? []) as RoundRow[];
         if (!alive) return;
         setRounds(rr);
@@ -362,32 +332,15 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
-        // ✅ scores (paginated + robust normalization)
+        // ✅ scores (PAGINATED)
         if (roundIds.length > 0 && playerIds.length > 0) {
-          const raw = await fetchAllScores(roundIds, playerIds);
+          const allScores = await fetchAllScores(roundIds, playerIds);
           if (!alive) return;
-
-          const normalized: ScoreRow[] = raw.map((s) => {
-            const strokesStr = String(s.strokes ?? "").trim();
-            const strokesIsP = strokesStr.toUpperCase() === "P";
-            const pickup = strokesIsP ? true : normalizePickup(s.pickup);
-            const strokes = pickup ? null : normalizeStrokes(s.strokes);
-
-            return {
-              round_id: s.round_id,
-              player_id: s.player_id,
-              hole_number: Number(s.hole_number),
-              strokes,
-              pickup,
-            };
-          });
-
-          setScores(normalized);
+          setScores(allScores);
         } else {
           setScores([]);
         }
 
-        // pars (both tees)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
@@ -460,11 +413,11 @@ export default function MobileCompetitionsPage() {
     }));
 
     const scoresLite: ScoreLiteForTour[] = scores.map((s) => ({
-      round_id: String(s.round_id),
-      player_id: String(s.player_id),
+      round_id: s.round_id,
+      player_id: s.player_id,
       hole_number: Number(s.hole_number),
       strokes: s.strokes === null || s.strokes === undefined ? null : Number(s.strokes),
-      pickup: normalizePickup(s.pickup),
+      pickup: s.pickup === true,
     }));
 
     const parsLite: ParLiteForTour[] = pars.map((p) => ({
@@ -644,7 +597,7 @@ export default function MobileCompetitionsPage() {
                                 )}
 
                                 {tappable && isOpen ? (
-                                  <div className="max-w-[140px] rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm whitespace-normal break-words">
+                                  <div className="max-w-[160px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm">
                                     {detail ? detail : <span className="text-gray-400">No streak found</span>}
                                   </div>
                                 ) : null}
