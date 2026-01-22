@@ -1,3 +1,4 @@
+// app/m/tours/[id]/stats/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -43,6 +44,7 @@ type RoundPlayerRow = {
 };
 
 type ScoreRow = {
+  id: string;
   round_id: string;
   player_id: string;
   hole_number: number;
@@ -87,6 +89,83 @@ function fmtInt(n: number | null | undefined) {
 function fmtPct(n: number) {
   if (!Number.isFinite(n)) return "0%";
   return `${n.toFixed(1)}%`;
+}
+
+// Keyset pagination for scores (robust against Supabase/PostgREST 1000-row cap)
+async function fetchAllScoresKeyset(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
+  const pageSize = 1000;
+  const out: ScoreRow[] = [];
+
+  if (!roundIds.length || !playerIds.length) return out;
+
+  // Cursor (lexicographic by our ordering)
+  let lastRoundId: string | null = null;
+  let lastPlayerId: string | null = null;
+  let lastHole: number | null = null;
+  let lastId: string | null = null;
+
+  // Safety valve: prevents infinite loops if something goes wrong
+  const maxPages = 200; // 200k rows worst-case at 1000/page (far above your expected volumes)
+  for (let page = 0; page < maxPages; page++) {
+    let q = supabase
+      .from("scores")
+      .select("id,round_id,player_id,hole_number,strokes,pickup")
+      .in("round_id", roundIds)
+      .in("player_id", playerIds)
+      .order("round_id", { ascending: true })
+      .order("player_id", { ascending: true })
+      .order("hole_number", { ascending: true })
+      .order("id", { ascending: true })
+      .limit(pageSize);
+
+    // Apply cursor filter for pages after the first
+    if (lastRoundId && lastPlayerId && lastHole !== null && lastId) {
+      // We must emulate tuple (round_id, player_id, hole_number, id) > (last...)
+      // PostgREST doesn't support tuple comparison, so we expand into OR conditions.
+      //
+      // (round_id > lastRoundId)
+      // OR (round_id = lastRoundId AND player_id > lastPlayerId)
+      // OR (round_id = lastRoundId AND player_id = lastPlayerId AND hole_number > lastHole)
+      // OR (round_id = lastRoundId AND player_id = lastPlayerId AND hole_number = lastHole AND id > lastId)
+      const or = [
+        `round_id.gt.${lastRoundId}`,
+        `and(round_id.eq.${lastRoundId},player_id.gt.${lastPlayerId})`,
+        `and(round_id.eq.${lastRoundId},player_id.eq.${lastPlayerId},hole_number.gt.${lastHole})`,
+        `and(round_id.eq.${lastRoundId},player_id.eq.${lastPlayerId},hole_number.eq.${lastHole},id.gt.${lastId})`,
+      ].join(",");
+
+      q = q.or(or);
+    }
+
+    const { data, error } = await q;
+    if (error) throw error;
+
+    const rows = (data ?? []) as any[];
+
+    const mapped: ScoreRow[] = rows.map((x) => ({
+      id: String(x.id),
+      round_id: String(x.round_id),
+      player_id: String(x.player_id),
+      hole_number: Number(x.hole_number),
+      strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
+      pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
+    }));
+
+    out.push(...mapped);
+
+    if (rows.length < pageSize) break;
+
+    const last = mapped[mapped.length - 1];
+    if (!last) break;
+
+    // Update cursor
+    lastRoundId = last.round_id;
+    lastPlayerId = last.player_id;
+    lastHole = last.hole_number;
+    lastId = last.id;
+  }
+
+  return out;
 }
 
 type Row = {
@@ -181,32 +260,11 @@ export default function MobileTourStatsPage() {
           setRoundPlayers([]);
         }
 
-        // ✅ DIAGNOSTIC: single fetch with a very high range (up to 10,000 rows)
-        // If the backend caps results, `scores.length` will still show ~1000 (or your cap),
-        // which confirms a row-return limit regardless of the requested range.
+        // ✅ scores (keyset paginated)
         if (roundIds.length > 0 && playerIds.length > 0) {
-          const { data: sData, error: sErr } = await supabase
-            .from("scores")
-            .select("round_id,player_id,hole_number,strokes,pickup")
-            .in("round_id", roundIds)
-            .in("player_id", playerIds)
-            .order("round_id", { ascending: true })
-            .order("player_id", { ascending: true })
-            .order("hole_number", { ascending: true })
-            .range(0, 9999);
-
-          if (sErr) throw sErr;
+          const allScores = await fetchAllScoresKeyset(roundIds, playerIds);
           if (!alive) return;
-
-          const sRows: ScoreRow[] = (sData ?? []).map((x: any) => ({
-            round_id: String(x.round_id),
-            player_id: String(x.player_id),
-            hole_number: Number(x.hole_number),
-            strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
-            pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
-          }));
-
-          setScores(sRows);
+          setScores(allScores);
         } else {
           setScores([]);
         }
@@ -347,11 +405,6 @@ export default function MobileTourStatsPage() {
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">Stats</div>
-          {/* ✅ Diagnostic: show how many score rows were actually returned */}
-          <div className="mt-1 text-xs text-gray-500">
-            Loaded score rows: <span className="font-semibold">{loading ? "…" : scores.length}</span>
-            {tour?.name ? <span> · {tour.name}</span> : null}
-          </div>
         </div>
       </div>
 
@@ -487,10 +540,18 @@ export default function MobileTourStatsPage() {
                         <td className="px-3 py-2 text-right text-sm tabular-nums">
                           {fmtInt(r.stats.rounds.roundsPlayedCompleted)}
                         </td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmt(r.stats.rounds.avgStableford, 1)}</td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.bestStableford)}</td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.worstStableford)}</td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmt(r.stats.rounds.stdDevStableford, 2)}</td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmt(r.stats.rounds.avgStableford, 1)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmtInt(r.stats.rounds.bestStableford)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmtInt(r.stats.rounds.worstStableford)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">
+                          {fmt(r.stats.rounds.stdDevStableford, 2)}
+                        </td>
 
                         <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(holesPlayed)}</td>
 
