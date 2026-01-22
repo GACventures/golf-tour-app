@@ -1,5 +1,3 @@
-// app/m/tours/[id]/leaderboards/page.tsx
-// PRODUCTION
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -106,9 +104,7 @@ type TourGroupMemberRow = {
 // Helpers
 // -----------------------------
 function isLikelyUuid(v: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    v
-  );
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
 function safeName(v: any, fallback: string) {
@@ -141,10 +137,7 @@ function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
 function isMissingColumnError(msg: string, column: string) {
   const m = String(msg ?? "").toLowerCase();
   const c = column.toLowerCase();
-  return (
-    m.includes("does not exist") &&
-    (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `))
-  );
+  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
 }
 
 function pickBestRoundDateISO(r: RoundRow): string | null {
@@ -318,6 +311,9 @@ export default function MobileLeaderboardsPage() {
   const [pairRule, setPairRule] = useState<PairRule>({ mode: "ALL" });
   const [teamRule, setTeamRule] = useState<TeamRule>({ bestY: 1 });
 
+  // ✅ Teams popup UI state (no logic changes)
+  const [openTeamPopupId, setOpenTeamPopupId] = useState<string | null>(null);
+
   // -----------------------------
   // Load
   // -----------------------------
@@ -331,11 +327,7 @@ export default function MobileLeaderboardsPage() {
       setErrorMsg("");
 
       try {
-        const { data: tData, error: tErr } = await supabase
-          .from("tours")
-          .select("id,name")
-          .eq("id", tourId)
-          .single();
+        const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
         if (!alive) return;
         setTour(tData as Tour);
@@ -481,7 +473,7 @@ export default function MobileLeaderboardsPage() {
           setRoundPlayers([]);
         }
 
-        // ✅ scores (PAGINATED so we don't silently miss Round 1)
+        // ✅ scores (PAGINATED)
         if (roundIds.length > 0 && playerIds.length > 0) {
           const allScores = await fetchAllScores(roundIds, playerIds);
           if (!alive) return;
@@ -694,6 +686,7 @@ export default function MobileLeaderboardsPage() {
   // Description
   // -----------------------------
   const description = useMemo(() => {
+    // NOTE: scoring logic unchanged
     if (kind === "individual") {
       if (individualRule.mode === "ALL") return "Individual Stableford · Total points across all rounds";
       const r = individualRule;
@@ -1001,7 +994,7 @@ export default function MobileLeaderboardsPage() {
   ]);
 
   // -----------------------------
-  // TapCell
+  // TapCell (used for individual + pairs only)
   // -----------------------------
   function TapCell({
     href,
@@ -1041,13 +1034,9 @@ export default function MobileLeaderboardsPage() {
           const dx = Math.abs(t.clientX - s.x);
           const dy = Math.abs(t.clientY - s.y);
 
-          if (dx <= 10 && dy <= 10) {
-            router.push(href);
-          }
+          if (dx <= 10 && dy <= 10) router.push(href);
         }}
-        onClick={() => {
-          router.push(href);
-        }}
+        onClick={() => router.push(href)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") router.push(href);
         }}
@@ -1121,7 +1110,10 @@ export default function MobileLeaderboardsPage() {
           <div className="grid grid-cols-3 gap-2">
             <button
               type="button"
-              onClick={() => setKind("individual")}
+              onClick={() => {
+                setKind("individual");
+                setOpenTeamPopupId(null);
+              }}
               className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
                 kind === "individual"
                   ? "bg-gray-900 text-white border-gray-900"
@@ -1132,7 +1124,10 @@ export default function MobileLeaderboardsPage() {
             </button>
             <button
               type="button"
-              onClick={() => setKind("pairs")}
+              onClick={() => {
+                setKind("pairs");
+                setOpenTeamPopupId(null);
+              }}
               className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
                 kind === "pairs"
                   ? "bg-gray-900 text-white border-gray-900"
@@ -1143,7 +1138,10 @@ export default function MobileLeaderboardsPage() {
             </button>
             <button
               type="button"
-              onClick={() => setKind("teams")}
+              onClick={() => {
+                setKind("teams");
+                setOpenTeamPopupId(null);
+              }}
               className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
                 kind === "teams"
                   ? "bg-gray-900 text-white border-gray-900"
@@ -1213,34 +1211,62 @@ export default function MobileLeaderboardsPage() {
                         </td>
                       </tr>
                     ) : (
-                      teamRows.map((row) => (
-                        <tr key={row.groupId} className="border-b last:border-b-0">
-                          <td className="sticky left-0 z-10 bg-white px-3 py-2 whitespace-nowrap">
-                            <div className="text-sm font-semibold text-gray-900">{row.title}</div>
-                            {row.members ? (
-                              <div className="text-[11px] text-gray-500 truncate max-w-[220px]">{row.members}</div>
-                            ) : null}
-                          </td>
+                      teamRows.map((row) => {
+                        const teamInfo = teamLabelById.get(row.groupId);
+                        const membersText = teamInfo?.members ?? "";
 
-                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
-                              {row.tourTotal}
-                            </span>
-                          </td>
+                        const isOpen = openTeamPopupId === row.groupId;
 
-                          {sortedRounds.map((r) => {
-                            const val = row.perRound[r.id] ?? 0;
-                            const href = `/m/tours/${tourId}/leaderboards/teams/${r.id}/${row.groupId}`;
-                            return (
-                              <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
-                                <TapCell href={href} counted={false} ariaLabel="Open team round detail">
-                                  {val}
-                                </TapCell>
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))
+                        return (
+                          <tr key={row.groupId} className="border-b last:border-b-0">
+                            <td className="sticky left-0 z-10 bg-white px-3 py-2 whitespace-nowrap align-top">
+                              <div className="relative inline-block">
+                                <button
+                                  type="button"
+                                  className="text-sm font-semibold text-gray-900 underline decoration-gray-300 underline-offset-4 hover:decoration-gray-500"
+                                  onClick={() => {
+                                    setOpenTeamPopupId((cur) => (cur === row.groupId ? null : row.groupId));
+                                  }}
+                                  aria-label="Show team members"
+                                >
+                                  {row.title}
+                                </button>
+
+                                {/* Popup */}
+                                {isOpen ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setOpenTeamPopupId(null)}
+                                    className="absolute left-0 top-full mt-2 w-[260px] max-w-[80vw] rounded-xl border border-gray-200 bg-white p-3 text-left shadow-lg"
+                                    aria-label="Hide team members"
+                                  >
+                                    <div className="text-xs font-semibold text-gray-900">Team members</div>
+                                    <div className="mt-1 text-[12px] text-gray-700 leading-snug">
+                                      {membersText || "—"}
+                                    </div>
+                                    <div className="mt-2 text-[11px] text-gray-500">Tap this box to close</div>
+                                  </button>
+                                ) : null}
+                              </div>
+                            </td>
+
+                            <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900 align-top">
+                              <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">
+                                {row.tourTotal}
+                              </span>
+                            </td>
+
+                            {sortedRounds.map((r) => {
+                              const val = row.perRound[r.id] ?? 0;
+                              return (
+                                <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900 align-top">
+                                  <span className="inline-flex min-w-[44px] justify-end rounded-md px-2 py-1">{val}</span>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })
                     )
                   ) : kind === "pairs" ? (
                     pairRows.length === 0 ? (
