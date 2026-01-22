@@ -143,6 +143,82 @@ type MatrixCell = {
   detail?: string | null; // e.g. "R1: H4–H8"
 };
 
+// ✅ IMPORTANT: Supabase/PostgREST can cap at ~1000 rows per request.
+// These helpers page through results using .range(...)
+async function fetchAllRoundPlayers(roundIds: string[], playerIds: string[]): Promise<RoundPlayerRow[]> {
+  const pageSize = 1000;
+  let from = 0;
+  const out: RoundPlayerRow[] = [];
+
+  while (true) {
+    const to = from + pageSize - 1;
+
+    const { data, error } = await supabase
+      .from("round_players")
+      .select("round_id,player_id,playing,playing_handicap")
+      .in("round_id", roundIds)
+      .in("player_id", playerIds)
+      .order("round_id", { ascending: true })
+      .order("player_id", { ascending: true })
+      .range(from, to);
+
+    if (error) throw error;
+
+    const rows = (data ?? []) as any[];
+    out.push(
+      ...rows.map((x) => ({
+        round_id: String(x.round_id),
+        player_id: String(x.player_id),
+        playing: x.playing === true,
+        playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
+      }))
+    );
+
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return out;
+}
+
+async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
+  const pageSize = 1000;
+  let from = 0;
+  const out: ScoreRow[] = [];
+
+  while (true) {
+    const to = from + pageSize - 1;
+
+    const { data, error } = await supabase
+      .from("scores")
+      .select("round_id,player_id,hole_number,strokes,pickup")
+      .in("round_id", roundIds)
+      .in("player_id", playerIds)
+      .order("round_id", { ascending: true })
+      .order("player_id", { ascending: true })
+      .order("hole_number", { ascending: true })
+      .range(from, to);
+
+    if (error) throw error;
+
+    const rows = (data ?? []) as any[];
+    out.push(
+      ...rows.map((x) => ({
+        round_id: String(x.round_id),
+        player_id: String(x.player_id),
+        hole_number: Number(x.hole_number),
+        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
+        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
+      }))
+    );
+
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return out;
+}
+
 export default function MobileCompetitionsPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -326,40 +402,25 @@ export default function MobileCompetitionsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
+        // ✅ round_players (PAGINATED)
         if (roundIds.length > 0 && playerIds.length > 0) {
-          const { data: rpData, error: rpErr } = await supabase
-            .from("round_players")
-            .select("round_id,player_id,playing,playing_handicap")
-            .in("round_id", roundIds)
-            .in("player_id", playerIds);
-          if (rpErr) throw rpErr;
-
-          const rpRows: RoundPlayerRow[] = (rpData ?? []).map((x: any) => ({
-            round_id: String(x.round_id),
-            player_id: String(x.player_id),
-            playing: x.playing === true,
-            playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
-          }));
-
+          const rpRows = await fetchAllRoundPlayers(roundIds, playerIds);
           if (!alive) return;
           setRoundPlayers(rpRows);
         } else {
           setRoundPlayers([]);
         }
 
+        // ✅ scores (PAGINATED)
         if (roundIds.length > 0 && playerIds.length > 0) {
-          const { data: sData, error: sErr } = await supabase
-            .from("scores")
-            .select("round_id,player_id,hole_number,strokes,pickup")
-            .in("round_id", roundIds)
-            .in("player_id", playerIds);
-          if (sErr) throw sErr;
+          const allScores = await fetchAllScores(roundIds, playerIds);
           if (!alive) return;
-          setScores((sData ?? []) as ScoreRow[]);
+          setScores(allScores);
         } else {
           setScores([]);
         }
 
+        // pars (both tees)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
@@ -636,7 +697,7 @@ export default function MobileCompetitionsPage() {
               </div>
             </div>
 
-            {/* ✅ Definitions restored under the table */}
+            {/* Definitions under the table */}
             <div className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="border-b bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-700">Definitions</div>
               <div className="px-4 py-3">
