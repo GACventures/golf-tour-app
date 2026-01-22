@@ -1,3 +1,5 @@
+// app/m/tours/[id]/leaderboards/page.tsx
+// PRODUCTION
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -249,7 +251,6 @@ async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<
       .select("round_id,player_id,hole_number,strokes,pickup")
       .in("round_id", roundIds)
       .in("player_id", playerIds)
-      // order for stable pagination
       .order("round_id", { ascending: true })
       .order("player_id", { ascending: true })
       .order("hole_number", { ascending: true })
@@ -311,7 +312,7 @@ export default function MobileLeaderboardsPage() {
   const [pairRule, setPairRule] = useState<PairRule>({ mode: "ALL" });
   const [teamRule, setTeamRule] = useState<TeamRule>({ bestY: 1 });
 
-  // ✅ Teams popup UI state (no logic changes)
+  // ✅ UI only: popup showing team members (no scoring logic)
   const [openTeamPopupId, setOpenTeamPopupId] = useState<string | null>(null);
 
   // -----------------------------
@@ -899,7 +900,7 @@ export default function MobileLeaderboardsPage() {
   ]);
 
   // -----------------------------
-  // Teams scoring (unchanged)
+  // Teams scoring
   // -----------------------------
   const teamRows = useMemo(() => {
     const rows: Array<{
@@ -993,7 +994,7 @@ export default function MobileLeaderboardsPage() {
   ]);
 
   // -----------------------------
-  // TapCell (used for individual + pairs only)
+  // TapCell
   // -----------------------------
   function TapCell({
     href,
@@ -1033,9 +1034,13 @@ export default function MobileLeaderboardsPage() {
           const dx = Math.abs(t.clientX - s.x);
           const dy = Math.abs(t.clientY - s.y);
 
-          if (dx <= 10 && dy <= 10) router.push(href);
+          if (dx <= 10 && dy <= 10) {
+            router.push(href);
+          }
         }}
-        onClick={() => router.push(href)}
+        onClick={() => {
+          router.push(href);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") router.push(href);
         }}
@@ -1048,7 +1053,13 @@ export default function MobileLeaderboardsPage() {
   function IndividualRow({
     row,
   }: {
-    row: { playerId: string; name: string; tourTotal: number; perRound: Record<string, number>; countedIds: Set<string> };
+    row: {
+      playerId: string;
+      name: string;
+      tourTotal: number;
+      perRound: Record<string, number>;
+      countedIds: Set<string>;
+    };
   }) {
     return (
       <tr key={row.playerId} className="border-b last:border-b-0">
@@ -1064,7 +1075,8 @@ export default function MobileLeaderboardsPage() {
 
         {sortedRounds.map((r) => {
           const val = row.perRound[r.id] ?? 0;
-          const counted =_toggle = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
+          // ✅ FIX: no _toggle, just counted
+          const counted = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
           const href = `/m/tours/${tourId}/rounds/${r.id}/results/${row.playerId}`;
 
           return (
@@ -1211,8 +1223,8 @@ export default function MobileLeaderboardsPage() {
                       </tr>
                     ) : (
                       teamRows.map((row) => {
-                        const teamInfo = teamLabelById.get(row.groupId);
-                        const membersText = teamInfo?.members ?? "";
+                        const lab = teamLabelById.get(row.groupId);
+                        const membersText = lab?.members ?? "";
 
                         const isOpen = openTeamPopupId === row.groupId;
 
@@ -1223,15 +1235,12 @@ export default function MobileLeaderboardsPage() {
                                 <button
                                   type="button"
                                   className="text-sm font-semibold text-gray-900 underline decoration-gray-300 underline-offset-4 hover:decoration-gray-500"
-                                  onClick={() => {
-                                    setOpenTeamPopupId((cur) => (cur === row.groupId ? null : row.groupId));
-                                  }}
+                                  onClick={() => setOpenTeamPopupId((cur) => (cur === row.groupId ? null : row.groupId))}
                                   aria-label="Show team members"
                                 >
                                   {row.title}
                                 </button>
 
-                                {/* Popup */}
                                 {isOpen ? (
                                   <button
                                     type="button"
@@ -1241,7 +1250,7 @@ export default function MobileLeaderboardsPage() {
                                   >
                                     <div className="text-xs font-semibold text-gray-900">Team members</div>
 
-                                    {/* ✅ FIX: allow wrapping inside the box */}
+                                    {/* ✅ WRAP FIX: allow wrapping inside the box */}
                                     <div className="mt-1 text-[12px] text-gray-700 leading-snug whitespace-normal break-words">
                                       {membersText || "—"}
                                     </div>
