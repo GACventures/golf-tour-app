@@ -1,4 +1,3 @@
-// app/m/tours/[id]/stats/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -90,47 +89,6 @@ function fmtPct(n: number) {
   return `${n.toFixed(1)}%`;
 }
 
-// ✅ IMPORTANT: Supabase/PostgREST often caps at ~1000 rows.
-// Fetch ALL score rows in pages.
-async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
-  const pageSize = 1000;
-  let from = 0;
-  const out: ScoreRow[] = [];
-
-  while (true) {
-    const to = from + pageSize - 1;
-
-    const { data, error } = await supabase
-      .from("scores")
-      .select("round_id,player_id,hole_number,strokes,pickup")
-      .in("round_id", roundIds)
-      .in("player_id", playerIds)
-      // stable ordering for pagination
-      .order("round_id", { ascending: true })
-      .order("player_id", { ascending: true })
-      .order("hole_number", { ascending: true })
-      .range(from, to);
-
-    if (error) throw error;
-
-    const rows = (data ?? []) as any[];
-    out.push(
-      ...rows.map((x) => ({
-        round_id: String(x.round_id),
-        player_id: String(x.player_id),
-        hole_number: Number(x.hole_number),
-        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
-        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
-      }))
-    );
-
-    if (rows.length < pageSize) break;
-    from += pageSize;
-  }
-
-  return out;
-}
-
 type Row = {
   playerId: string;
   name: string;
@@ -183,6 +141,7 @@ export default function MobileTourStatsPage() {
           .select("tour_id,player_id,players(id,name,gender)")
           .eq("tour_id", tourId)
           .order("name", { ascending: true, foreignTable: "players" });
+
         if (tpErr) throw tpErr;
 
         const ps: PlayerRow[] = (tpData ?? [])
@@ -222,11 +181,32 @@ export default function MobileTourStatsPage() {
           setRoundPlayers([]);
         }
 
-        // ✅ scores (PAGINATED)
+        // ✅ DIAGNOSTIC: single fetch with a very high range (up to 10,000 rows)
+        // If the backend caps results, `scores.length` will still show ~1000 (or your cap),
+        // which confirms a row-return limit regardless of the requested range.
         if (roundIds.length > 0 && playerIds.length > 0) {
-          const allScores = await fetchAllScores(roundIds, playerIds);
+          const { data: sData, error: sErr } = await supabase
+            .from("scores")
+            .select("round_id,player_id,hole_number,strokes,pickup")
+            .in("round_id", roundIds)
+            .in("player_id", playerIds)
+            .order("round_id", { ascending: true })
+            .order("player_id", { ascending: true })
+            .order("hole_number", { ascending: true })
+            .range(0, 9999);
+
+          if (sErr) throw sErr;
           if (!alive) return;
-          setScores(allScores);
+
+          const sRows: ScoreRow[] = (sData ?? []).map((x: any) => ({
+            round_id: String(x.round_id),
+            player_id: String(x.player_id),
+            hole_number: Number(x.hole_number),
+            strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
+            pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
+          }));
+
+          setScores(sRows);
         } else {
           setScores([]);
         }
@@ -284,7 +264,7 @@ export default function MobileTourStatsPage() {
       created_at: r.created_at,
     }));
 
-    // scores grouped by player
+    // pre-group for speed
     const scoresByPlayer = new Map<string, StatsScoreRow[]>();
     for (const s of scores) {
       const pid = String(s.player_id);
@@ -298,7 +278,6 @@ export default function MobileTourStatsPage() {
       });
     }
 
-    // round_players grouped by player
     const rpByPlayer = new Map<string, StatsRoundPlayerRow[]>();
     for (const rp of roundPlayers) {
       const pid = String(rp.player_id);
@@ -367,8 +346,11 @@ export default function MobileTourStatsPage() {
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="text-base font-semibold text-gray-900">
-            Stats{tour?.name ? <span className="text-gray-500 font-normal"> · {tour.name}</span> : null}
+          <div className="text-base font-semibold text-gray-900">Stats</div>
+          {/* ✅ Diagnostic: show how many score rows were actually returned */}
+          <div className="mt-1 text-xs text-gray-500">
+            Loaded score rows: <span className="font-semibold">{loading ? "…" : scores.length}</span>
+            {tour?.name ? <span> · {tour.name}</span> : null}
           </div>
         </div>
       </div>
