@@ -1,3 +1,4 @@
+// app/m/tours/[id]/stats/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -87,6 +88,47 @@ function fmtInt(n: number | null | undefined) {
 function fmtPct(n: number) {
   if (!Number.isFinite(n)) return "0%";
   return `${n.toFixed(1)}%`;
+}
+
+// ✅ IMPORTANT: Supabase/PostgREST often caps at 1000 rows per request.
+// This helper fetches ALL score rows in pages.
+async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
+  const pageSize = 1000;
+  let from = 0;
+  const out: ScoreRow[] = [];
+
+  while (true) {
+    const to = from + pageSize - 1;
+
+    const { data, error } = await supabase
+      .from("scores")
+      .select("round_id,player_id,hole_number,strokes,pickup")
+      .in("round_id", roundIds)
+      .in("player_id", playerIds)
+      .order("round_id", { ascending: true })
+      .order("player_id", { ascending: true })
+      .order("hole_number", { ascending: true })
+      .range(from, to);
+
+    if (error) throw error;
+
+    const rows = (data ?? []) as any[];
+
+    out.push(
+      ...rows.map((x) => ({
+        round_id: String(x.round_id),
+        player_id: String(x.player_id),
+        hole_number: Number(x.hole_number),
+        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
+        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
+      }))
+    );
+
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return out;
 }
 
 type Row = {
@@ -181,17 +223,11 @@ export default function MobileTourStatsPage() {
           setRoundPlayers([]);
         }
 
-        // scores
+        // ✅ scores (PAGINATED)
         if (roundIds.length > 0 && playerIds.length > 0) {
-          const { data: sData, error: sErr } = await supabase
-            .from("scores")
-            .select("round_id,player_id,hole_number,strokes,pickup")
-            .in("round_id", roundIds)
-            .in("player_id", playerIds);
-
-          if (sErr) throw sErr;
+          const allScores = await fetchAllScores(roundIds, playerIds);
           if (!alive) return;
-          setScores((sData ?? []) as ScoreRow[]);
+          setScores(allScores);
         } else {
           setScores([]);
         }
@@ -329,10 +365,10 @@ export default function MobileTourStatsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Simple header (tour name removed) */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">Stats</div>
+          {tour?.name ? <div className="text-xs text-gray-500">{tour.name}</div> : null}
         </div>
       </div>
 
@@ -465,21 +501,11 @@ export default function MobileTourStatsPage() {
                           {r.name}
                         </td>
 
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">
-                          {fmtInt(r.stats.rounds.roundsPlayedCompleted)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">
-                          {fmt(r.stats.rounds.avgStableford, 1)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">
-                          {fmtInt(r.stats.rounds.bestStableford)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">
-                          {fmtInt(r.stats.rounds.worstStableford)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm tabular-nums">
-                          {fmt(r.stats.rounds.stdDevStableford, 2)}
-                        </td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.roundsPlayedCompleted)}</td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmt(r.stats.rounds.avgStableford, 1)}</td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.bestStableford)}</td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(r.stats.rounds.worstStableford)}</td>
+                        <td className="px-3 py-2 text-right text-sm tabular-nums">{fmt(r.stats.rounds.stdDevStableford, 2)}</td>
 
                         <td className="px-3 py-2 text-right text-sm tabular-nums">{fmtInt(holesPlayed)}</td>
 

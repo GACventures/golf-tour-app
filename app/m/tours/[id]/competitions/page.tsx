@@ -113,6 +113,47 @@ function rankWithTies(entries: Array<{ id: string; value: number }>, lowerIsBett
   return rankById;
 }
 
+// ✅ IMPORTANT: Supabase/PostgREST often caps at 1000 rows per request.
+// This helper fetches ALL score rows in pages.
+async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
+  const pageSize = 1000;
+  let from = 0;
+  const out: ScoreRow[] = [];
+
+  while (true) {
+    const to = from + pageSize - 1;
+
+    const { data, error } = await supabase
+      .from("scores")
+      .select("round_id,player_id,hole_number,strokes,pickup")
+      .in("round_id", roundIds)
+      .in("player_id", playerIds)
+      .order("round_id", { ascending: true })
+      .order("player_id", { ascending: true })
+      .order("hole_number", { ascending: true })
+      .range(from, to);
+
+    if (error) throw error;
+
+    const rows = (data ?? []) as any[];
+
+    out.push(
+      ...rows.map((x) => ({
+        round_id: String(x.round_id),
+        player_id: String(x.player_id),
+        hole_number: Number(x.hole_number),
+        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
+        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
+      }))
+    );
+
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return out;
+}
+
 type FixedCompKey =
   | "napoleon"
   | "bigGeorge"
@@ -143,82 +184,6 @@ type MatrixCell = {
   detail?: string | null; // e.g. "R1: H4–H8"
 };
 
-// ✅ IMPORTANT: Supabase/PostgREST can cap at ~1000 rows per request.
-// These helpers page through results using .range(...)
-async function fetchAllRoundPlayers(roundIds: string[], playerIds: string[]): Promise<RoundPlayerRow[]> {
-  const pageSize = 1000;
-  let from = 0;
-  const out: RoundPlayerRow[] = [];
-
-  while (true) {
-    const to = from + pageSize - 1;
-
-    const { data, error } = await supabase
-      .from("round_players")
-      .select("round_id,player_id,playing,playing_handicap")
-      .in("round_id", roundIds)
-      .in("player_id", playerIds)
-      .order("round_id", { ascending: true })
-      .order("player_id", { ascending: true })
-      .range(from, to);
-
-    if (error) throw error;
-
-    const rows = (data ?? []) as any[];
-    out.push(
-      ...rows.map((x) => ({
-        round_id: String(x.round_id),
-        player_id: String(x.player_id),
-        playing: x.playing === true,
-        playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
-      }))
-    );
-
-    if (rows.length < pageSize) break;
-    from += pageSize;
-  }
-
-  return out;
-}
-
-async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
-  const pageSize = 1000;
-  let from = 0;
-  const out: ScoreRow[] = [];
-
-  while (true) {
-    const to = from + pageSize - 1;
-
-    const { data, error } = await supabase
-      .from("scores")
-      .select("round_id,player_id,hole_number,strokes,pickup")
-      .in("round_id", roundIds)
-      .in("player_id", playerIds)
-      .order("round_id", { ascending: true })
-      .order("player_id", { ascending: true })
-      .order("hole_number", { ascending: true })
-      .range(from, to);
-
-    if (error) throw error;
-
-    const rows = (data ?? []) as any[];
-    out.push(
-      ...rows.map((x) => ({
-        round_id: String(x.round_id),
-        player_id: String(x.player_id),
-        hole_number: Number(x.hole_number),
-        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
-        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
-      }))
-    );
-
-    if (rows.length < pageSize) break;
-    from += pageSize;
-  }
-
-  return out;
-}
-
 export default function MobileCompetitionsPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -238,30 +203,15 @@ export default function MobileCompetitionsPage() {
 
   const fixedComps: FixedCompMeta[] = useMemo(
     () => [
-      {
-        key: "napoleon",
-        label: "Napoleon",
-        competitionId: "tour_napoleon_par3_avg",
-        format: (v) => fmt2(v),
-      },
-      {
-        key: "bigGeorge",
-        label: "Big George",
-        competitionId: "tour_big_george_par4_avg",
-        format: (v) => fmt2(v),
-      },
+      { key: "napoleon", label: "Napoleon", competitionId: "tour_napoleon_par3_avg", format: (v) => fmt2(v) },
+      { key: "bigGeorge", label: "Big George", competitionId: "tour_big_george_par4_avg", format: (v) => fmt2(v) },
       {
         key: "grandCanyon",
         label: "Grand Canyon",
         competitionId: "tour_grand_canyon_par5_avg",
         format: (v) => fmt2(v),
       },
-      {
-        key: "wizard",
-        label: "Wizard",
-        competitionId: "tour_wizard_four_plus_pct",
-        format: (v) => fmtPct0(v),
-      },
+      { key: "wizard", label: "Wizard", competitionId: "tour_wizard_four_plus_pct", format: (v) => fmtPct0(v) },
       {
         key: "bagelMan",
         label: "Bagel Man",
@@ -275,18 +225,8 @@ export default function MobileCompetitionsPage() {
         competitionId: "tour_eclectic_total",
         format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
       },
-      {
-        key: "schumacher",
-        label: "Schumacher",
-        competitionId: "tour_schumacher_first3_avg",
-        format: (v) => fmt2(v),
-      },
-      {
-        key: "closer",
-        label: "Closer",
-        competitionId: "tour_closer_last3_avg",
-        format: (v) => fmt2(v),
-      },
+      { key: "schumacher", label: "Schumacher", competitionId: "tour_schumacher_first3_avg", format: (v) => fmt2(v) },
+      { key: "closer", label: "Closer", competitionId: "tour_closer_last3_avg", format: (v) => fmt2(v) },
       {
         key: "hotStreak",
         label: "Hot Streak",
@@ -310,46 +250,16 @@ export default function MobileCompetitionsPage() {
 
   const definitions = useMemo(
     () => [
-      {
-        label: "Napoleon",
-        text: "Average Stableford points on Par 3 holes",
-      },
-      {
-        label: "Big George",
-        text: "Average Stableford points on Par 4 holes",
-      },
-      {
-        label: "Grand Canyon",
-        text: "Average Stableford points on Par 5 holes",
-      },
-      {
-        label: "Wizard",
-        text: "Percentage of holes where Stableford points are 4+",
-      },
-      {
-        label: "Bagel Man",
-        text: "Percentage of holes where Stableford points are 0",
-      },
-      {
-        label: "Eclectic",
-        text: "Total of each player’s best Stableford points per hole",
-      },
-      {
-        label: "Schumacher",
-        text: "Average Stableford points on holes 1–3",
-      },
-      {
-        label: "Closer",
-        text: "Average Stableford points on holes 16–18",
-      },
-      {
-        label: "Hot Streak",
-        text: "Longest run in any round of consecutive holes where gross strokes is par or better",
-      },
-      {
-        label: "Cold Streak",
-        text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse",
-      },
+      { label: "Napoleon", text: "Average Stableford points on Par 3 holes" },
+      { label: "Big George", text: "Average Stableford points on Par 4 holes" },
+      { label: "Grand Canyon", text: "Average Stableford points on Par 5 holes" },
+      { label: "Wizard", text: "Percentage of holes where Stableford points are 4+" },
+      { label: "Bagel Man", text: "Percentage of holes where Stableford points are 0" },
+      { label: "Eclectic", text: "Total of each player’s best Stableford points per hole" },
+      { label: "Schumacher", text: "Average Stableford points on holes 1–3" },
+      { label: "Closer", text: "Average Stableford points on holes 16–18" },
+      { label: "Hot Streak", text: "Longest run in any round of consecutive holes where gross strokes is par or better" },
+      { label: "Cold Streak", text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse" },
     ],
     []
   );
@@ -402,9 +312,21 @@ export default function MobileCompetitionsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
-        // ✅ round_players (PAGINATED)
         if (roundIds.length > 0 && playerIds.length > 0) {
-          const rpRows = await fetchAllRoundPlayers(roundIds, playerIds);
+          const { data: rpData, error: rpErr } = await supabase
+            .from("round_players")
+            .select("round_id,player_id,playing,playing_handicap")
+            .in("round_id", roundIds)
+            .in("player_id", playerIds);
+          if (rpErr) throw rpErr;
+
+          const rpRows: RoundPlayerRow[] = (rpData ?? []).map((x: any) => ({
+            round_id: String(x.round_id),
+            player_id: String(x.player_id),
+            playing: x.playing === true,
+            playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
+          }));
+
           if (!alive) return;
           setRoundPlayers(rpRows);
         } else {
@@ -420,7 +342,6 @@ export default function MobileCompetitionsPage() {
           setScores([]);
         }
 
-        // pars (both tees)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
@@ -697,7 +618,6 @@ export default function MobileCompetitionsPage() {
               </div>
             </div>
 
-            {/* Definitions under the table */}
             <div className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="border-b bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-700">Definitions</div>
               <div className="px-4 py-3">
