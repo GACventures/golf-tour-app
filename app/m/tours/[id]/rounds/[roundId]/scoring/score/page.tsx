@@ -17,11 +17,7 @@ const BLUE_ACE = "#082B5C";
 const BLUE_EAGLE = "#1757D6";
 const BLUE_BIRDIE = "#4DA3FF";
 
-function shadeForGross(
-  gross: number | null,
-  pickup: boolean | null | undefined,
-  par: number
-): Shade {
+function shadeForGross(gross: number | null, pickup: boolean | null | undefined, par: number): Shade {
   if (pickup) return "dbogey";
   if (!Number.isFinite(Number(gross))) return "none";
 
@@ -43,17 +39,16 @@ function blueStyleForShade(s: Shade): React.CSSProperties | undefined {
 
 function GrossBox({ shade, label }: { shade: Shade; label: string }) {
   const isBlue = shade === "ace" || shade === "eagle" || shade === "birdie";
-  const base =
-    "inline-flex min-w-[44px] justify-center rounded-md px-2 py-[2px] text-[14px] font-extrabold";
+  const base = "inline-flex min-w-[44px] justify-center rounded-md px-2 py-[2px] text-[14px] font-extrabold";
 
   const className =
     shade === "par"
       ? `${base} bg-white text-gray-900 border border-gray-300`
       : shade === "bogey"
-      ? `${base} bg-[#f8cfcf] text-gray-900`
-      : shade === "dbogey"
-      ? `${base} bg-[#c0392b] text-white`
-      : `${base} bg-transparent text-gray-900`;
+        ? `${base} bg-[#f8cfcf] text-gray-900`
+        : shade === "dbogey"
+          ? `${base} bg-[#c0392b] text-white`
+          : `${base} bg-transparent text-gray-900`;
 
   return (
     <span className={className} style={isBlue ? blueStyleForShade(shade) : undefined}>
@@ -61,7 +56,6 @@ function GrossBox({ shade, label }: { shade: Shade; label: string }) {
     </span>
   );
 }
-
 
 type CourseRel = { name: string };
 
@@ -151,9 +145,7 @@ export default function MobileScoreEntryPage() {
 
   const tourId = String((params as any)?.id ?? "").trim();
 
-  const roundId = (params as any)?.roundId
-    ? String((params as any)?.roundId ?? "")
-    : String((params as any)?.id ?? "");
+  const roundId = (params as any)?.roundId ? String((params as any)?.roundId ?? "") : String((params as any)?.id ?? "");
 
   const meId = sp.get("meId") ?? "";
   const buddyId = sp.get("buddyId") ?? "";
@@ -191,11 +183,42 @@ export default function MobileScoreEntryPage() {
   const [holeFx, setHoleFx] = useState<HoleFxState>({ stage: "idle", dir: null });
   const fxTimerRef = useRef<number | null>(null);
 
+  // Hole number pulse state (for HOLE box)
+  const [holePulse, setHolePulse] = useState<"idle" | "up" | "down">("idle");
+  const pulseTimerRef = useRef<number | null>(null);
+
+  // Tweakable timings (slightly slower swipe + pulse)
+  const SWIPE_MS = 420;
+  const PULSE_UP_MS = 140;
+  const PULSE_HOLD_MS = 120;
+  const PULSE_DOWN_MS = 160;
+
   function clearFxTimer() {
     if (fxTimerRef.current) {
       window.clearTimeout(fxTimerRef.current);
       fxTimerRef.current = null;
     }
+  }
+
+  function clearPulseTimer() {
+    if (pulseTimerRef.current) {
+      window.clearTimeout(pulseTimerRef.current);
+      pulseTimerRef.current = null;
+    }
+  }
+
+  function triggerHolePulse() {
+    clearPulseTimer();
+    setHolePulse("up");
+
+    pulseTimerRef.current = window.setTimeout(() => {
+      setHolePulse("down");
+
+      pulseTimerRef.current = window.setTimeout(() => {
+        setHolePulse("idle");
+        clearPulseTimer();
+      }, PULSE_DOWN_MS);
+    }, PULSE_UP_MS + PULSE_HOLD_MS);
   }
 
   // Lock page scroll/bounce for this screen only (focus mode)
@@ -220,7 +243,8 @@ export default function MobileScoreEntryPage() {
 
   // Whole-page slide style (entry tab only)
   const fxStyle: React.CSSProperties = useMemo(() => {
-    const base = "transform 330ms ease-in-out";
+    // Slightly slower and a bit smoother
+    const base = `transform ${SWIPE_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)`;
     const off = "105%";
 
     if (holeFx.stage === "idle") {
@@ -228,11 +252,17 @@ export default function MobileScoreEntryPage() {
     }
 
     if (holeFx.stage === "out") {
+      // Consistent mapping:
+      // next (hole++) should move content right->left => current slides left (negative)
+      // prev (hole--) should move content left->right => current slides right (positive)
       const x = holeFx.dir === "next" ? `-${off}` : off;
       return { transform: `translateX(${x})`, transition: base, willChange: "transform" };
     }
 
     if (holeFx.stage === "inSnap") {
+      // Start new content off-screen in the direction it should come from:
+      // next (hole++) comes from right => +off
+      // prev (hole--) comes from left => -off
       const x = holeFx.dir === "next" ? off : `-${off}`;
       return { transform: `translateX(${x})`, transition: "none", willChange: "transform" };
     }
@@ -242,7 +272,7 @@ export default function MobileScoreEntryPage() {
     }
 
     return { transform: "translateX(0)", transition: base, willChange: "transform" };
-  }, [holeFx]);
+  }, [holeFx, SWIPE_MS]);
 
   // Preferred tee logic:
   // 1) round_players.tee
@@ -630,11 +660,16 @@ export default function MobileScoreEntryPage() {
     if (nextHole === hole) return;
 
     clearFxTimer();
-
+    // start slide out
     setHoleFx({ stage: "out", dir });
 
     fxTimerRef.current = window.setTimeout(() => {
+      // hole changes at midpoint of animation
       setHole(nextHole);
+      // hole pulse when the new hole appears
+      triggerHolePulse();
+
+      // snap new content off-screen (consistent direction) then slide in
       setHoleFx({ stage: "inSnap", dir });
 
       requestAnimationFrame(() => {
@@ -643,9 +678,9 @@ export default function MobileScoreEntryPage() {
         fxTimerRef.current = window.setTimeout(() => {
           setHoleFx({ stage: "idle", dir: null });
           clearFxTimer();
-        }, 330);
+        }, SWIPE_MS);
       });
-    }, 330);
+    }, SWIPE_MS);
   }
 
   function onTouchStart(e: React.TouchEvent) {
@@ -667,12 +702,15 @@ export default function MobileScoreEntryPage() {
     if (dt > 1200) return;
 
     const threshold = 70;
-    if (dx <= -threshold) animateHoleChange("next");
-    if (dx >= threshold) animateHoleChange("prev");
+    if (dx <= -threshold) animateHoleChange("next"); // swipe right->left => next (consistent right->left animation)
+    if (dx >= threshold) animateHoleChange("prev"); // swipe left->right => prev (consistent left->right animation)
   }
 
   useEffect(() => {
-    return () => clearFxTimer();
+    return () => {
+      clearFxTimer();
+      clearPulseTimer();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -744,6 +782,7 @@ export default function MobileScoreEntryPage() {
             if (onJumpTo) {
               setHole(onJumpTo);
               setTab("entry");
+              triggerHolePulse();
             }
           }}
         >
@@ -768,9 +807,6 @@ export default function MobileScoreEntryPage() {
     const totalShots = frontShots + backShots;
     const totalPts = frontPts + backPts;
 
-    // Coloured box for STROKES, using the same Stableford meaning:
-    // 4+ = eagle or better, 3 = birdie, 2 = par, 1 = bogey, 0 = double+.
-    
     return (
       <div className="rounded-lg overflow-hidden bg-white shadow-sm text-slate-900 border border-slate-200">
         <div className="bg-slate-100 px-3 py-2 text-xs font-bold tracking-wide text-slate-700 grid grid-cols-5 gap-2">
@@ -798,6 +834,7 @@ export default function MobileScoreEntryPage() {
                   onClick={() => {
                     setHole(h);
                     setTab("entry");
+                    triggerHolePulse();
                   }}
                 >
                   {h}
@@ -806,18 +843,12 @@ export default function MobileScoreEntryPage() {
                 <div className="text-center font-semibold">{info.par || "—"}</div>
                 <div className="text-center">{info.si || "—"}</div>
 
-                {/* ✅ ONLY CHANGE: coloured box behind strokes display (no logic/layout changes elsewhere) */}
                 <div className="text-center">
-  <GrossBox
-    shade={shadeForGross(
-      disp === "P" ? null : Number(disp),
-      disp === "P",
-      info.par
-    )}
-    label={disp}
-  />
-</div>
-
+                  <GrossBox
+                    shade={shadeForGross(disp === "P" ? null : Number(disp), disp === "P", info.par)}
+                    label={disp}
+                  />
+                </div>
 
                 <div className="text-center font-bold">{pts}</div>
               </div>
@@ -838,12 +869,29 @@ export default function MobileScoreEntryPage() {
   }
 
   function HoleBoxEntryOnly() {
+    const holeScale =
+      holePulse === "up" ? 1.22 : holePulse === "down" ? 1.0 : 1.0;
+
+    const holeStyle: React.CSSProperties = {
+      transform: `scale(${holeScale})`,
+      transition:
+        holePulse === "up"
+          ? `transform ${PULSE_UP_MS}ms ease-out`
+          : holePulse === "down"
+            ? `transform ${PULSE_DOWN_MS}ms ease-in`
+            : "none",
+      transformOrigin: "center",
+      willChange: "transform",
+    };
+
     return (
       <div className="px-4 pb-2">
         <div className="flex items-center justify-center">
           <div className={`w-[230px] rounded-md border ${borderLight} bg-white text-slate-900 text-center py-2`}>
             <div className="text-xs font-semibold tracking-wide text-slate-600">HOLE</div>
-            <div className="text-4xl font-black leading-tight">{hole}</div>
+            <div className="text-4xl font-black leading-tight" style={holeStyle}>
+              {hole}
+            </div>
             <div className="text-[11px] text-slate-600">
               <div>
                 <span className="font-semibold">M:</span> Par {holeInfoM.par || "—"} · SI {holeInfoM.si || "—"}
@@ -1048,9 +1096,7 @@ export default function MobileScoreEntryPage() {
           type="button"
           onClick={saveAll}
           disabled={saving || isLocked}
-          className={`px-3 py-2 rounded-md text-sm font-bold text-white ${
-            saving || isLocked ? "bg-slate-500" : "bg-sky-600"
-          }`}
+          className={`px-3 py-2 rounded-md text-sm font-bold text-white ${saving || isLocked ? "bg-slate-500" : "bg-sky-600"}`}
         >
           {saving ? "Saving…" : isLocked ? "Locked" : "Save (Me)"}
         </button>
@@ -1065,18 +1111,14 @@ export default function MobileScoreEntryPage() {
           <button
             type="button"
             onClick={() => setTab("entry")}
-            className={`flex-1 py-2 text-sm font-semibold ${
-              tab === "entry" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"
-            }`}
+            className={`flex-1 py-2 text-sm font-semibold ${tab === "entry" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}
           >
             Entry
           </button>
           <button
             type="button"
             onClick={() => setTab("summary")}
-            className={`flex-1 py-2 text-sm font-semibold ${
-              tab === "summary" ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
-            }`}
+            className={`flex-1 py-2 text-sm font-semibold ${tab === "summary" ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"}`}
           >
             Summary
           </button>
