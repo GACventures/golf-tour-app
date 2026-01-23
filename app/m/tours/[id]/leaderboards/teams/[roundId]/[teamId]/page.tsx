@@ -322,14 +322,6 @@ export default function TeamRoundDetailPage() {
     return m;
   }, [players, round, roundPlayers, parsByTeeHole, scoreByPlayerHole]);
 
-  /**
-   * Corrected rules:
-   * - Exactly N positives counted per hole (no tie expansion)
-   * - Exactly N blue boxes (match counted positives)
-   * - Zeros always get red box
-   * - Player totals: counted positives (even if not boxed; but now counted==boxed) minus 1 per zero
-   * - Team hole total: sum(counted positives) minus zeroCount
-   */
   const computed = useMemo(() => {
     const N = clampInt(teamRule.bestY, 1, 99);
 
@@ -394,7 +386,7 @@ export default function TeamRoundDetailPage() {
     };
   }, [players, roundPlayers, ptsByPlayerHole, teamRule.bestY]);
 
-  // New: per-player stableford "round total" (sum of points 1..18)
+  // per-player stableford "round total" (sum of points 1..18)
   const playerRoundStablefordTotals = useMemo(() => {
     const totals = new Map<string, number>();
     for (const p of players) totals.set(p.id, 0);
@@ -415,7 +407,7 @@ export default function TeamRoundDetailPage() {
     return totals;
   }, [players, roundPlayers, ptsByPlayerHole]);
 
-  // New: cutoff per hole (lowest value among BLUE-boxed scores for that hole)
+  // cutoff per hole (lowest value among BLUE-boxed scores for that hole)
   const cutoffByHole = useMemo(() => {
     const m = new Map<number, number | null>();
 
@@ -440,6 +432,72 @@ export default function TeamRoundDetailPage() {
   }, [computed.boxedBlueByHole, ptsByPlayerHole]);
 
   const N = clampInt(teamRule.bestY, 1, 99);
+
+  // New: qualifies (light-blue) per hole set
+  const qualifiesByHole = useMemo(() => {
+    const m = new Map<number, Set<string>>();
+
+    for (let h = 1; h <= 18; h++) {
+      const cutoff = cutoffByHole.get(h) ?? null;
+      const set = new Set<string>();
+
+      if (cutoff === null) {
+        m.set(h, set);
+        continue;
+      }
+
+      for (const p of players) {
+        const rp = roundPlayers.get(p.id);
+        if (!rp?.playing) continue;
+
+        const val = ptsByPlayerHole.get(`${p.id}|${h}`);
+        if (val === undefined) continue;
+
+        const isBlue = computed.boxedBlueByHole.get(h)?.has(p.id) ?? false;
+        const isZero = computed.zeroByHole.get(h)?.has(p.id) ?? false;
+
+        if (!isBlue && !isZero && val === cutoff) {
+          set.add(p.id);
+        }
+      }
+
+      m.set(h, set);
+    }
+
+    return m;
+  }, [players, roundPlayers, ptsByPlayerHole, computed.boxedBlueByHole, computed.zeroByHole, cutoffByHole]);
+
+  // New: recompute Contribution as (blue + qualifies) - 1 per red zero
+  const playerContributionByBoxes = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const p of players) totals.set(p.id, 0);
+
+    for (const p of players) {
+      const rp = roundPlayers.get(p.id);
+      if (!rp?.playing) continue;
+
+      let sum = 0;
+
+      for (let h = 1; h <= 18; h++) {
+        const val = ptsByPlayerHole.get(`${p.id}|${h}`);
+        if (val === undefined) continue;
+
+        const isBlue = computed.boxedBlueByHole.get(h)?.has(p.id) ?? false;
+        const isQualifies = qualifiesByHole.get(h)?.has(p.id) ?? false;
+        const isZero = computed.zeroByHole.get(h)?.has(p.id) ?? false;
+
+        if (isZero) {
+          sum -= 1;
+        } else if (isBlue || isQualifies) {
+          sum += val;
+        }
+      }
+
+      totals.set(p.id, sum);
+    }
+
+    return totals;
+  }, [players, roundPlayers, ptsByPlayerHole, computed.boxedBlueByHole, computed.zeroByHole, qualifiesByHole]);
 
   if (loading) {
     return (
@@ -481,8 +539,7 @@ export default function TeamRoundDetailPage() {
 
     if (boxedZero) return <span className={`${base} border-2 border-red-500`}>{pts === null ? "" : pts}</span>;
     if (boxedBlue) return <span className={`${base} border-2 border-blue-500`}>{pts === null ? "" : pts}</span>;
-    if (boxedQualifies)
-      return <span className={`${base} border-2 border-sky-300`}>{pts === null ? "" : pts}</span>;
+    if (boxedQualifies) return <span className={`${base} border-2 border-sky-300`}>{pts === null ? "" : pts}</span>;
 
     return <span className="inline-flex min-w-[24px] justify-center">{pts === null ? "" : pts}</span>;
   }
@@ -532,12 +589,10 @@ export default function TeamRoundDetailPage() {
                   </th>
                 ))}
 
-                {/* New Total column (stableford sum 1..18) */}
                 <th className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700">
                   Total
                 </th>
 
-                {/* Renamed from Total -> Contribution */}
                 <th className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700">
                   Contribution
                 </th>
@@ -546,7 +601,7 @@ export default function TeamRoundDetailPage() {
 
             <tbody>
               {players.map((p) => {
-                const contribution = computed.playerContributionTotals.get(p.id) ?? 0;
+                const contribution = playerContributionByBoxes.get(p.id) ?? 0;
                 const roundTotal = playerRoundStablefordTotals.get(p.id) ?? 0;
 
                 return (
@@ -562,14 +617,7 @@ export default function TeamRoundDetailPage() {
 
                       const boxedBlue = computed.boxedBlueByHole.get(hole)?.has(p.id) ?? false;
                       const boxedZero = computed.zeroByHole.get(hole)?.has(p.id) ?? false;
-
-                      const cutoff = cutoffByHole.get(hole) ?? null;
-                      const boxedQualifies =
-                        !boxedBlue &&
-                        !boxedZero &&
-                        val !== null &&
-                        cutoff !== null &&
-                        val === cutoff;
+                      const boxedQualifies = qualifiesByHole.get(hole)?.has(p.id) ?? false;
 
                       return (
                         <td key={hole} className="px-2 py-2 text-center text-sm text-gray-900">
@@ -583,14 +631,12 @@ export default function TeamRoundDetailPage() {
                       );
                     })}
 
-                    {/* New Total (stableford round score) */}
                     <td className="px-3 py-2 text-center text-sm font-semibold text-gray-900">
                       <span className="inline-flex min-w-[36px] justify-center rounded-md bg-gray-100 px-2 py-1">
                         {roundTotal}
                       </span>
                     </td>
 
-                    {/* Contribution (existing logic) */}
                     <td className="px-3 py-2 text-center text-sm font-extrabold text-gray-900">
                       <span className="inline-flex min-w-[36px] justify-center rounded-md bg-yellow-100 px-2 py-1">
                         {contribution}
@@ -616,7 +662,6 @@ export default function TeamRoundDetailPage() {
                   );
                 })}
 
-                {/* Team "Total" column doesn't apply; leave blank */}
                 <td className="px-3 py-2 text-center text-sm font-semibold text-gray-600">—</td>
 
                 <td className="px-3 py-2 text-center text-sm font-extrabold text-gray-900">
@@ -632,7 +677,8 @@ export default function TeamRoundDetailPage() {
         <div className="mt-3 text-xs text-gray-600">
           Rule: only the top {N} positive scores are counted (ties are resolved by table order). Blue boxes show exactly {N}{" "}
           counted positives (or fewer if fewer positives exist). Light-blue boxes show players who qualify for top {N} scores
-          by tying the cutoff value. Zeros are always boxed red and count as −1.
+          by tying the cutoff value. Zeros are always boxed red and count as −1. Contribution is the sum of all boxed blue +
+          boxed light-blue scores minus 1 per red zero.
         </div>
       </div>
     </div>
