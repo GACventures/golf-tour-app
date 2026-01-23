@@ -334,7 +334,6 @@ export default function TeamRoundDetailPage() {
     const N = clampInt(teamRule.bestY, 1, 99);
 
     const teamHoleTotals: number[] = Array.from({ length: 19 }).map(() => 0); // index 1..18
-    const teamTotalBySum = { value: 0 };
 
     const playerContributionTotals = new Map<string, number>();
     for (const p of players) playerContributionTotals.set(p.id, 0);
@@ -385,7 +384,6 @@ export default function TeamRoundDetailPage() {
     }
 
     const teamTotal = teamHoleTotals.slice(1, 19).reduce((a, b) => a + b, 0);
-    teamTotalBySum.value = teamTotal;
 
     return {
       teamHoleTotals,
@@ -395,6 +393,53 @@ export default function TeamRoundDetailPage() {
       zeroByHole,
     };
   }, [players, roundPlayers, ptsByPlayerHole, teamRule.bestY]);
+
+  // New: per-player stableford "round total" (sum of points 1..18)
+  const playerRoundStablefordTotals = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const p of players) totals.set(p.id, 0);
+
+    for (const p of players) {
+      const rp = roundPlayers.get(p.id);
+      if (!rp?.playing) continue;
+
+      let sum = 0;
+      for (let h = 1; h <= 18; h++) {
+        const pts = ptsByPlayerHole.get(`${p.id}|${h}`);
+        if (pts === undefined) continue;
+        sum += pts;
+      }
+      totals.set(p.id, sum);
+    }
+
+    return totals;
+  }, [players, roundPlayers, ptsByPlayerHole]);
+
+  // New: cutoff per hole (lowest value among BLUE-boxed scores for that hole)
+  const cutoffByHole = useMemo(() => {
+    const m = new Map<number, number | null>();
+
+    for (let h = 1; h <= 18; h++) {
+      const blueSet = computed.boxedBlueByHole.get(h);
+      if (!blueSet || blueSet.size === 0) {
+        m.set(h, null);
+        continue;
+      }
+
+      let min: number | null = null;
+      for (const playerId of blueSet) {
+        const pts = ptsByPlayerHole.get(`${playerId}|${h}`);
+        if (pts === undefined) continue;
+        if (min === null || pts < min) min = pts;
+      }
+
+      m.set(h, min);
+    }
+
+    return m;
+  }, [computed.boxedBlueByHole, ptsByPlayerHole]);
+
+  const N = clampInt(teamRule.bestY, 1, 99);
 
   if (loading) {
     return (
@@ -425,15 +470,19 @@ export default function TeamRoundDetailPage() {
     pts,
     boxedBlue,
     boxedZero,
+    boxedQualifies,
   }: {
     pts: number | null;
     boxedBlue: boolean;
     boxedZero: boolean;
+    boxedQualifies: boolean;
   }) {
     const base = "inline-flex min-w-[24px] justify-center rounded-sm px-1 py-0.5";
 
     if (boxedZero) return <span className={`${base} border-2 border-red-500`}>{pts === null ? "" : pts}</span>;
     if (boxedBlue) return <span className={`${base} border-2 border-blue-500`}>{pts === null ? "" : pts}</span>;
+    if (boxedQualifies)
+      return <span className={`${base} border-2 border-sky-300`}>{pts === null ? "" : pts}</span>;
 
     return <span className="inline-flex min-w-[24px] justify-center">{pts === null ? "" : pts}</span>;
   }
@@ -447,9 +496,12 @@ export default function TeamRoundDetailPage() {
             <div className="mt-1 text-xs text-gray-600">
               Round detail · Team total: <span className="font-semibold">{computed.teamTotal}</span>
             </div>
+
             <div className="mt-2 text-[11px] text-gray-600">
               <span className="inline-flex items-center gap-2">
-                <span className="inline-block h-3 w-3 rounded-sm border-2 border-blue-500" /> Counted (top N)
+                <span className="inline-block h-3 w-3 rounded-sm border-2 border-blue-500" /> Counted (top {N})
+                <span className="inline-block h-3 w-3 rounded-sm border-2 border-sky-300 ml-3" /> Qualifies for top {N}{" "}
+                scores
                 <span className="inline-block h-3 w-3 rounded-sm border-2 border-red-500 ml-3" /> Zero
               </span>
             </div>
@@ -480,15 +532,22 @@ export default function TeamRoundDetailPage() {
                   </th>
                 ))}
 
+                {/* New Total column (stableford sum 1..18) */}
                 <th className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700">
                   Total
+                </th>
+
+                {/* Renamed from Total -> Contribution */}
+                <th className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700">
+                  Contribution
                 </th>
               </tr>
             </thead>
 
             <tbody>
               {players.map((p) => {
-                const total = computed.playerContributionTotals.get(p.id) ?? 0;
+                const contribution = computed.playerContributionTotals.get(p.id) ?? 0;
+                const roundTotal = playerRoundStablefordTotals.get(p.id) ?? 0;
 
                 return (
                   <tr key={p.id} className="border-b last:border-b-0">
@@ -504,16 +563,37 @@ export default function TeamRoundDetailPage() {
                       const boxedBlue = computed.boxedBlueByHole.get(hole)?.has(p.id) ?? false;
                       const boxedZero = computed.zeroByHole.get(hole)?.has(p.id) ?? false;
 
+                      const cutoff = cutoffByHole.get(hole) ?? null;
+                      const boxedQualifies =
+                        !boxedBlue &&
+                        !boxedZero &&
+                        val !== null &&
+                        cutoff !== null &&
+                        val === cutoff;
+
                       return (
                         <td key={hole} className="px-2 py-2 text-center text-sm text-gray-900">
-                          <Cell pts={val} boxedBlue={boxedBlue} boxedZero={boxedZero} />
+                          <Cell
+                            pts={val}
+                            boxedBlue={boxedBlue}
+                            boxedZero={boxedZero}
+                            boxedQualifies={boxedQualifies}
+                          />
                         </td>
                       );
                     })}
 
+                    {/* New Total (stableford round score) */}
+                    <td className="px-3 py-2 text-center text-sm font-semibold text-gray-900">
+                      <span className="inline-flex min-w-[36px] justify-center rounded-md bg-gray-100 px-2 py-1">
+                        {roundTotal}
+                      </span>
+                    </td>
+
+                    {/* Contribution (existing logic) */}
                     <td className="px-3 py-2 text-center text-sm font-extrabold text-gray-900">
                       <span className="inline-flex min-w-[36px] justify-center rounded-md bg-yellow-100 px-2 py-1">
-                        {total}
+                        {contribution}
                       </span>
                     </td>
                   </tr>
@@ -536,6 +616,9 @@ export default function TeamRoundDetailPage() {
                   );
                 })}
 
+                {/* Team "Total" column doesn't apply; leave blank */}
+                <td className="px-3 py-2 text-center text-sm font-semibold text-gray-600">—</td>
+
                 <td className="px-3 py-2 text-center text-sm font-extrabold text-gray-900">
                   <span className="inline-flex min-w-[36px] justify-center rounded-md bg-yellow-100 px-2 py-1">
                     {computed.teamTotal}
@@ -547,8 +630,9 @@ export default function TeamRoundDetailPage() {
         </div>
 
         <div className="mt-3 text-xs text-gray-600">
-          Rule: only the top N positive scores are counted (ties are resolved by table order). Blue boxes show exactly N counted
-          positives (or fewer if fewer positives exist). Zeros are always boxed red and count as −1.
+          Rule: only the top {N} positive scores are counted (ties are resolved by table order). Blue boxes show exactly {N}{" "}
+          counted positives (or fewer if fewer positives exist). Light-blue boxes show players who qualify for top {N} scores
+          by tying the cutoff value. Zeros are always boxed red and count as −1.
         </div>
       </div>
     </div>
