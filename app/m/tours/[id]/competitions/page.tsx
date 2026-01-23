@@ -141,6 +141,14 @@ type MatrixCell = {
   detail?: string | null;
 };
 
+function medalBoxClasses(rank: number | null) {
+  // UI-only mapping: rank number -> medal styling (ties share the same rank -> same medal)
+  if (rank === 1) return "border border-yellow-400 bg-yellow-200 text-gray-900";
+  if (rank === 2) return "border border-gray-400 bg-gray-200 text-gray-900";
+  if (rank === 3) return "border border-amber-500 bg-amber-200 text-gray-900";
+  return "bg-transparent";
+}
+
 export default function MobileCompetitionsPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -540,13 +548,19 @@ export default function MobileCompetitionsPage() {
                           const isOpen = openDetail?.playerId === p.id && openDetail?.key === c.key;
                           const detail = (cell?.detail ?? "").trim();
 
-                          const show = value === null ? (
-                            <span className="text-gray-400">—</span>
-                          ) : (
-                            <>
-                              {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
-                            </>
-                          );
+                          const show =
+                            value === null ? (
+                              <span className="text-gray-400">—</span>
+                            ) : (
+                              <>
+                                {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
+                              </>
+                            );
+
+                          const boxBase = "inline-flex min-w-[92px] justify-end rounded-md px-2 py-1";
+                          const medal = medalBoxClasses(rank);
+                          const medalHover = rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50";
+                          const press = "active:bg-gray-100";
 
                           if (c.key === "eclectic") {
                             return (
@@ -556,7 +570,7 @@ export default function MobileCompetitionsPage() {
                                 ) : (
                                   <Link
                                     href={`/m/tours/${tourId}/competitions/eclectic/${p.id}`}
-                                    className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1 hover:bg-gray-50 active:bg-gray-100"
+                                    className={`${boxBase} ${medal} ${medalHover} ${press}`}
                                     aria-label="Open Eclectic breakdown"
                                   >
                                     {show}
@@ -574,14 +588,14 @@ export default function MobileCompetitionsPage() {
                                 ) : tappable ? (
                                   <button
                                     type="button"
-                                    className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1 hover:bg-gray-50 active:bg-gray-100"
+                                    className={`${boxBase} ${medal} ${medalHover} ${press}`}
                                     onClick={() => toggleDetail(p.id, c.key)}
                                     aria-label={`${c.label} detail`}
                                   >
                                     {show}
                                   </button>
                                 ) : (
-                                  <span className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1">{show}</span>
+                                  <span className={`${boxBase} ${medal}`}>{show}</span>
                                 )}
 
                                 {tappable && isOpen ? (
