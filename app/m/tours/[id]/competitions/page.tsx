@@ -143,9 +143,10 @@ type MatrixCell = {
 
 function medalBoxClasses(rank: number | null) {
   // UI-only mapping: rank number -> medal styling (ties share the same rank -> same medal)
-  if (rank === 1) return "border border-yellow-400 bg-yellow-200 text-gray-900";
+  // Adjusted to make gold brighter and bronze darker/more distinct.
+  if (rank === 1) return "border border-yellow-500 bg-yellow-300 text-gray-900";
   if (rank === 2) return "border border-gray-400 bg-gray-200 text-gray-900";
-  if (rank === 3) return "border border-amber-500 bg-amber-200 text-gray-900";
+  if (rank === 3) return "border border-amber-700 bg-amber-400 text-gray-900";
   return "bg-transparent";
 }
 
@@ -559,7 +560,8 @@ export default function MobileCompetitionsPage() {
 
                           const boxBase = "inline-flex min-w-[92px] justify-end rounded-md px-2 py-1";
                           const medal = medalBoxClasses(rank);
-                          const medalHover = rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50";
+                          const medalHover =
+                            rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50";
                           const press = "active:bg-gray-100";
 
                           if (c.key === "eclectic") {
