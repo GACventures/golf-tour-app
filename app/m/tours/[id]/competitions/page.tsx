@@ -47,6 +47,7 @@ type RoundPlayerRow = {
 };
 
 type ScoreRow = {
+  id: string;
   round_id: string;
   player_id: string;
   hole_number: number;
@@ -113,47 +114,6 @@ function rankWithTies(entries: Array<{ id: string; value: number }>, lowerIsBett
   return rankById;
 }
 
-// ✅ IMPORTANT: Supabase/PostgREST often caps at ~1000 rows.
-// Fetch ALL score rows in pages.
-async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
-  const pageSize = 1000;
-  let from = 0;
-  const out: ScoreRow[] = [];
-
-  while (true) {
-    const to = from + pageSize - 1;
-
-    const { data, error } = await supabase
-      .from("scores")
-      .select("round_id,player_id,hole_number,strokes,pickup")
-      .in("round_id", roundIds)
-      .in("player_id", playerIds)
-      // stable ordering for pagination
-      .order("round_id", { ascending: true })
-      .order("player_id", { ascending: true })
-      .order("hole_number", { ascending: true })
-      .range(from, to);
-
-    if (error) throw error;
-
-    const rows = (data ?? []) as any[];
-    out.push(
-      ...rows.map((x) => ({
-        round_id: String(x.round_id),
-        player_id: String(x.player_id),
-        hole_number: Number(x.hole_number),
-        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
-        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
-      }))
-    );
-
-    if (rows.length < pageSize) break;
-    from += pageSize;
-  }
-
-  return out;
-}
-
 type FixedCompKey =
   | "napoleon"
   | "bigGeorge"
@@ -172,6 +132,8 @@ type FixedCompMeta = {
   competitionId: string; // matches catalog id
   lowerIsBetter?: boolean;
   format: (v: number) => string;
+
+  // optional: the stats key we want for tap detail
   detailFromStatsKey?: string; // e.g. "streak_where"
   tappable?: boolean;
 };
@@ -181,6 +143,53 @@ type MatrixCell = {
   rank: number | null;
   detail?: string | null; // e.g. "R1: H4–H8"
 };
+
+/**
+ * Fetch ALL scores (avoid PostgREST 1000-row cap) using stable paging.
+ * Sort order (confirmed): round_id ASC, player_id ASC, hole_number ASC, id ASC
+ */
+async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
+  if (roundIds.length === 0 || playerIds.length === 0) return [];
+
+  const pageSize = 1000;
+  let from = 0;
+  const out: ScoreRow[] = [];
+
+  while (true) {
+    const to = from + pageSize - 1;
+
+    const { data, error } = await supabase
+      .from("scores")
+      .select("id,round_id,player_id,hole_number,strokes,pickup")
+      .in("round_id", roundIds)
+      .in("player_id", playerIds)
+      .order("round_id", { ascending: true })
+      .order("player_id", { ascending: true })
+      .order("hole_number", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to);
+
+    if (error) throw error;
+
+    const rows = (data ?? []) as any[];
+
+    out.push(
+      ...rows.map((x) => ({
+        id: String(x.id),
+        round_id: String(x.round_id),
+        player_id: String(x.player_id),
+        hole_number: Number(x.hole_number),
+        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
+        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
+      }))
+    );
+
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return out;
+}
 
 export default function MobileCompetitionsPage() {
   const params = useParams<{ id?: string }>();
@@ -284,7 +293,6 @@ export default function MobileCompetitionsPage() {
           .order("round_no", { ascending: true, nullsFirst: false })
           .order("created_at", { ascending: true });
         if (rErr) throw rErr;
-
         const rr = (rData ?? []) as RoundRow[];
         if (!alive) return;
         setRounds(rr);
@@ -332,7 +340,7 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
-        // ✅ scores (PAGINATED)
+        // ✅ scores (paginated; avoids 1000-row cap)
         if (roundIds.length > 0 && playerIds.length > 0) {
           const allScores = await fetchAllScores(roundIds, playerIds);
           if (!alive) return;
@@ -597,7 +605,7 @@ export default function MobileCompetitionsPage() {
                                 )}
 
                                 {tappable && isOpen ? (
-                                  <div className="max-w-[160px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm">
+                                  <div className="max-w-[140px] rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm">
                                     {detail ? detail : <span className="text-gray-400">No streak found</span>}
                                   </div>
                                 ) : null}
