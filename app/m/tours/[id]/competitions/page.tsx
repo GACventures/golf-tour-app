@@ -131,16 +131,14 @@ type FixedCompMeta = {
   competitionId: string; // matches catalog id
   lowerIsBetter?: boolean;
   format: (v: number) => string;
-
-  // optional: the stats key we want for tap detail
-  detailFromStatsKey?: string; // e.g. "streak_where"
+  detailFromStatsKey?: string;
   tappable?: boolean;
 };
 
 type MatrixCell = {
   value: number | null;
   rank: number | null;
-  detail?: string | null; // e.g. "R1: H4–H8"
+  detail?: string | null;
 };
 
 export default function MobileCompetitionsPage() {
@@ -157,7 +155,6 @@ export default function MobileCompetitionsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
-  // Toggle state for inline detail popup (Hot/Cold only)
   const [openDetail, setOpenDetail] = useState<{ playerId: string; key: FixedCompKey } | null>(null);
 
   const fixedComps: FixedCompMeta[] = useMemo(
@@ -474,7 +471,6 @@ export default function MobileCompetitionsPage() {
     );
   }
 
-  // Sticky styling helpers (no logic change)
   const thBase = "border-b border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700";
   const tdBase = "px-3 py-2 text-right text-sm text-gray-900 align-top";
 
@@ -502,11 +498,11 @@ export default function MobileCompetitionsPage() {
           <div className="rounded-2xl border p-4 text-sm text-gray-700">No rounds found for this tour.</div>
         ) : (
           <>
-            <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
+            {/* ✅ Make the TABLE the vertical scroll container so sticky top works */}
+            <div className="rounded-2xl border border-gray-200 bg-white shadow-sm max-h-[70vh] overflow-auto">
               <table className="min-w-full border-collapse">
                 <thead>
                   <tr className="bg-gray-50">
-                    {/* Top-left header cell: sticky top + left */}
                     <th
                       className={`sticky left-0 top-0 z-30 bg-gray-50 ${thBase} text-left`}
                       style={{ minWidth: 140 }}
@@ -528,7 +524,6 @@ export default function MobileCompetitionsPage() {
 
                     return (
                       <tr key={p.id} className="border-b last:border-b-0">
-                        {/* Sticky first column cells */}
                         <td
                           className="sticky left-0 z-10 bg-white border-r border-gray-100 px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap"
                           style={{ minWidth: 140 }}
@@ -553,7 +548,6 @@ export default function MobileCompetitionsPage() {
                             </>
                           );
 
-                          // ✅ Eclectic: restore link to existing detail page
                           if (c.key === "eclectic") {
                             return (
                               <td key={c.key} className={tdBase}>
