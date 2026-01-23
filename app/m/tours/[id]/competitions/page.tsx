@@ -47,7 +47,6 @@ type RoundPlayerRow = {
 };
 
 type ScoreRow = {
-  id: string;
   round_id: string;
   player_id: string;
   hole_number: number;
@@ -144,53 +143,6 @@ type MatrixCell = {
   detail?: string | null; // e.g. "R1: H4–H8"
 };
 
-/**
- * Fetch ALL scores (avoid PostgREST 1000-row cap) using stable paging.
- * Sort order (confirmed): round_id ASC, player_id ASC, hole_number ASC, id ASC
- */
-async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
-  if (roundIds.length === 0 || playerIds.length === 0) return [];
-
-  const pageSize = 1000;
-  let from = 0;
-  const out: ScoreRow[] = [];
-
-  while (true) {
-    const to = from + pageSize - 1;
-
-    const { data, error } = await supabase
-      .from("scores")
-      .select("id,round_id,player_id,hole_number,strokes,pickup")
-      .in("round_id", roundIds)
-      .in("player_id", playerIds)
-      .order("round_id", { ascending: true })
-      .order("player_id", { ascending: true })
-      .order("hole_number", { ascending: true })
-      .order("id", { ascending: true })
-      .range(from, to);
-
-    if (error) throw error;
-
-    const rows = (data ?? []) as any[];
-
-    out.push(
-      ...rows.map((x) => ({
-        id: String(x.id),
-        round_id: String(x.round_id),
-        player_id: String(x.player_id),
-        hole_number: Number(x.hole_number),
-        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
-        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
-      }))
-    );
-
-    if (rows.length < pageSize) break;
-    from += pageSize;
-  }
-
-  return out;
-}
-
 export default function MobileCompetitionsPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -212,12 +164,7 @@ export default function MobileCompetitionsPage() {
     () => [
       { key: "napoleon", label: "Napoleon", competitionId: "tour_napoleon_par3_avg", format: (v) => fmt2(v) },
       { key: "bigGeorge", label: "Big George", competitionId: "tour_big_george_par4_avg", format: (v) => fmt2(v) },
-      {
-        key: "grandCanyon",
-        label: "Grand Canyon",
-        competitionId: "tour_grand_canyon_par5_avg",
-        format: (v) => fmt2(v),
-      },
+      { key: "grandCanyon", label: "Grand Canyon", competitionId: "tour_grand_canyon_par5_avg", format: (v) => fmt2(v) },
       { key: "wizard", label: "Wizard", competitionId: "tour_wizard_four_plus_pct", format: (v) => fmtPct0(v) },
       {
         key: "bagelMan",
@@ -340,11 +287,15 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
-        // ✅ scores (paginated; avoids 1000-row cap)
         if (roundIds.length > 0 && playerIds.length > 0) {
-          const allScores = await fetchAllScores(roundIds, playerIds);
+          const { data: sData, error: sErr } = await supabase
+            .from("scores")
+            .select("round_id,player_id,hole_number,strokes,pickup")
+            .in("round_id", roundIds)
+            .in("player_id", playerIds);
+          if (sErr) throw sErr;
           if (!alive) return;
-          setScores(allScores);
+          setScores((sData ?? []) as ScoreRow[]);
         } else {
           setScores([]);
         }
@@ -523,9 +474,13 @@ export default function MobileCompetitionsPage() {
     );
   }
 
+  // Sticky styling helpers (no logic change)
+  const thBase = "border-b border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700";
+  const tdBase = "px-3 py-2 text-right text-sm text-gray-900 align-top";
+
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
+      <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-sm font-semibold text-gray-900">
             Competitions{tour?.name ? <span className="text-gray-500 font-normal"> · {tour.name}</span> : null}
@@ -551,14 +506,16 @@ export default function MobileCompetitionsPage() {
               <table className="min-w-full border-collapse">
                 <thead>
                   <tr className="bg-gray-50">
-                    <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
+                    {/* Top-left header cell: sticky top + left */}
+                    <th
+                      className={`sticky left-0 top-0 z-30 bg-gray-50 ${thBase} text-left`}
+                      style={{ minWidth: 140 }}
+                    >
                       Player
                     </th>
+
                     {fixedComps.map((c) => (
-                      <th
-                        key={c.key}
-                        className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700"
-                      >
+                      <th key={c.key} className={`sticky top-0 z-20 bg-gray-50 ${thBase} text-right`}>
                         {c.label}
                       </th>
                     ))}
@@ -571,7 +528,11 @@ export default function MobileCompetitionsPage() {
 
                     return (
                       <tr key={p.id} className="border-b last:border-b-0">
-                        <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                        {/* Sticky first column cells */}
+                        <td
+                          className="sticky left-0 z-10 bg-white border-r border-gray-100 px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap"
+                          style={{ minWidth: 140 }}
+                        >
                           {p.name}
                         </td>
 
@@ -584,8 +545,35 @@ export default function MobileCompetitionsPage() {
                           const isOpen = openDetail?.playerId === p.id && openDetail?.key === c.key;
                           const detail = (cell?.detail ?? "").trim();
 
+                          const show = value === null ? (
+                            <span className="text-gray-400">—</span>
+                          ) : (
+                            <>
+                              {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
+                            </>
+                          );
+
+                          // ✅ Eclectic: restore link to existing detail page
+                          if (c.key === "eclectic") {
+                            return (
+                              <td key={c.key} className={tdBase}>
+                                {value === null ? (
+                                  <span className="text-gray-400">—</span>
+                                ) : (
+                                  <Link
+                                    href={`/m/tours/${tourId}/competitions/eclectic/${p.id}`}
+                                    className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1 hover:bg-gray-50 active:bg-gray-100"
+                                    aria-label="Open Eclectic breakdown"
+                                  >
+                                    {show}
+                                  </Link>
+                                )}
+                              </td>
+                            );
+                          }
+
                           return (
-                            <td key={c.key} className="px-3 py-2 text-right text-sm text-gray-900 align-top">
+                            <td key={c.key} className={tdBase}>
                               <div className="inline-flex flex-col items-end gap-1">
                                 {value === null ? (
                                   <span className="text-gray-400">—</span>
@@ -596,16 +584,14 @@ export default function MobileCompetitionsPage() {
                                     onClick={() => toggleDetail(p.id, c.key)}
                                     aria-label={`${c.label} detail`}
                                   >
-                                    {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
+                                    {show}
                                   </button>
                                 ) : (
-                                  <span className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1">
-                                    {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
-                                  </span>
+                                  <span className="inline-flex min-w-[92px] justify-end rounded-md px-2 py-1">{show}</span>
                                 )}
 
                                 {tappable && isOpen ? (
-                                  <div className="max-w-[140px] rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm">
+                                  <div className="max-w-[160px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm text-left">
                                     {detail ? detail : <span className="text-gray-400">No streak found</span>}
                                   </div>
                                 ) : null}
@@ -621,7 +607,7 @@ export default function MobileCompetitionsPage() {
 
               <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
                 Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as
-                better. Tap Hot/Cold cells for the round+hole range.
+                better. Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown.
               </div>
             </div>
 
