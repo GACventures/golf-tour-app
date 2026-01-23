@@ -33,13 +33,11 @@ export default function MobileAppUserGuidePage() {
 
   const guide = `How to Use the Golf Tour App (Mobile)
 
-This app is designed to manage a multi-round golf tour, record hole-by-hole scores, calculate Stableford points, and automatically adjust playing handicaps between rounds using a defined rehandicapping rule.
-
-The mobile app is optimised for on-course use and for reviewing results, while setup and configuration are handled through admin pages.
+This app is designed to manage a multi-round golf tour, record hole-by-hole scores, calculate Stableford points, and automatically adjust playing handicaps between rounds using a defined rehandicapping rule (if rehandicapping is being used on the tour).
 
 App Structure Overview
 
-On mobile, each tour is organised into the following main sections:
+Each tour is organised into the following main sections:
 
 - Rounds
 - Scoring
@@ -52,154 +50,170 @@ Each section has a specific purpose, described below.
 
 1. Rounds
 
-Purpose
+Purpose  
 Shows all rounds that belong to the tour, in order.
 
-What you see
-- One card per round (e.g. R1, R2, R3)
-- Course name
+What you see  
+- One card per round (e.g. R1, R2, R3)  
+- Course name  
 - Round date (if set)
-- Status indicators (e.g. open / locked)
 
-From a round you can access
-- Scoring
-- Results
-- Tee Times
-
-Important notes
-- Players cannot be added to or removed from a round on mobile.
-- Only players already marked as playing = true for the round can be scored.
+What you can tap  
+From a round card you can tap:  
+- Scoring (to enter scores)  
+- Results (to view score totals and hole-by-hole results)  
+- Tee Times (to view playing groups / tee time groupings)
 
 2. Scoring
 
-Purpose
+Purpose  
 Entry point for entering scores during a round.
 
-How it works
-1. Select a round.
-2. Choose Me (required).
-3. Optionally choose a Buddy.
+How it works  
+1. Select a round.  
+2. Choose Me (required).  
+3. Optionally choose a Buddy.  
 4. Continue to the score entry screen.
 
-Rules
-- Only players marked as playing for the round can be selected.
+Rules  
 - Buddy selection is optional and for convenience only.
 
 2.1 Score Entry (Hole-by-Hole)
 
-Purpose
+Purpose  
 Enter scores while playing.
 
-Key features
-- One hole shown at a time.
-- Swipe left / right to move between holes.
-- Large + / − buttons to adjust strokes.
-- P button to mark a pickup.
+Key features  
+- One hole shown at a time.  
+- Swipe left / right to move between holes.  
+- Large + / − buttons to adjust strokes.  
+- P button to mark a pickup.  
 - Tap PAR to set strokes equal to par instantly.
 
-Displayed information
-- Hole number
-- Par and Stroke Index (SI)
-- Playing Handicap (PH)
+Displayed information  
+- Hole number  
+- Par and Stroke Index (SI) (shown for both Men’s and Women’s)  
+- Playing Handicap (PH) (shown per player)  
 - Stableford points for the hole
 
-Saving
-- Tap Save (Me) to save your scores.
-- Only Me is saved.
+Saving  
+- Tap Save (Me) to save your scores.  
+- Only Me is saved.  
 - Buddy scores are not saved.
-
-Automatic behaviour
-- Saving scores automatically triggers rehandicapping for the tour.
-- Updated playing handicaps are applied to subsequent rounds.
 
 2.2 Entry and Summary Tabs
 
 At the top of the scoring screen are two tabs:
 
-Entry
+Entry  
 - Used for entering strokes hole by hole.
 
-Summary
-- Shows a full 18-hole table for a selected player.
-- Displays:
-  - Hole
-  - Par
-  - Stroke Index
-  - Strokes (colour-coded)
-  - Stableford points
-- Front 9, Back 9, and Total subtotals are shown.
+Summary  
+- Shows a full 18-hole table for a selected player.  
+- Displays:  
+  - Hole  
+  - Par  
+  - Stroke Index  
+  - Strokes (colour-coded)  
+  - Stableford points  
+- Front 9, Back 9, and Total subtotals are shown.  
 - Tap a hole number to return to entry for that hole.
 
 3. Results
 
-Purpose
+Purpose  
 Review results for a round.
 
-What you see
-- A list of players with totals.
-- Tap a player to see:
-  - Hole-by-hole scores
+What you see  
+- A list of players with totals.  
+- Tap a player to see:  
+  - Hole-by-hole scores  
   - Stableford points for each hole
 
-Results reflect:
-- Saved scores only
+Results reflect  
+- Saved scores only  
 - The playing handicaps in effect for that round
 
 4. Leaderboards
 
-Purpose
-Show standings across the tour or for a specific competition.
+Purpose  
+Show standings across the tour or for specific competitions.
+
+General interactions (applies across leaderboards)  
+- Round scores shown in leaderboards are clickable.  
+- Tapping a round score opens a detailed view showing how the score was built up hole by hole.
 
 4.1 Individual Leaderboards
 
-What you see
-- Player rankings
+What you see  
+- Player rankings  
 - Total points or scores (depending on competition)
 
-Interaction
-- Tap a player’s round score to see detailed results for that round:
-  - Hole-by-hole breakdown
-  - Stableford points
+What you can tap  
+- Tap a player’s round score to see detailed results for that round:  
+  - Hole-by-hole breakdown  
+  - Stableford points  
   - Par and Stroke Index reference
 
 4.2 Pairs Leaderboards
 
-What you see
-- Pair rankings
+What you see  
+- Pair rankings  
 - Aggregated or best-ball style results (depending on competition)
 
-Interaction
-- Tap a pair’s round score to drill into that round’s detail.
+What you can tap  
+- Tap a pair’s round score to drill into that round’s detail.  
 - Shows the underlying individual scores that contributed to the pair result.
 
-This allows full transparency from leaderboard position down to hole-level scoring.
+4.3 Teams Leaderboards
+
+What you see  
+- Team rankings  
+- Team totals by round
+
+What you can tap  
+- Tap a team’s round score to open the round calculation detail page.
+
+What the round calculation detail page shows  
+- Hole-by-hole points for each player.  
+- Which scores counted toward the team’s score on each hole.  
+- Clear visibility of how the team’s total was calculated.
+
+Coloured boxes and totals (plain English)  
+- Dark blue box: counted in the top N scores for that hole.  
+- Light blue outline: this player’s score qualifies for the top N (their score equals the lowest counted score), even if it did not end up being counted.  
+- Red box: zero points on that hole (and this applies a −1 penalty in the team calculation).  
+- Total column: the player’s Stableford total for the full round (holes 1–18).  
+- Contribution column: the player’s contribution to the team result (counted dark blue + qualifying light blue, minus 1 for each red zero).
+
+The value of N depends on the team competition setting for the tour.
 
 5. Competitions
 
-Purpose
+Purpose  
 Display special tour competitions.
 
-Examples
-- Napoleon (Par 3 / 4 / 5 averages)
-- Eclectic
+Examples  
+- Napoleon (Par 3 average)  
+- Eclectic  
+- Hot Streak  
+- Cold Streak  
 - Other derived Stableford-based competitions
 
-Navigation
-- Tap a competition to see rankings.
-- Where applicable, tap into a player to see contributing holes or rounds.
+What you can tap  
+- In competitions where it’s supported (including Eclectic, Hot Streak, and Cold Streak):  
+  - Tap a player to view that player’s details (showing the rounds/holes contributing to the competition result).
 
 6. Stats
 
-Purpose
+Purpose  
 Provide performance insights across the tour.
 
-Examples of stats
-- Average Stableford by par
-- Percentage of birdies or better
-- Percentage of zero-point holes
+Examples of stats  
+- Average Stableford by par  
+- Percentage of birdies or better  
+- Percentage of zero-point holes  
 - Other performance measures
-
-Stats are read-only and update automatically as scores are saved.
 
 7. More
 
@@ -207,57 +221,57 @@ The More section contains tour information and administrative tools.
 
 7.1 Tour Details
 
-Purpose
+Purpose  
 Read-only overview of the tour.
 
-Includes
-- Tour name and dates
-- Rehandicapping status
+Includes  
+- Tour name and dates  
+- Rehandicapping status  
 - Rehandicapping rule summary
 
-No editing is possible on mobile in this section.
+No editing is possible in this section.
 
 7.2 Rehandicapping
 
-Purpose
-Explain how handicaps are adjusted.
+Purpose  
+Explain how handicaps are adjusted.  
 Show how handicaps change round by round.
 
-What you see
-- The rehandicapping rule in plain English.
-- A table showing:
-  - Each player
-  - Their playing handicap for each round
+What you see  
+- The rehandicapping rule in plain English.  
+- A table showing:  
+  - Each player  
+  - Their playing handicap for each round  
   - Their starting handicap (fallback reference)
 
-Behaviour
-- This page refreshes automatically when revisited.
-- Values always reflect the latest recalculation from:
-  - score saves, or
+Behaviour  
+- This page refreshes automatically when revisited.  
+- Values always reflect the latest recalculation from:  
+  - score saves, or  
   - starting handicap changes.
 
 7.3 Tour Admin
 
-Purpose
+Purpose  
 Manage tour-level configuration.
 
-Starting Handicaps
-- Edit each player’s tour starting handicap.
-- Leaving a value blank uses the player’s global handicap.
-- Saving:
-  - Updates the tour starting handicap
+Starting Handicaps  
+- Edit each player’s tour starting handicap.  
+- Leaving a value blank uses the player’s global handicap.  
+- Saving:  
+  - Updates the tour starting handicap  
   - Automatically recalculates playing handicaps for all rounds
 
-Course Par & Stroke Index (Global)
-- Select a course used in the tour.
-- Edit Par and Stroke Index for:
-  - Men’s tees (M)
-  - Women’s tees (F)
-- One row per hole (1–18).
+Course Par & Stroke Index (Global)  
+- Select a course used in the tour.  
+- Edit Par and Stroke Index for:  
+  - Men’s tees (M)  
+  - Women’s tees (F)  
+- One row per hole (1–18).  
 - All fields are dropdown-based.
 
-Validation
-- Par must be 3, 4, or 5.
+Validation  
+- Par must be 3, 4, or 5.  
 - Stroke Index must be unique from 1 to 18 for each tee.
 
 Saving updates the global course data, affecting all tours that use that course.
