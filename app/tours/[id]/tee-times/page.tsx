@@ -16,7 +16,7 @@ import {
   generateJapanRound7Seeded,
   type Tee,
   type Pair,
-} from "@/lib/teeTimes/japanTourTeeTimes";
+} from "@/lib/teeTimes/japanSwinginSpring";
 
 type Tour = { id: string; name: string };
 
