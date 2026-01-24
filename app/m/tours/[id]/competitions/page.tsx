@@ -143,7 +143,6 @@ type MatrixCell = {
 
 function medalBoxClasses(rank: number | null) {
   // UI-only mapping: rank number -> medal styling (ties share the same rank -> same medal)
-  // Adjusted to make gold brighter and bronze darker/more distinct.
   if (rank === 1) return "border border-yellow-500 bg-yellow-300 text-gray-900";
   if (rank === 2) return "border border-gray-400 bg-gray-200 text-gray-900";
   if (rank === 3) return "border border-amber-700 bg-amber-400 text-gray-900";
@@ -485,11 +484,12 @@ export default function MobileCompetitionsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
+      {/* Top bar (tour name stays unchanged) */}
       <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="text-sm font-semibold text-gray-900">
-            Competitions{tour?.name ? <span className="text-gray-500 font-normal"> · {tour.name}</span> : null}
-          </div>
+          <div className="text-sm font-semibold text-gray-900">{tour?.name ?? "Tour"}</div>
+          {/* Competitions line (now ONLY “Competitions”) */}
+          <div className="text-xs text-gray-600 mt-0.5">Competitions</div>
         </div>
       </div>
 
@@ -507,20 +507,19 @@ export default function MobileCompetitionsPage() {
           <div className="rounded-2xl border p-4 text-sm text-gray-700">No rounds found for this tour.</div>
         ) : (
           <>
-            {/* ✅ Make the TABLE the vertical scroll container so sticky top works */}
             <div className="rounded-2xl border border-gray-200 bg-white shadow-sm max-h-[70vh] overflow-auto">
-              <table className="min-w-full border-collapse">
+              <table className="min-w-full border-collapse table-fixed">
                 <thead>
                   <tr className="bg-gray-50">
                     <th
-                      className={`sticky left-0 top-0 z-30 bg-gray-50 ${thBase} text-left`}
-                      style={{ minWidth: 140 }}
+                      className={`sticky left-0 top-0 z-50 bg-gray-50 border-r border-gray-200 ${thBase} text-left`}
+                      style={{ width: 140, minWidth: 140 }}
                     >
                       Player
                     </th>
 
                     {fixedComps.map((c) => (
-                      <th key={c.key} className={`sticky top-0 z-20 bg-gray-50 ${thBase} text-right`}>
+                      <th key={c.key} className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>
                         {c.label}
                       </th>
                     ))}
@@ -534,8 +533,8 @@ export default function MobileCompetitionsPage() {
                     return (
                       <tr key={p.id} className="border-b last:border-b-0">
                         <td
-                          className="sticky left-0 z-10 bg-white border-r border-gray-100 px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap"
-                          style={{ minWidth: 140 }}
+                          className="sticky left-0 z-30 bg-white border-r border-gray-200 px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap"
+                          style={{ width: 140, minWidth: 140 }}
                         >
                           {p.name}
                         </td>
@@ -559,7 +558,14 @@ export default function MobileCompetitionsPage() {
                             );
 
                           const boxBase = "inline-flex min-w-[92px] justify-end rounded-md px-2 py-1";
-                          const medal = medalBoxClasses(rank);
+                          const medal =
+                            rank === 1
+                              ? "border border-yellow-500 bg-yellow-300 text-gray-900"
+                              : rank === 2
+                              ? "border border-gray-400 bg-gray-200 text-gray-900"
+                              : rank === 3
+                              ? "border border-amber-700 bg-amber-400 text-gray-900"
+                              : "bg-transparent";
                           const medalHover =
                             rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50";
                           const press = "active:bg-gray-100";
