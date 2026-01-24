@@ -141,14 +141,6 @@ type MatrixCell = {
   detail?: string | null;
 };
 
-function medalBoxClasses(rank: number | null) {
-  // UI-only mapping: rank number -> medal styling (ties share the same rank -> same medal)
-  if (rank === 1) return "border border-yellow-500 bg-yellow-300 text-gray-900";
-  if (rank === 2) return "border border-gray-400 bg-gray-200 text-gray-900";
-  if (rank === 3) return "border border-amber-700 bg-amber-400 text-gray-900";
-  return "bg-transparent";
-}
-
 export default function MobileCompetitionsPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -233,6 +225,7 @@ export default function MobileCompetitionsPage() {
       setErrorMsg("");
 
       try {
+        // Keep loading tour for data integrity (even though we no longer display name in header here)
         const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
         if (!alive) return;
@@ -484,12 +477,10 @@ export default function MobileCompetitionsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Top bar (tour name stays unchanged) */}
+      {/* Sticky header: ONLY the word “Competitions” between the lines */}
       <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="text-sm font-semibold text-gray-900">{tour?.name ?? "Tour"}</div>
-          {/* Competitions line (now ONLY “Competitions”) */}
-          <div className="text-xs text-gray-600 mt-0.5">Competitions</div>
+          <div className="text-sm font-semibold text-gray-900">Competitions</div>
         </div>
       </div>
 
@@ -507,6 +498,7 @@ export default function MobileCompetitionsPage() {
           <div className="rounded-2xl border p-4 text-sm text-gray-700">No rounds found for this tour.</div>
         ) : (
           <>
+            {/* ✅ Make the TABLE the vertical scroll container so sticky top works */}
             <div className="rounded-2xl border border-gray-200 bg-white shadow-sm max-h-[70vh] overflow-auto">
               <table className="min-w-full border-collapse table-fixed">
                 <thead>
