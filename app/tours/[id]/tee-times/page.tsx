@@ -8,7 +8,15 @@ import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { netStablefordPointsForHole } from "@/lib/stableford";
 
-type Tee = "M" | "F";
+import {
+  generateRound1PreferPairs,
+  generateFairMix,
+  generateJapanR246,
+  generateMixed2M2F_Fair,
+  generateJapanRound7Seeded,
+  type Tee,
+  type Pair,
+} from "@/lib/teeTimes/japanTourTeeTimes";
 
 type Tour = { id: string; name: string };
 
@@ -21,7 +29,6 @@ type RoundRow = {
   created_at?: string | null;
 };
 
-// ✅ PlayerRow includes gender (used to set round_players.tee + tee-based pars)
 type PlayerRow = { id: string; name: string; gender: Tee; start_handicap: number | null };
 
 type RoundPlayerRow = {
@@ -29,7 +36,7 @@ type RoundPlayerRow = {
   player_id: string;
   playing: boolean | null;
   playing_handicap: number | null;
-  tee: Tee; // ✅ must be present / non-null in DB
+  tee: Tee;
 };
 
 type ScoreRow = {
@@ -57,7 +64,7 @@ type RoundGroupPlayer = {
   seat: number | null;
 };
 
-type Pair = { a: string; b: string };
+const JAPAN_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
 
 function fmtTs(ts?: string | null) {
   if (!ts) return "";
@@ -66,168 +73,19 @@ function fmtTs(ts?: string | null) {
   return d.toLocaleString();
 }
 
-function shuffle<T>(arr: T[]) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-function buildGroupSizes(nPlayers: number): number[] {
-  const sizes: number[] = [];
-  if (nPlayers <= 0) return sizes;
-
-  const mod = nPlayers % 4;
-  if (mod === 0) {
-    for (let i = 0; i < nPlayers / 4; i++) sizes.push(4);
-    return sizes;
-  }
-  if (mod === 3) {
-    sizes.push(3);
-    const remaining = nPlayers - 3;
-    for (let i = 0; i < remaining / 4; i++) sizes.push(4);
-    return sizes;
-  }
-  if (mod === 2) {
-    sizes.push(3, 3);
-    const remaining = nPlayers - 6;
-    for (let i = 0; i < remaining / 4; i++) sizes.push(4);
-    return sizes;
-  }
-  if (nPlayers >= 9) {
-    sizes.push(3, 3, 3);
-    const remaining = nPlayers - 9;
-    for (let i = 0; i < remaining / 4; i++) sizes.push(4);
-    return sizes;
-  }
-  // fallback
-  sizes.push(3);
-  let rem = nPlayers - 3;
-  while (rem >= 4) {
-    sizes.push(4);
-    rem -= 4;
-  }
-  if (rem > 0) sizes.push(rem);
-  return sizes;
-}
-
 function pairKey(a: string, b: string) {
   return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
 
-function coPlayCountMatrix(pastGroups: string[][]): Map<string, number> {
-  const m = new Map<string, number>();
-  for (const grp of pastGroups) {
-    for (let i = 0; i < grp.length; i++) {
-      for (let j = i + 1; j < grp.length; j++) {
-        const key = pairKey(grp[i], grp[j]);
-        m.set(key, (m.get(key) ?? 0) + 1);
-      }
-    }
-  }
-  return m;
-}
-
-function groupScore(group: string[], candidate: string, matrix: Map<string, number>) {
-  let s = 0;
-  for (const p of group) s += matrix.get(pairKey(p, candidate)) ?? 0;
-  return s;
-}
-
-function generateRound1PreferPairs(playerIds: string[], pairs: Pair[]) {
-  const sizes = buildGroupSizes(playerIds.length);
-  const unassigned = new Set(playerIds);
-  const validPairs = pairs.filter((p) => unassigned.has(p.a) && unassigned.has(p.b));
-
-  const groups: string[][] = [];
-  while (groups.length < sizes.length) groups.push([]);
-
-  for (const pr of validPairs) {
-    if (!unassigned.has(pr.a) || !unassigned.has(pr.b)) continue;
-
-    for (let gi = 0; gi < groups.length; gi++) {
-      if (groups[gi].length + 2 <= sizes[gi]) {
-        groups[gi].push(pr.a, pr.b);
-        unassigned.delete(pr.a);
-        unassigned.delete(pr.b);
-        break;
-      }
-    }
-  }
-
-  const remaining = shuffle(Array.from(unassigned));
-  let k = 0;
-  for (let gi = 0; gi < groups.length; gi++) {
-    const target = sizes[gi];
-    while (groups[gi].length < target && k < remaining.length) {
-      groups[gi].push(remaining[k++]);
-    }
-  }
-
-  return groups;
-}
-
-function generateFairMix(playerIds: string[], pastGroups: string[][]) {
-  const sizes = buildGroupSizes(playerIds.length);
-  const matrix = coPlayCountMatrix(pastGroups);
-
-  const remaining = new Set(playerIds);
-  const groups: string[][] = [];
-
-  for (const size of sizes) {
-    const seed = shuffle(Array.from(remaining))[0];
-    if (!seed) break;
-
-    const g: string[] = [seed];
-    remaining.delete(seed);
-
-    while (g.length < size) {
-      const candidates = Array.from(remaining);
-      if (candidates.length === 0) break;
-
-      let best = candidates[0];
-      let bestScore = groupScore(g, best, matrix);
-
-      for (let i = 1; i < candidates.length; i++) {
-        const c = candidates[i];
-        const sc = groupScore(g, c, matrix);
-        if (sc < bestScore) {
-          bestScore = sc;
-          best = c;
-        }
-      }
-
-      g.push(best);
-      remaining.delete(best);
-    }
-
-    groups.push(g);
-  }
-
-  return groups;
-}
-
-function generateFinalSeeded(leaderboardDesc: string[]) {
-  const sizes = buildGroupSizes(leaderboardDesc.length);
-  const groups: string[][] = sizes.map(() => []);
-  let idx = 0;
-
-  for (let gi = groups.length - 1; gi >= 0; gi--) {
-    const target = sizes[gi];
-    for (let k = 0; k < target; k++) {
-      const pid = leaderboardDesc[idx++];
-      if (!pid) break;
-      groups[gi].push(pid);
-    }
-  }
-  return groups;
+function normalizeTee(v: any): Tee {
+  const s = String(v ?? "").trim().toUpperCase();
+  return s === "F" ? "F" : "M";
 }
 
 function labelFromNotes(notes?: string | null) {
   const n = (notes ?? "").toLowerCase();
   if (!n) return "";
+  if (n.includes("japan")) return "Japan";
   if (n.includes("round 1")) return "Round 1";
   if (n.includes("fair")) return "Fair mix";
   if (n.includes("final")) return "Final";
@@ -245,6 +103,7 @@ function roundLabelFromGroups(rGroups: RoundGroup[]) {
   const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
 
   const pref = new Map<string, number>([
+    ["Japan", 6],
     ["Fair mix", 5],
     ["Round 1", 4],
     ["Final", 3],
@@ -265,11 +124,6 @@ function rawScoreFor(strokes: number | null, pickup?: boolean | null) {
   return String(strokes);
 }
 
-function normalizeTee(v: any): Tee {
-  const s = String(v ?? "").trim().toUpperCase();
-  return s === "F" ? "F" : "M";
-}
-
 export default function TourTeeTimesPage() {
   const params = useParams<{ id: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -286,11 +140,9 @@ export default function TourTeeTimesPage() {
   const [groups, setGroups] = useState<RoundGroup[]>([]);
   const [members, setMembers] = useState<RoundGroupPlayer[]>([]);
 
-  // Tour pairs (optional; used to seed Round 1)
   const [tourPairs, setTourPairs] = useState<Pair[]>([]);
   const [pairWarn, setPairWarn] = useState("");
 
-  // Tiny round_no editor state
   const [roundNoDraft, setRoundNoDraft] = useState<Record<string, string>>({});
   const [roundNoSaving, setRoundNoSaving] = useState<Record<string, boolean>>({});
   const [roundNoErr, setRoundNoErr] = useState<Record<string, string>>({});
@@ -307,7 +159,6 @@ export default function TourTeeTimesPage() {
     return m;
   }, [players]);
 
-  // ✅ “tour snapshot” handicap map (from tour_players)
   const playerHcpById = useMemo(() => {
     const m = new Map<string, number>();
     for (const p of players) m.set(p.id, Number.isFinite(Number(p.start_handicap)) ? Number(p.start_handicap) : 0);
@@ -349,22 +200,6 @@ export default function TourTeeTimesPage() {
     return m;
   }, [members]);
 
-  // ✅ For a given (round,player) get the *per-round* handicap if present, else tour snapshot.
-  function hcpForRoundPlayer(roundId: string, playerId: string) {
-    const rp = (roundPlayersByRound.get(roundId) ?? []).find((x) => x.player_id === playerId);
-    const h = rp?.playing_handicap;
-    if (Number.isFinite(Number(h))) return Number(h);
-    return playerHcpById.get(playerId) ?? 0;
-  }
-
-  // ✅ For a given (round,player) choose tee:
-  // prefer round_players.tee; else player gender; else 'M'
-  function teeForRoundPlayer(roundId: string, playerId: string): Tee {
-    const rp = (roundPlayersByRound.get(roundId) ?? []).find((x) => x.player_id === playerId);
-    if (rp?.tee) return normalizeTee(rp.tee);
-    return playerGenderById.get(playerId) ?? "M";
-  }
-
   async function loadAll() {
     if (!tourId) return;
     setLoading(true);
@@ -383,7 +218,6 @@ export default function TourTeeTimesPage() {
         .eq("tour_id", tourId)
         .order("round_no", { ascending: true, nullsFirst: false })
         .order("created_at", { ascending: true });
-
       if (rErr) throw rErr;
 
       const roundRows = (rData ?? []) as RoundRow[];
@@ -397,13 +231,11 @@ export default function TourTeeTimesPage() {
         return next;
       });
 
-      // ✅ players in tour from tour_players join (include gender)
       const { data: tpData, error: tpErr } = await supabase
         .from("tour_players")
         .select("player_id, starting_handicap, players(id,name,gender)")
         .eq("tour_id", tourId)
         .order("name", { ascending: true, foreignTable: "players" });
-
       if (tpErr) throw tpErr;
 
       const playerRows: PlayerRow[] = (tpData ?? [])
@@ -432,7 +264,6 @@ export default function TourTeeTimesPage() {
           .from("round_players")
           .select("round_id,player_id,playing,playing_handicap,tee")
           .in("round_id", roundIds);
-
         if (rpErr) throw rpErr;
 
         setRoundPlayers(
@@ -451,7 +282,6 @@ export default function TourTeeTimesPage() {
           .in("round_id", roundIds)
           .order("round_id", { ascending: true })
           .order("group_no", { ascending: true });
-
         if (gErr) throw gErr;
         setGroups((gData ?? []) as RoundGroup[]);
 
@@ -459,12 +289,10 @@ export default function TourTeeTimesPage() {
           .from("round_group_players")
           .select("id,round_id,group_id,player_id,seat")
           .in("round_id", roundIds);
-
         if (mErr) throw mErr;
         setMembers((mData ?? []) as RoundGroupPlayer[]);
       }
 
-      // Tour pairs (optional; may be blocked by RLS if not logged in)
       const { data: tg, error: tgErr } = await supabase
         .from("tour_groups")
         .select("id,tour_id,scope,type")
@@ -568,10 +396,7 @@ export default function TourTeeTimesPage() {
       notes: note,
     }));
 
-    const { data: insertedGroups, error: insGErr } = await supabase
-      .from("round_groups")
-      .insert(groupRows)
-      .select("id,group_no");
+    const { data: insertedGroups, error: insGErr } = await supabase.from("round_groups").insert(groupRows).select("id,group_no");
     if (insGErr) throw insGErr;
 
     const idByNo = new Map<number, string>();
@@ -597,10 +422,7 @@ export default function TourTeeTimesPage() {
 
   async function fetchPastGroupsUpTo(roundIds: string[]) {
     if (!roundIds.length) return [];
-    const { data, error } = await supabase
-      .from("round_group_players")
-      .select("round_id,group_id,player_id")
-      .in("round_id", roundIds);
+    const { data, error } = await supabase.from("round_group_players").select("round_id,group_id,player_id").in("round_id", roundIds);
     if (error) throw error;
 
     const byRoundGroup = new Map<string, string[]>();
@@ -619,7 +441,6 @@ export default function TourTeeTimesPage() {
     return (data ?? []).length > 0;
   }
 
-  // ✅ ensure round_players rows exist (and set tee + handicap on insert only)
   async function ensureRoundPlayers(roundId: string, playerIds: string[]) {
     const ids = Array.from(new Set(playerIds)).filter(Boolean);
     if (!ids.length) return;
@@ -641,20 +462,28 @@ export default function TourTeeTimesPage() {
       player_id: pid,
       playing: true,
       playing_handicap: playerHcpById.get(pid) ?? 0,
-      tee: playerGenderById.get(pid) ?? "M", // ✅ critical fix (prevents NULL tee)
+      tee: playerGenderById.get(pid) ?? "M",
     }));
 
     const { error: insErr } = await supabase.from("round_players").insert(rows);
     if (insErr) throw insErr;
   }
 
-  async function computeLeaderboardToDate(tourRounds: RoundRow[], upToRoundIds: string[], playerIds: string[]) {
+  function playerIdsForRound(roundId: string) {
+    const rp = roundPlayersByRound.get(roundId) ?? [];
+    const playing = rp.filter((x) => x.playing === true).map((x) => x.player_id);
+    if (playing.length > 0) return playing;
+    return players.map((p) => p.id);
+  }
+
+  async function computeTotalsToDate(tourRounds: RoundRow[], upToRoundIds: string[], playerIds: string[]) {
     const eligibleRounds = tourRounds.filter((r) => upToRoundIds.includes(r.id) && !!r.course_id);
-    if (!eligibleRounds.length) return playerIds;
+    const totals = new Map<string, number>();
+    for (const pid of playerIds) totals.set(pid, 0);
+    if (!eligibleRounds.length) return totals;
 
     const courseIds = Array.from(new Set(eligibleRounds.map((r) => r.course_id as string)));
 
-    // ✅ Tee-based pars
     const { data: parsData, error: pErr } = await supabase
       .from("pars")
       .select("course_id,tee,hole_number,par,stroke_index")
@@ -677,26 +506,21 @@ export default function TourTeeTimesPage() {
 
     const roundIds = eligibleRounds.map((r) => r.id);
 
-    // ✅ Need both handicap + tee
     const { data: rpData, error: rpErr } = await supabase
       .from("round_players")
       .select("round_id,player_id,playing_handicap,tee")
       .in("round_id", roundIds)
       .in("player_id", playerIds);
-
     if (rpErr) throw rpErr;
 
     const hcpByRoundPlayer = new Map<string, number>();
     const teeByRoundPlayer = new Map<string, Tee>();
-
     for (const rp of rpData ?? []) {
       const rid = String((rp as any).round_id);
       const pid = String((rp as any).player_id);
       const h = Number((rp as any).playing_handicap);
       if (Number.isFinite(h)) hcpByRoundPlayer.set(`${rid}|${pid}`, h);
-
-      const t = normalizeTee((rp as any).tee);
-      teeByRoundPlayer.set(`${rid}|${pid}`, t);
+      teeByRoundPlayer.set(`${rid}|${pid}`, normalizeTee((rp as any).tee));
     }
 
     const { data: scoresData, error: sErr } = await supabase
@@ -704,7 +528,6 @@ export default function TourTeeTimesPage() {
       .select("round_id,player_id,hole_number,strokes,pickup")
       .in("round_id", roundIds)
       .in("player_id", playerIds);
-
     if (sErr) throw sErr;
 
     const courseByRound = new Map<string, string>();
@@ -716,9 +539,6 @@ export default function TourTeeTimesPage() {
       scoresByKey.set(key, sc as any);
     }
 
-    const totals = new Map<string, number>();
-    for (const pid of playerIds) totals.set(pid, 0);
-
     for (const r of eligibleRounds) {
       const rid = r.id;
       const cid = courseByRound.get(rid);
@@ -728,15 +548,12 @@ export default function TourTeeTimesPage() {
         let sum = totals.get(pid) ?? 0;
 
         const hcp = hcpByRoundPlayer.get(`${rid}|${pid}`) ?? (playerHcpById.get(pid) ?? 0);
-
-        // tee preference: round_players.tee -> player gender -> M
         const tee = teeByRoundPlayer.get(`${rid}|${pid}`) ?? (playerGenderById.get(pid) ?? "M");
 
         const parsMap =
           parsByCourseTeeHole.get(cid)?.get(tee) ??
           parsByCourseTeeHole.get(cid)?.get("M") ??
           parsByCourseTeeHole.get(cid)?.get("F");
-
         if (!parsMap) continue;
 
         for (let hole = 1; hole <= 18; hole++) {
@@ -762,15 +579,87 @@ export default function TourTeeTimesPage() {
       }
     }
 
-    return [...playerIds].sort((a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0));
+    return totals;
   }
 
-  function playerIdsForRound(roundId: string) {
-    const rp = roundPlayersByRound.get(roundId) ?? [];
-    const playing = rp.filter((x) => x.playing === true).map((x) => x.player_id);
+  async function onGenerateJapanTourAllAtOnce(sorted: RoundRow[]) {
+    const roundsByNo = new Map<number, RoundRow>();
+    for (const r of sorted) if (typeof r.round_no === "number") roundsByNo.set(r.round_no, r);
 
-    if (playing.length > 0) return playing;
-    return players.map((p) => p.id);
+    if (sorted.length !== 7) throw new Error("Japan generator expects exactly 7 rounds for this tour.");
+    for (let n = 1; n <= 7; n++) if (!roundsByNo.get(n)) throw new Error("Japan generator requires round_no set for all rounds 1..7.");
+
+    const usedMixedM = new Set<string>();
+    const usedMixedF = new Set<string>();
+    const generatedRoundIds: string[] = [];
+
+    // Round 1
+    {
+      const r1 = roundsByNo.get(1)!;
+      const ids = playerIdsForRound(r1.id);
+      await ensureRoundPlayers(r1.id, ids);
+      const gen = generateRound1PreferPairs(ids, tourPairs);
+      await persistRoundGroups(r1.id, gen, "Auto: Japan Round 1 (prefer tour pairs)");
+      generatedRoundIds.push(r1.id);
+    }
+
+    // Rounds 2..6
+    for (const rn of [2, 3, 4, 5, 6]) {
+      const rr = roundsByNo.get(rn)!;
+      const ids = playerIdsForRound(rr.id);
+      await ensureRoundPlayers(rr.id, ids);
+
+      const pastGroups = await fetchPastGroupsUpTo(generatedRoundIds);
+
+      if (rn === 2 || rn === 4 || rn === 6) {
+        const res = generateJapanR246(ids, playerGenderById, pastGroups, usedMixedM, usedMixedF);
+        await persistRoundGroups(
+          rr.id,
+          res.groups,
+          `Auto: Japan Round ${rn} (2 all-M, 2 all-F, 1 mixed 2M2F)${res.warning ? " · WARN: " + res.warning : ""}`
+        );
+        generatedRoundIds.push(rr.id);
+        continue;
+      }
+
+      if (rn === 3 || rn === 5) {
+        const males = ids.filter((pid) => (playerGenderById.get(pid) ?? "M") === "M");
+        const females = ids.filter((pid) => (playerGenderById.get(pid) ?? "M") === "F");
+
+        // Prefer 2M2F generator; fall back if structure doesn't fit.
+        if (males.length === females.length) {
+          const gen = generateMixed2M2F_Fair(males, females, pastGroups);
+          await persistRoundGroups(rr.id, gen, `Auto: Japan Round ${rn} (all groups 2M2F; fair mix)`);
+        } else {
+          const genFallback = generateFairMix(ids, pastGroups);
+          await persistRoundGroups(rr.id, genFallback, `Auto: Japan Round ${rn} (fallback fair mix; could not enforce 2M2F)`);
+        }
+
+        generatedRoundIds.push(rr.id);
+        continue;
+      }
+    }
+
+    // Round 7 seeded by leaderboard to date (rounds 1..6), BEST in final group
+    {
+      const r7 = roundsByNo.get(7)!;
+      const ids = playerIdsForRound(r7.id);
+      await ensureRoundPlayers(r7.id, ids);
+
+      const upToIds = [1, 2, 3, 4, 5, 6].map((n) => roundsByNo.get(n)!.id);
+      const totals = await computeTotalsToDate(sorted, upToIds, ids);
+
+      const seeded = generateJapanRound7Seeded(ids, playerGenderById, totals);
+      if (!seeded) {
+        const pastGroups = await fetchPastGroupsUpTo(generatedRoundIds);
+        const genFallback = generateFairMix(ids, pastGroups);
+        await persistRoundGroups(r7.id, genFallback, "Auto: Japan Round 7 (fallback fair mix; could not enforce 2M2F seeding)");
+      } else {
+        await persistRoundGroups(r7.id, seeded, "Auto: Japan Round 7 (2M2F; seeded by leaderboard; BEST in final group)");
+      }
+    }
+
+    setInfoMsg("Generated Japan Tour tee-time groups for rounds 1–7.");
   }
 
   async function onGenerateTourAllAtOnce() {
@@ -791,13 +680,19 @@ export default function TourTeeTimesPage() {
         return;
       }
 
+      if (tourId === JAPAN_TOUR_ID) {
+        await onGenerateJapanTourAllAtOnce(sorted);
+        await loadAll();
+        return;
+      }
+
+      // ---- existing default behaviour ----
       const first = sorted[0];
       const last = sorted[sorted.length - 1];
       const penultimate = sorted.length >= 2 ? sorted[sorted.length - 2] : null;
 
       const generatedRoundIds: string[] = [];
 
-      // Round 1
       {
         const ids = playerIdsForRound(first.id);
         await ensureRoundPlayers(first.id, ids);
@@ -806,20 +701,16 @@ export default function TourTeeTimesPage() {
         generatedRoundIds.push(first.id);
       }
 
-      // Middle rounds
       for (let i = 1; i < sorted.length - 1; i++) {
         const r = sorted[i];
         const ids = playerIdsForRound(r.id);
         await ensureRoundPlayers(r.id, ids);
-
         const pastGroups = await fetchPastGroupsUpTo(generatedRoundIds);
         const gen = generateFairMix(ids, pastGroups);
-
         await persistRoundGroups(r.id, gen, "Auto: Fair mix (non-final)");
         generatedRoundIds.push(r.id);
       }
 
-      // Final round
       if (!penultimate) {
         setInfoMsg("Generated Round 1 only (tour has a single round).");
       } else {
@@ -831,10 +722,24 @@ export default function TourTeeTimesPage() {
           await ensureRoundPlayers(last.id, finalIds);
 
           const upToIds = sorted.slice(0, sorted.length - 1).map((r) => r.id);
-          const ordered = await computeLeaderboardToDate(sorted, upToIds, finalIds);
+          const totals = await computeTotalsToDate(sorted, upToIds, finalIds);
 
-          const genFinal = generateFinalSeeded(ordered);
-          await persistRoundGroups(last.id, genFinal, "Auto: Final round (leaderboard-seeded)");
+          const ordered = [...finalIds].sort((a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0) || a.localeCompare(b));
+
+          // simple seeded, best later groups
+          const sizes = ordered.length % 4 === 0 ? Array(ordered.length / 4).fill(4) : [4];
+          const groupsFinal: string[][] = sizes.map(() => []);
+          let idx = 0;
+          for (let gi = groupsFinal.length - 1; gi >= 0; gi--) {
+            const target = sizes[gi];
+            for (let k = 0; k < target; k++) {
+              const pid = ordered[idx++];
+              if (!pid) break;
+              groupsFinal[gi].push(pid);
+            }
+          }
+
+          await persistRoundGroups(last.id, groupsFinal, "Auto: Final round (leaderboard-seeded)");
           setInfoMsg("Generated Round 1 + middle rounds + Final round.");
         }
       }
@@ -917,7 +822,14 @@ export default function TourTeeTimesPage() {
       </header>
 
       <div className="flex items-start justify-between gap-4">
-        <div className="text-sm text-gray-600">Generate and review groupings for each round.</div>
+        <div className="text-sm text-gray-600">
+          Generate and review groupings for each round.
+          {tourId === JAPAN_TOUR_ID ? (
+            <div className="mt-1 text-xs text-gray-500">
+              Japan Tour: custom 7-round rules are used when you generate.
+            </div>
+          ) : null}
+        </div>
 
         <div className="flex flex-col items-end gap-2">
           <button onClick={loadAll} disabled={busy} className="rounded-xl border px-3 py-2 text-sm disabled:opacity-50">
@@ -928,7 +840,6 @@ export default function TourTeeTimesPage() {
             onClick={onGenerateTourAllAtOnce}
             disabled={busy || rounds.length === 0}
             className="rounded-xl bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
-            title="Round 1 uses pairs; middle rounds fair mix; final uses leaderboard seeding when penultimate has scores"
           >
             {busy ? "Generating…" : "Generate tee-time groups for entire tour"}
           </button>
@@ -945,9 +856,8 @@ export default function TourTeeTimesPage() {
         </div>
 
         <div className="text-sm opacity-80">
-          Max times any pair has played together: <span className="font-semibold">{fairness.max}</span>
-          {" · "}
-          Average pair repeats: <span className="font-semibold">{fairness.avg.toFixed(2)}</span>
+          Max times any pair has played together: <span className="font-semibold">{fairness.max}</span> · Average pair repeats:{" "}
+          <span className="font-semibold">{fairness.avg.toFixed(2)}</span>
         </div>
 
         {fairness.top.length === 0 ? (
@@ -999,16 +909,6 @@ export default function TourTeeTimesPage() {
 
                       <div className="text-xs opacity-60">{r.created_at ? <>Created: {fmtTs(r.created_at)}</> : null}</div>
 
-                      <div className="mt-1 text-sm">
-                        <Link className="underline" href={`/rounds/${r.id}`}>
-                          Open round
-                        </Link>
-                        {" · "}
-                        <Link className="underline" href={`/rounds/${r.id}/groups`}>
-                          Open round groups
-                        </Link>
-                      </div>
-
                       <div className="mt-3 rounded-lg border bg-yellow-50 p-2">
                         <div className="text-xs font-semibold">Round number (sorting key)</div>
                         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
@@ -1027,7 +927,6 @@ export default function TourTeeTimesPage() {
                             onClick={() => saveRoundNo(r.id)}
                             disabled={saving}
                             className="rounded-md bg-black px-3 py-1 text-white disabled:opacity-50"
-                            title="Save round number"
                           >
                             {saving ? "Saving…" : "Save"}
                           </button>
