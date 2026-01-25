@@ -39,8 +39,11 @@ type TeamRule = {
 
 /* ---------------- Helpers ---------------- */
 
+/** ✅ Align with your scorecard logic: treat W/FEMALE as F */
 function normalizeTee(v: any): Tee {
-  return String(v ?? "").trim().toUpperCase() === "F" ? "F" : "M";
+  const s = String(v ?? "").trim().toUpperCase();
+  const isF = s === "F" || s === "FEMALE" || s === "W" || s === "WOMEN" || s === "WOMAN";
+  return isF ? "F" : "M";
 }
 
 function safeName(v: any, fallback: string) {
@@ -292,7 +295,9 @@ export default function TeamRoundDetailPage() {
 
     for (const p of players) {
       const tee: Tee = p.gender ? normalizeTee(p.gender) : "M";
-      const pars = parsByTeeHole.get(tee);
+      // ✅ mild safety fallback if a tee map is missing
+      const pars =
+        parsByTeeHole.get(tee) || parsByTeeHole.get("M") || parsByTeeHole.get("F") || null;
       if (!pars) continue;
 
       const rp = roundPlayers.get(p.id);
@@ -621,12 +626,7 @@ export default function TeamRoundDetailPage() {
 
                       return (
                         <td key={hole} className="px-2 py-2 text-center text-sm text-gray-900">
-                          <Cell
-                            pts={val}
-                            boxedBlue={boxedBlue}
-                            boxedZero={boxedZero}
-                            boxedQualifies={boxedQualifies}
-                          />
+                          <Cell pts={val} boxedBlue={boxedBlue} boxedZero={boxedZero} boxedQualifies={boxedQualifies} />
                         </td>
                       );
                     })}
@@ -648,9 +648,7 @@ export default function TeamRoundDetailPage() {
 
               {/* Team totals row */}
               <tr className="bg-gray-50">
-                <td className="sticky left-0 z-10 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-700">
-                  Team
-                </td>
+                <td className="sticky left-0 z-10 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-700">Team</td>
 
                 {Array.from({ length: 18 }).map((_, idx) => {
                   const hole = idx + 1;
@@ -675,10 +673,10 @@ export default function TeamRoundDetailPage() {
         </div>
 
         <div className="mt-3 text-xs text-gray-600">
-          Rule: only the top {N} positive scores are counted (ties are resolved by table order). Blue boxes show exactly {N}{" "}
-          counted positives (or fewer if fewer positives exist). Light-blue boxes show players who qualify for top {N} scores
-          by tying the cutoff value. Zeros are always boxed red and count as −1. Contribution is the sum of all boxed blue +
-          boxed light-blue scores minus 1 per red zero.
+          Rule: only the top {N} positive scores are counted (ties are resolved by table order). Blue boxes show exactly{" "}
+          {N} counted positives (or fewer if fewer positives exist). Light-blue boxes show players who qualify for top {N}{" "}
+          scores by tying the cutoff value. Zeros are always boxed red and count as −1. Contribution is the sum of all
+          boxed blue + boxed light-blue scores minus 1 per red zero.
         </div>
       </div>
     </div>

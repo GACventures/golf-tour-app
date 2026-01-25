@@ -80,9 +80,11 @@ function asSingle<T>(v: T | T[] | null | undefined): T | null {
   return Array.isArray(v) ? v[0] ?? null : v;
 }
 
+/** ✅ Align with your scorecard logic: treat W/FEMALE as F */
 function normalizeTee(v: any): Tee {
   const s = String(v ?? "").trim().toUpperCase();
-  return s === "F" ? "F" : "M";
+  const isF = s === "F" || s === "FEMALE" || s === "W" || s === "WOMEN" || s === "WOMAN";
+  return isF ? "F" : "M";
 }
 
 function rawScoreFor(strokes: number | null, pickup?: boolean | null) {
@@ -144,17 +146,8 @@ function GrossBox({ shade, label }: { shade: Shade; label: string }) {
   );
 }
 
-function StablefordBox({
-  value,
-  contributes,
-  tied,
-}: {
-  value: number;
-  contributes: boolean;
-  tied: boolean;
-}) {
-  const base =
-    "inline-flex min-w-[22px] justify-center rounded px-1 py-[1px] text-[12px] font-extrabold leading-5";
+function StablefordBox({ value, contributes, tied }: { value: number; contributes: boolean; tied: boolean }) {
+  const base = "inline-flex min-w-[22px] justify-center rounded px-1 py-[1px] text-[12px] font-extrabold leading-5";
   const border = contributes ? "border-2 border-dotted border-slate-700" : "border border-transparent";
   const ring = tied ? "ring-2 ring-slate-400 ring-inset" : "";
   return <span className={`${base} ${border} ${ring}`}>{value}</span>;
@@ -359,8 +352,20 @@ export default function MobilePairsRoundDetailPage() {
 
       out.push({
         hole,
-        p1: { gross: p1pickup ? "P" : p1gross !== null ? String(p1gross) : "", net: p1net, shade: p1shade, contributes: p1contrib, tied },
-        p2: { gross: p2pickup ? "P" : p2gross !== null ? String(p2gross) : "", net: p2net, shade: p2shade, contributes: p2contrib, tied },
+        p1: {
+          gross: p1pickup ? "P" : p1gross !== null ? String(p1gross) : "",
+          net: p1net,
+          shade: p1shade,
+          contributes: p1contrib,
+          tied,
+        },
+        p2: {
+          gross: p2pickup ? "P" : p2gross !== null ? String(p2gross) : "",
+          net: p2net,
+          shade: p2shade,
+          contributes: p2contrib,
+          tied,
+        },
         best,
       });
     }
@@ -403,17 +408,14 @@ export default function MobilePairsRoundDetailPage() {
     return { out, inn, total, contrib: contrib(rows) };
   }, [rows]);
 
-  // -----------------------------
-  // ✅ STEP 1 ONLY: Header lines
-  // -----------------------------
+  // Header lines
   const headerLine1 = useMemo(() => {
     if (!p1 || !p2) return "Pair";
     return `Pair – ${p1.name}/${p2.name}`;
   }, [p1, p2]);
 
   const headerLine2 = useMemo(() => {
-    const roundNo =
-      typeof round?.round_no === "number" && round.round_no ? `Round ${round.round_no}` : "Round";
+    const roundNo = typeof round?.round_no === "number" && round.round_no ? `Round ${round.round_no}` : "Round";
     const course = round?.courses?.name ? ` · ${round.courses.name}` : "";
     return `${roundNo}${course}`;
   }, [round]);
@@ -510,11 +512,19 @@ export default function MobilePairsRoundDetailPage() {
                           <tr className="border-b border-slate-200 bg-white">
                             <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-700">Out</td>
 
-                            <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>{totals.out.p1gross}</td>
-                            <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>{totals.out.p1net}</td>
+                            <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>
+                              {totals.out.p1gross}
+                            </td>
+                            <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>
+                              {totals.out.p1net}
+                            </td>
 
-                            <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>{totals.out.p2gross}</td>
-                            <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>{totals.out.p2net}</td>
+                            <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>
+                              {totals.out.p2gross}
+                            </td>
+                            <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>
+                              {totals.out.p2net}
+                            </td>
 
                             <td className="px-2 py-2 text-center text-[12px] font-extrabold">{totals.out.best}</td>
                           </tr>
@@ -525,11 +535,19 @@ export default function MobilePairsRoundDetailPage() {
                             <tr className="border-b border-slate-100 bg-white">
                               <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-700">In</td>
 
-                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>{totals.inn.p1gross}</td>
-                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>{totals.inn.p1net}</td>
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>
+                                {totals.inn.p1gross}
+                              </td>
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>
+                                {totals.inn.p1net}
+                              </td>
 
-                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>{totals.inn.p2gross}</td>
-                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>{totals.inn.p2net}</td>
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>
+                                {totals.inn.p2gross}
+                              </td>
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>
+                                {totals.inn.p2net}
+                              </td>
 
                               <td className="px-2 py-2 text-center text-[12px] font-extrabold">{totals.inn.best}</td>
                             </tr>
@@ -537,19 +555,25 @@ export default function MobilePairsRoundDetailPage() {
                             <tr className="border-b border-slate-200 bg-slate-50">
                               <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-900">Total</td>
 
-                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>{totals.total.p1gross}</td>
-                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>{totals.total.p1net}</td>
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>
+                                {totals.total.p1gross}
+                              </td>
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>
+                                {totals.total.p1net}
+                              </td>
 
-                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>{totals.total.p2gross}</td>
-                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>{totals.total.p2net}</td>
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>
+                                {totals.total.p2gross}
+                              </td>
+                              <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>
+                                {totals.total.p2net}
+                              </td>
 
                               <td className="px-2 py-2 text-center text-[12px] font-extrabold">{totals.total.best}</td>
                             </tr>
 
                             <tr className="bg-white">
-                              <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-700">
-                                Contrib
-                              </td>
+                              <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-700">Contrib</td>
 
                               <td className={`px-2 py-2 text-center ${P1_BG}`} />
                               <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>
