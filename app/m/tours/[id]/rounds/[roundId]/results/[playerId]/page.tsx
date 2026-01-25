@@ -5,6 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { netStablefordPointsForHole } from "@/lib/stableford";
 
+type Tee = "M" | "F";
+
 type RoundRow = {
   id: string;
   tour_id: string;
@@ -24,6 +26,20 @@ type ScoreRow = {
   hole_number: number;
   strokes: number | null;
   pickup?: boolean | null;
+};
+
+type ParRow = {
+  course_id: string;
+  hole_number: number;
+  tee?: Tee | null; // ✅ prefer this
+  par?: number | null;
+  stroke_index?: number | null;
+
+  // legacy / optional columns (keep as fallback)
+  par_m?: number | null;
+  stroke_index_m?: number | null;
+  par_f?: number | null;
+  stroke_index_f?: number | null;
 };
 
 type MobilePlayer = { id: string; name: string; gender?: string | null; startHandicap: number };
@@ -46,10 +62,15 @@ function rawScoreFor(strokes: number | null, pickup?: boolean | null) {
   return String(strokes);
 }
 
-function pickParSi(row: any, gender?: string | null) {
-  const g = String(gender ?? "").toUpperCase();
-  const isF = g === "F" || g === "FEMALE" || g === "W";
+function normalizeTee(v: any): Tee {
+  const s = String(v ?? "").trim().toUpperCase();
+  return s === "F" || s === "FEMALE" || s === "W" ? "F" : "M";
+}
 
+function pickParSiFromRow(row: ParRow | undefined | null, tee: Tee) {
+  if (!row) return { par: 0, si: 0 };
+
+  // If row is a "combined" row with par_m/par_f present
   const hasMF =
     row &&
     (row.par_m !== undefined ||
@@ -58,15 +79,14 @@ function pickParSi(row: any, gender?: string | null) {
       row.stroke_index_f !== undefined);
 
   if (hasMF) {
-    const par = Number(isF ? row.par_f ?? row.par_m : row.par_m ?? row.par_f);
-    const si = Number(
-      isF ? row.stroke_index_f ?? row.stroke_index_m : row.stroke_index_m ?? row.stroke_index_f
-    );
+    const par = Number(tee === "F" ? row.par_f ?? row.par_m : row.par_m ?? row.par_f);
+    const si = Number(tee === "F" ? row.stroke_index_f ?? row.stroke_index_m : row.stroke_index_m ?? row.stroke_index_f);
     return { par: Number.isFinite(par) ? par : 0, si: Number.isFinite(si) ? si : 0 };
   }
 
-  const par = Number(row?.par);
-  const si = Number(row?.stroke_index);
+  // Otherwise use plain par/stroke_index
+  const par = Number(row.par);
+  const si = Number(row.stroke_index);
   return { par: Number.isFinite(par) ? par : 0, si: Number.isFinite(si) ? si : 0 };
 }
 
@@ -117,6 +137,7 @@ async function loadPlayersForTour(tourId: string): Promise<MobilePlayer[]> {
       .filter((p: any) => !!p.id);
   }
 
+  // legacy fallback
   const { data: pData, error: pErr } = await supabase
     .from("players")
     .select("*")
@@ -141,23 +162,31 @@ async function loadPlayersForTour(tourId: string): Promise<MobilePlayer[]> {
     .filter((x: any) => !!x.id);
 }
 
+function isMissingColumnError(msg: string, column: string) {
+  const m = String(msg ?? "").toLowerCase();
+  const c = column.toLowerCase();
+  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
+}
+
+// ✅ Load pars in a tee-aware way (prefer pars.tee schema)
 async function loadParsForCourse(courseId: string) {
+  // Try modern schema first: tee-aware rows
   const attempt1 = await supabase
     .from("pars")
-    .select("course_id,hole_number,par,stroke_index,par_m,stroke_index_m,par_f,stroke_index_f")
+    .select("course_id,hole_number,tee,par,stroke_index")
     .eq("course_id", courseId);
 
-  if (!attempt1.error) return (attempt1.data ?? []) as any[];
+  if (!attempt1.error) return (attempt1.data ?? []) as ParRow[];
 
-  const msg = String(attempt1.error.message ?? "");
-  if (msg.toLowerCase().includes("does not exist")) {
+  // If tee column doesn't exist, fall back to legacy columns if present
+  if (isMissingColumnError(attempt1.error.message, "tee")) {
     const attempt2 = await supabase
       .from("pars")
-      .select("course_id,hole_number,par,stroke_index")
+      .select("course_id,hole_number,par,stroke_index,par_m,stroke_index_m,par_f,stroke_index_f")
       .eq("course_id", courseId);
 
     if (attempt2.error) throw attempt2.error;
-    return (attempt2.data ?? []) as any[];
+    return (attempt2.data ?? []) as ParRow[];
   }
 
   throw attempt1.error;
@@ -179,7 +208,7 @@ export default function MobileRoundPlayerResultPage() {
   const [hcp, setHcp] = useState<number>(0);
 
   const [scores, setScores] = useState<ScoreRow[]>([]);
-  const [pars, setPars] = useState<any[]>([]);
+  const [pars, setPars] = useState<ParRow[]>([]);
 
   function goBack() {
     router.back();
@@ -202,7 +231,6 @@ export default function MobileRoundPlayerResultPage() {
       try {
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
-          // ✅ include played_on
           .select("id,tour_id,name,created_at,played_on,round_no,course_id,courses(name)")
           .eq("id", roundId)
           .eq("tour_id", tourId)
@@ -214,7 +242,7 @@ export default function MobileRoundPlayerResultPage() {
         const allPlayers = await loadPlayersForTour(tourId);
         const p = allPlayers.find((x) => x.id === playerId) ?? null;
 
-        // ✅ playing handicap for this round (if present)
+        // playing handicap for this round (if present)
         const { data: rpData, error: rpErr } = await supabase
           .from("round_players")
           .select("round_id,player_id,playing,playing_handicap")
@@ -258,13 +286,32 @@ export default function MobileRoundPlayerResultPage() {
     };
   }, [tourId, roundId, playerId]);
 
-  const parsByHole = useMemo(() => {
-    const m = new Map<number, any>();
+  // ✅ NEW: tee-aware par map:
+  // - if pars has tee rows, store (hole -> {M row, F row})
+  // - if legacy combined row, store hole -> row (and use pickParSiFromRow)
+  const parRowsByHole = useMemo(() => {
+    const byHole = new Map<number, { M?: ParRow; F?: ParRow; legacy?: ParRow }>();
+
+    const hasTee = pars.some((p) => String((p as any)?.tee ?? "").toUpperCase() === "M" || String((p as any)?.tee ?? "").toUpperCase() === "F");
+
     for (const p of pars) {
       const hole = Number((p as any).hole_number);
-      if (Number.isFinite(hole)) m.set(hole, p);
+      if (!Number.isFinite(hole)) continue;
+
+      if (!byHole.has(hole)) byHole.set(hole, {});
+
+      const slot = byHole.get(hole)!;
+
+      if (hasTee) {
+        const tee = String((p as any)?.tee ?? "").toUpperCase() === "F" ? "F" : "M";
+        (slot as any)[tee] = p;
+      } else {
+        // legacy combined row (single row per hole)
+        slot.legacy = p;
+      }
     }
-    return m;
+
+    return { byHole, hasTee };
   }, [pars]);
 
   const scoreByHole = useMemo(() => {
@@ -277,11 +324,25 @@ export default function MobileRoundPlayerResultPage() {
   }, [scores]);
 
   const computed = useMemo(() => {
-    const gender = player?.gender ?? null;
+    const tee: Tee = normalizeTee(player?.gender ?? null);
 
     const holes = Array.from({ length: 18 }, (_, i) => i + 1).map((hole) => {
-      const pr = parsByHole.get(hole);
-      const { par, si } = pickParSi(pr, gender);
+      const prSlot = parRowsByHole.byHole.get(hole);
+
+      let par = 0;
+      let si = 0;
+
+      if (parRowsByHole.hasTee) {
+        const row = (prSlot as any)?.[tee] as ParRow | undefined;
+        const picked = pickParSiFromRow(row, tee);
+        par = picked.par;
+        si = picked.si;
+      } else {
+        const row = prSlot?.legacy;
+        const picked = pickParSiFromRow(row, tee);
+        par = picked.par;
+        si = picked.si;
+      }
 
       const sc = scoreByHole.get(hole);
       const gross = Number.isFinite(Number(sc?.strokes)) ? Number(sc?.strokes) : null;
@@ -300,7 +361,7 @@ export default function MobileRoundPlayerResultPage() {
 
       const shade = par > 0 && (pickup || gross !== null) ? shadeForGross(gross, pickup, par) : "none";
 
-      return { hole, par, gross, pickup, pts, shade };
+      return { hole, par, gross, pickup, pts, shade, teeUsed: tee };
     });
 
     const front = holes.slice(0, 9);
@@ -314,6 +375,7 @@ export default function MobileRoundPlayerResultPage() {
     };
 
     return {
+      tee,
       holes,
       front,
       back,
@@ -321,7 +383,46 @@ export default function MobileRoundPlayerResultPage() {
       inn: sum(back),
       total: sum(holes),
     };
-  }, [parsByHole, scoreByHole, player?.gender, hcp]);
+  }, [parRowsByHole, scoreByHole, player?.gender, hcp]);
+
+  // ✅ Diagnostic values for holes 1,2,14 and both tees (when available)
+  const diag = useMemo(() => {
+    const holes = [1, 2, 14];
+
+    if (!round?.course_id) return { courseId: "", hasTee: parRowsByHole.hasTee, rows: [] as any[] };
+
+    const courseId = String(round.course_id);
+    const tee = computed.tee;
+
+    const rows = holes.map((h) => {
+      const slot = parRowsByHole.byHole.get(h);
+
+      const pick = (t: Tee) => {
+        if (parRowsByHole.hasTee) {
+          const row = (slot as any)?.[t] as ParRow | undefined;
+          const { par, si } = pickParSiFromRow(row, t);
+          return { par, si };
+        }
+        const { par, si } = pickParSiFromRow(slot?.legacy, t);
+        return { par, si };
+      };
+
+      const cur = pick(tee);
+      const other = pick(tee === "M" ? "F" : "M");
+
+      return {
+        hole: h,
+        teeUsed: tee,
+        par: cur.par,
+        si: cur.si,
+        otherTee: tee === "M" ? "F" : "M",
+        otherPar: other.par,
+        otherSi: other.si,
+      };
+    });
+
+    return { courseId, hasTee: parRowsByHole.hasTee, rows };
+  }, [round?.course_id, computed.tee, parRowsByHole]);
 
   const headerTitle = useMemo(() => {
     const courseName = round?.courses?.name ? ` – ${round.courses.name}` : "";
@@ -330,7 +431,6 @@ export default function MobileRoundPlayerResultPage() {
     return `${rname || roundNo}${courseName}`;
   }, [round]);
 
-  // ✅ Correct date: played_on
   const dateText = useMemo(() => formatDate(round?.played_on ?? null), [round?.played_on]);
 
   function ScoreBox({ shade, label }: { shade: Shade; label: string | number }) {
@@ -382,6 +482,27 @@ export default function MobileRoundPlayerResultPage() {
           <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">Loading…</div>
         ) : (
           <>
+            {/* ✅ Diagnostics (holes 1,2,14) */}
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+              <div className="font-semibold text-slate-900">Diagnostics</div>
+              <div className="mt-1">
+                CourseId: <span className="font-mono">{diag.courseId || "(none)"}</span> · Pars schema:{" "}
+                <span className="font-semibold">{diag.hasTee ? "tee rows (M/F)" : "legacy (single row)"}</span> · Tee used:{" "}
+                <span className="font-semibold">{computed.tee}</span>
+              </div>
+              <div className="mt-2 grid grid-cols-1 gap-1">
+                {diag.rows.map((r) => (
+                  <div key={r.hole}>
+                    Hole <span className="font-semibold">{r.hole}</span>:{" "}
+                    <span className="font-semibold">
+                      {r.teeUsed} par {r.par} / SI {r.si}
+                    </span>{" "}
+                    · other tee {r.otherTee}: par {r.otherPar} / SI {r.otherSi}
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div className="mt-4 flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="truncate text-2xl font-extrabold">{player?.name ?? "(player)"}</div>
