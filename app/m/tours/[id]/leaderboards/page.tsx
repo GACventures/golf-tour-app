@@ -64,13 +64,9 @@ type ParRow = {
   stroke_index: number;
 };
 
-type IndividualRule =
-  | { mode: "ALL" }
-  | { mode: "BEST_N"; n: number; finalRequired: boolean };
+type IndividualRule = | { mode: "ALL" } | { mode: "BEST_N"; n: number; finalRequired: boolean };
 
-type PairRule =
-  | { mode: "ALL" }
-  | { mode: "BEST_Q"; q: number; finalRequired: boolean };
+type PairRule = | { mode: "ALL" } | { mode: "BEST_Q"; q: number; finalRequired: boolean };
 
 type TeamRule = { bestY: number };
 
@@ -306,6 +302,9 @@ export default function MobileLeaderboardsPage() {
 
   // ✅ separate genders toggle (individual only)
   const [separateGender, setSeparateGender] = useState(false);
+
+  // ✅ NEW: diagnostics toggle
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   // Rules (mobile read-only, loaded from DB)
   const [individualRule, setIndividualRule] = useState<IndividualRule>({ mode: "ALL" });
@@ -681,6 +680,38 @@ export default function MobileLeaderboardsPage() {
   }, [teamGroups, memberIdsByTeam, playerById]);
 
   // -----------------------------
+  // Diagnostics (holes 1,2,14)
+  // -----------------------------
+  const diagnosticsRows = useMemo(() => {
+    const holes = [1, 2, 14];
+
+    return sortedRounds.map((r, idx) => {
+      const courseId = String(r.course_id ?? "");
+      const courseName = safeName(asSingle(r.courses)?.name, "(course)");
+      const isFinal = r.id === finalRoundId;
+      const lab = roundLabel(r, idx, isFinal);
+
+      const get = (tee: Tee, hole: number) => {
+        const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(hole);
+        if (!pr) return { par: "—", si: "—" };
+        return { par: String(pr.par), si: String(pr.si) };
+      };
+
+      const mVals = holes.map((h) => ({ hole: h, ...get("M", h) }));
+      const fVals = holes.map((h) => ({ hole: h, ...get("F", h) }));
+
+      return {
+        roundId: r.id,
+        lab,
+        courseId: courseId || "(null)",
+        courseName,
+        mVals,
+        fVals,
+      };
+    });
+  }, [sortedRounds, finalRoundId, parsByCourseTeeHole]);
+
+  // -----------------------------
   // Description
   // -----------------------------
   const description = useMemo(() => {
@@ -695,9 +726,7 @@ export default function MobileLeaderboardsPage() {
     if (kind === "pairs") {
       if (pairRule.mode === "ALL") return "Pairs Better Ball · Total points across all rounds";
       const r = pairRule;
-      return r.finalRequired
-        ? `Pairs Better Ball · Best ${r.q} rounds (Final required)`
-        : `Pairs Better Ball · Best ${r.q} rounds`;
+      return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
     }
 
     return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 for each zero · All rounds`;
@@ -1140,6 +1169,75 @@ export default function MobileLeaderboardsPage() {
 
           <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
             {description}
+          </div>
+
+          {/* ✅ Diagnostics toggle */}
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() => setShowDiagnostics((v) => !v)}
+              className="w-full rounded-2xl border border-gray-200 bg-white px-3 py-2 text-left text-xs font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
+              aria-label="Toggle diagnostics"
+            >
+              Diagnostics (holes 1, 2, 14) {showDiagnostics ? "▲" : "▼"}
+              <div className="mt-1 text-[11px] font-normal text-gray-600">
+                Confirms which par/SI the leaderboard is using for each round’s course (M and F tees).
+              </div>
+            </button>
+
+            {showDiagnostics ? (
+              <div className="mt-2 rounded-2xl border border-gray-200 bg-white p-3 text-[11px] text-gray-800">
+                <div className="mb-2 text-[11px] text-gray-600">
+                  Rounds: <span className="font-semibold text-gray-900">{sortedRounds.length}</span> · Players:{" "}
+                  <span className="font-semibold text-gray-900">{players.length}</span> · Scores:{" "}
+                  <span className="font-semibold text-gray-900">{scores.length}</span> · Pars:{" "}
+                  <span className="font-semibold text-gray-900">{pars.length}</span>
+                </div>
+
+                <div className="space-y-3">
+                  {diagnosticsRows.map((dr) => (
+                    <div key={dr.roundId} className="rounded-xl border border-gray-200 p-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-gray-900">
+                            {dr.lab} · {dr.courseName}
+                          </div>
+                          <div className="mt-0.5 text-[10px] text-gray-600 break-all">course_id: {dr.courseId}</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-2 grid grid-cols-1 gap-2">
+                        <div className="rounded-lg bg-gray-50 p-2">
+                          <div className="text-[10px] font-semibold text-gray-700">Men (M)</div>
+                          <div className="mt-1 flex flex-wrap gap-2">
+                            {dr.mVals.map((v) => (
+                              <div key={`m-${dr.roundId}-${v.hole}`} className="rounded-md border border-gray-200 bg-white px-2 py-1">
+                                <span className="font-semibold">H{v.hole}</span> · Par {v.par} · SI {v.si}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg bg-gray-50 p-2">
+                          <div className="text-[10px] font-semibold text-gray-700">Women (F)</div>
+                          <div className="mt-1 flex flex-wrap gap-2">
+                            {dr.fVals.map((v) => (
+                              <div key={`f-${dr.roundId}-${v.hole}`} className="rounded-md border border-gray-200 bg-white px-2 py-1">
+                                <span className="font-semibold">H{v.hole}</span> · Par {v.par} · SI {v.si}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="text-[10px] text-gray-600">
+                          If a value shows “—”, the leaderboard did not find a pars row for that hole/tee/course.
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
