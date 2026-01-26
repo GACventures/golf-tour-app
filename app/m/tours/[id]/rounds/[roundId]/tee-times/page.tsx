@@ -34,8 +34,7 @@ type PlayerRow = {
   gender: Tee;
 };
 
-// NOTE: PostgREST can return relationship as object OR array.
-// We accept both and normalize with asSingle().
+// PostgREST relationship can return object OR array.
 type TourPlayerJoinRow = {
   player_id: string;
   players:
@@ -66,6 +65,14 @@ type ParRow = {
   par: number;
   stroke_index: number;
 };
+
+type TourGroupingSettingsRow = {
+  individual_mode: string | null;
+  individual_best_n: number | null;
+  individual_final_required: boolean | null;
+};
+
+type IndividualRule = { mode: "ALL" } | { mode: "BEST_N"; n: number; finalRequired: boolean };
 
 function asSingle<T>(v: T | T[] | null | undefined): T | null {
   if (!v) return null;
@@ -134,6 +141,12 @@ function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
   return Number.isFinite(n) ? String(n) : "";
 }
 
+function clampInt(n: number, min: number, max: number) {
+  const x = Math.floor(Number(n));
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
 // Stableford (net) per hole
 function netStablefordPointsForHole(params: {
   rawScore: string; // "" | "P" | "number"
@@ -159,6 +172,39 @@ function netStablefordPointsForHole(params: {
   const net = strokes - shotsReceived;
   const pts = 2 + (par - net);
   return Math.max(0, Math.min(pts, 10));
+}
+
+// Match the leaderboard BEST_N selection: optionally force final round to count.
+function pickBestRoundIds(args: {
+  sortedRoundIds: string[];
+  perRoundTotals: Record<string, number>;
+  n: number;
+  finalRoundId: string | null;
+  finalRequired: boolean;
+}) {
+  const { sortedRoundIds, perRoundTotals, n, finalRoundId, finalRequired } = args;
+
+  const N = clampInt(n, 1, 99);
+  const chosen = new Set<string>();
+
+  const mustIncludeFinal = !!finalRequired && !!finalRoundId;
+  if (mustIncludeFinal && finalRoundId) chosen.add(finalRoundId);
+
+  const ranked = sortedRoundIds.map((rid, idx) => ({
+    rid,
+    idx,
+    val: Number.isFinite(Number(perRoundTotals[rid])) ? Number(perRoundTotals[rid]) : 0,
+  }));
+
+  ranked.sort((a, b) => b.val - a.val || a.idx - b.idx);
+
+  for (const r of ranked) {
+    if (chosen.size >= N) break;
+    if (mustIncludeFinal && r.rid === finalRoundId) continue;
+    chosen.add(r.rid);
+  }
+
+  return chosen;
 }
 
 // Supabase often caps at 1000 rows per request, so fetch in pages.
@@ -210,6 +256,9 @@ type GenerationDiagnostics = {
   tourId: string;
   roundId: string;
   finalRoundId: string;
+
+  ruleLabel: string;
+
   groupsCreated: number;
   playersUsed: number;
   maleCount: number;
@@ -400,6 +449,36 @@ export default function MobileRoundTeeTimesPage() {
     setGenerating(true);
 
     try {
+      // Load individual rule (must match leaderboard)
+      const { data: sData, error: sErr } = await supabase
+        .from("tour_grouping_settings")
+        .select("individual_mode,individual_best_n,individual_final_required")
+        .eq("tour_id", tourId)
+        .maybeSingle();
+
+      if (sErr) throw sErr;
+
+      const settings = (sData ?? null) as TourGroupingSettingsRow | null;
+
+      let individualRule: IndividualRule = { mode: "ALL" };
+      {
+        const mode = String(settings?.individual_mode ?? "ALL").toUpperCase();
+        const finalRequired = settings?.individual_final_required === true;
+        const n = Number.isFinite(Number(settings?.individual_best_n)) ? Number(settings?.individual_best_n) : 0;
+
+        if (mode === "BEST_N" && n > 0) {
+          individualRule = { mode: "BEST_N", n: clampInt(n, 1, 99), finalRequired };
+        } else {
+          individualRule = { mode: "ALL" };
+        }
+      }
+
+      const ruleLabel =
+        individualRule.mode === "ALL"
+          ? "Individual rule: ALL rounds"
+          : `Individual rule: BEST ${individualRule.n} rounds${individualRule.finalRequired ? " (Final required)" : ""}`;
+
+      // Rounds
       const { data: roundsData, error: roundsErr } = await supabase
         .from("rounds")
         .select("id,round_no,created_at,course_id")
@@ -412,9 +491,17 @@ export default function MobileRoundTeeTimesPage() {
       const rounds = (roundsData ?? []) as any[];
       if (!rounds.length) throw new Error("No rounds found for this tour.");
 
-      const roundIds = rounds.map((r) => String(r.id));
-      const courseIds = Array.from(new Set(rounds.map((r) => r.course_id).filter(Boolean))).map((x) => String(x));
+      const sortedRounds = [...rounds].sort((a, b) => {
+        const an = a.round_no ?? 999999;
+        const bn = b.round_no ?? 999999;
+        if (an !== bn) return an - bn;
+        return String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""));
+      });
 
+      const sortedRoundIds = sortedRounds.map((r) => String(r.id));
+      const courseIds = Array.from(new Set(sortedRounds.map((r) => r.course_id).filter(Boolean))).map((x) => String(x));
+
+      // Tour players
       const { data: tpData, error: tpErr } = await supabase
         .from("tour_players")
         .select("player_id,players(id,name,gender)")
@@ -438,10 +525,11 @@ export default function MobileRoundTeeTimesPage() {
 
       const playerIds = players.map((p) => p.id);
 
+      // round_players
       const { data: rpData, error: rpErr } = await supabase
         .from("round_players")
         .select("round_id,player_id,playing,playing_handicap")
-        .in("round_id", roundIds)
+        .in("round_id", sortedRoundIds)
         .in("player_id", playerIds);
 
       if (rpErr) throw rpErr;
@@ -456,6 +544,7 @@ export default function MobileRoundTeeTimesPage() {
       const rpByRoundPlayer = new Map<string, RoundPlayerRow>();
       for (const rp of roundPlayers) rpByRoundPlayer.set(`${rp.round_id}|${rp.player_id}`, rp);
 
+      // pars
       const pars: ParRow[] = [];
       if (courseIds.length) {
         const { data: pData, error: pErr } = await supabase
@@ -487,29 +576,51 @@ export default function MobileRoundTeeTimesPage() {
         byTee.get(p.tee)!.set(p.hole_number, { par: p.par, si: p.stroke_index });
       }
 
-      const scores = await fetchAllScores(roundIds, playerIds);
+      // scores (paginated)
+      const scores = await fetchAllScores(sortedRoundIds, playerIds);
       const scoreByRoundPlayerHole = new Map<string, ScoreRow>();
       for (const s of scores) scoreByRoundPlayerHole.set(`${s.round_id}|${s.player_id}|${Number(s.hole_number)}`, s);
 
-      const tourTotals: Array<{ playerId: string; name: string; gender: Tee; tourTotal: number }> = [];
+      // Compute per-round totals + tour total following the SAME rule as leaderboard
+      const finalRid = sortedRoundIds.length ? sortedRoundIds[sortedRoundIds.length - 1] : null;
+
+      const tourTotals: Array<{
+        playerId: string;
+        name: string;
+        gender: Tee;
+        perRound: Record<string, number>;
+        countedIds: Set<string>;
+        tourTotal: number;
+      }> = [];
 
       for (const p of players) {
-        let total = 0;
+        const perRound: Record<string, number> = {};
 
-        for (const r of rounds) {
+        for (const r of sortedRounds) {
           const rid = String(r.id);
+
           const rp = rpByRoundPlayer.get(`${rid}|${p.id}`);
-          if (!rp?.playing) continue;
+          if (!rp?.playing) {
+            perRound[rid] = 0;
+            continue;
+          }
 
           const courseId = String(r.course_id ?? "");
-          if (!courseId) continue;
+          if (!courseId) {
+            perRound[rid] = 0;
+            continue;
+          }
 
           const tee = normalizeTee(p.gender);
           const parsMap = parsByCourseTeeHole.get(courseId)?.get(tee);
-          if (!parsMap) continue;
+          if (!parsMap) {
+            perRound[rid] = 0;
+            continue;
+          }
 
           const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
 
+          let sum = 0;
           for (let h = 1; h <= 18; h++) {
             const pr = parsMap.get(h);
             if (!pr) continue;
@@ -518,18 +629,44 @@ export default function MobileRoundTeeTimesPage() {
             if (!sc) continue;
 
             const raw = normalizeRawScore(sc.strokes, sc.pickup);
-            total += netStablefordPointsForHole({
+            sum += netStablefordPointsForHole({
               rawScore: raw,
               par: pr.par,
               strokeIndex: pr.si,
               playingHandicap: hcp,
             });
           }
+
+          perRound[rid] = sum;
         }
 
-        tourTotals.push({ playerId: p.id, name: p.name, gender: p.gender, tourTotal: total });
+        let countedIds = new Set<string>();
+        let tourTotal = 0;
+
+        if (individualRule.mode === "BEST_N") {
+          countedIds = pickBestRoundIds({
+            sortedRoundIds,
+            perRoundTotals: perRound,
+            n: individualRule.n,
+            finalRoundId: finalRid,
+            finalRequired: individualRule.finalRequired,
+          });
+          for (const rid of countedIds) tourTotal += Number(perRound[rid] ?? 0) || 0;
+        } else {
+          for (const rid of sortedRoundIds) tourTotal += Number(perRound[rid] ?? 0) || 0;
+        }
+
+        tourTotals.push({
+          playerId: p.id,
+          name: p.name,
+          gender: p.gender,
+          perRound,
+          countedIds,
+          tourTotal,
+        });
       }
 
+      // Same sort as leaderboard: best to worst
       tourTotals.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
 
       const malesBestToWorst = tourTotals.filter((x) => normalizeTee(x.gender) !== "F");
@@ -546,6 +683,7 @@ export default function MobileRoundTeeTimesPage() {
         );
       }
 
+      // Build groups worst -> best (bottom of leaderboard first)
       const builtGroups: Array<{
         groupNo: number;
         seats: Array<{ seat: number; playerId: string; name: string; gender: Tee; tourTotal: number }>;
@@ -571,13 +709,14 @@ export default function MobileRoundTeeTimesPage() {
       const leftoversMale = maleCount - fullGroups * 2;
       const leftoversFemale = femaleCount - fullGroups * 2;
 
-      const notes: string[] = [];
+      const notes: string[] = [ruleLabel];
       if (leftoversMale !== 0 || leftoversFemale !== 0) {
         notes.push(
           `Leftovers not included in 2+2 groups: Men=${leftoversMale}, Women=${leftoversFemale} (generator creates only full 2M+2F groups).`
         );
       }
 
+      // Replace round tee times
       const { error: delPlayersErr } = await supabase.from("round_group_players").delete().eq("round_id", roundId);
       if (delPlayersErr) throw delPlayersErr;
 
@@ -630,6 +769,9 @@ export default function MobileRoundTeeTimesPage() {
         tourId,
         roundId,
         finalRoundId,
+
+        ruleLabel,
+
         groupsCreated: builtGroups.length,
         playersUsed: builtGroups.length * 4,
         maleCount,
@@ -674,7 +816,8 @@ export default function MobileRoundTeeTimesPage() {
               <div className="font-semibold text-gray-900">Final round tee-time generator (Japan Tour)</div>
               <div className="mt-1">
                 Rule: Groups of <span className="font-semibold">2 men + 2 women</span>, ordered{" "}
-                <span className="font-semibold">worst → best</span> using the current Individual leaderboard tour totals.
+                <span className="font-semibold">worst → best</span> using the current Individual leaderboard TOUR totals{" "}
+                (including BEST_N rules if configured).
               </div>
 
               <div className="mt-2 flex gap-2">
@@ -730,6 +873,7 @@ export default function MobileRoundTeeTimesPage() {
                   <div className="mt-3 space-y-2">
                     <div className="rounded-xl border border-gray-200 bg-gray-50 p-2">
                       <div className="font-semibold text-gray-900">Last generation</div>
+                      <div className="mt-1 text-gray-700">{diag.ruleLabel}</div>
                       <div className="mt-1">
                         ranAt: <span className="font-semibold">{diag.ranAtIso}</span> · groupsCreated:{" "}
                         <span className="font-semibold">{diag.groupsCreated}</span> · playersUsed:{" "}
@@ -813,9 +957,7 @@ export default function MobileRoundTeeTimesPage() {
                 <div key={g.id} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                   <div className="px-4 py-3 border-b border-gray-100">
                     <div className="text-sm font-extrabold">{title}</div>
-                    {startHole ? (
-                      <div className="mt-1 text-xs font-semibold text-gray-600">{startHole}</div>
-                    ) : null}
+                    {startHole ? <div className="mt-1 text-xs font-semibold text-gray-600">{startHole}</div> : null}
                     {g.notes ? <div className="mt-1 text-[11px] text-gray-500">{g.notes}</div> : null}
                   </div>
 
