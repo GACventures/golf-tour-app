@@ -617,9 +617,11 @@ export default function MobileScoreEntryPage() {
           setRehandicapMsg("Rehandicapping running…");
 
           const res = await recalcAndSaveTourHandicaps({
-            supabase,
-            tourId: tid,
-          });
+  supabase,
+  tourId: tid,
+  fromRoundId: roundId,
+});
+
 
           const ts = new Date().toLocaleTimeString();
 
