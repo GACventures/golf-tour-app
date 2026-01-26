@@ -6,6 +6,12 @@ import { supabase } from "@/lib/supabaseClient";
 
 type Tee = "M" | "F";
 
+// ✅ Optional: if you know the Japan tour_id, set it here.
+// If left as "REPLACE_ME", we fall back to matching tour name === "Japan Tour".
+const JAPAN_TOUR_ID = "REPLACE_ME";
+
+type TourRow = { id: string; name: string | null };
+
 type RoundRow = {
   id: string;
   created_at: string | null;
@@ -174,7 +180,7 @@ function netStablefordPointsForHole(params: {
   return Math.max(0, Math.min(pts, 10));
 }
 
-// Match the leaderboard BEST_N selection: optionally force final round to count.
+// Match BEST_N selection (optionally force final round).
 function pickBestRoundIds(args: {
   sortedRoundIds: string[];
   perRoundTotals: Record<string, number>;
@@ -207,7 +213,7 @@ function pickBestRoundIds(args: {
   return chosen;
 }
 
-// Supabase often caps at 1000 rows per request, so fetch in pages.
+// Supabase may cap at 1000 rows per request, so fetch in pages.
 async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
   const pageSize = 1000;
   let from = 0;
@@ -251,32 +257,16 @@ function safeStr(v: any, fallback: string) {
   return s ? s : fallback;
 }
 
-type GenerationDiagnostics = {
-  ranAtIso: string;
-  tourId: string;
-  roundId: string;
-  finalRoundId: string;
-
-  ruleLabel: string;
-
-  groupsCreated: number;
-  playersUsed: number;
-  maleCount: number;
-  femaleCount: number;
-  leftoversMale: number;
-  leftoversFemale: number;
-  notes: string[];
-  groups: Array<{
-    groupNo: number;
-    groupId?: string;
-    seats: Array<{ seat: number; playerId: string; name: string; gender: Tee; tourTotal: number }>;
-  }>;
-};
+function normalizeTourName(v: any) {
+  return String(v ?? "").trim().toLowerCase();
+}
 
 export default function MobileRoundTeeTimesPage() {
   const params = useParams<{ id: string; roundId: string }>();
   const tourId = String(params?.id ?? "").trim();
   const roundId = String(params?.roundId ?? "").trim();
+
+  const [tour, setTour] = useState<TourRow | null>(null);
 
   const [round, setRound] = useState<RoundRow | null>(null);
   const [roundIndex, setRoundIndex] = useState<number | null>(null);
@@ -292,15 +282,32 @@ export default function MobileRoundTeeTimesPage() {
 
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState("");
-  const [showDiagnostics, setShowDiagnostics] = useState(false);
-  const [diag, setDiag] = useState<GenerationDiagnostics | null>(null);
 
   const isFinalRound = !!finalRoundId && roundId === finalRoundId;
+
+  const isJapanTour = useMemo(() => {
+    const byId =
+      JAPAN_TOUR_ID &&
+      JAPAN_TOUR_ID !== "REPLACE_ME" &&
+      isLikelyUuid(JAPAN_TOUR_ID) &&
+      tourId === JAPAN_TOUR_ID;
+
+    const byName = normalizeTourName(tour?.name) === "japan tour";
+
+    return byId || byName;
+  }, [tourId, tour?.name]);
+
+  const showGenerateButton = isJapanTour && isFinalRound;
 
   async function loadTeeTimes() {
     setLoading(true);
     setErrorMsg("");
 
+    // Tour (for name check)
+    const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).maybeSingle();
+    if (!tErr) setTour((tData ?? null) as TourRow | null);
+
+    // Rounds list (to find final round + index)
     const { data: allRounds, error: allRoundsErr } = await supabase
       .from("rounds")
       .select("id,round_no,created_at")
@@ -321,6 +328,7 @@ export default function MobileRoundTeeTimesPage() {
     const last = rr.length ? rr[rr.length - 1] : null;
     setFinalRoundId(last ? String(last.id) : "");
 
+    // Round header info (date + course)
     const { data: rData, error: rErr } = await supabase
       .from("rounds")
       .select("id,created_at,round_no,courses(name)")
@@ -334,6 +342,7 @@ export default function MobileRoundTeeTimesPage() {
     }
     setRound(rData as RoundRow);
 
+    // Tee-time groups
     const { data: gData, error: gErr } = await supabase
       .from("round_groups")
       .select("id,group_no,tee_time,start_hole,notes")
@@ -349,6 +358,7 @@ export default function MobileRoundTeeTimesPage() {
 
     const groupIds = (gData ?? []).map((g: any) => String(g.id));
 
+    // Group players
     if (groupIds.length) {
       const { data: mData, error: mErr } = await supabase
         .from("round_group_players")
@@ -366,6 +376,7 @@ export default function MobileRoundTeeTimesPage() {
       setMembers([]);
     }
 
+    // Playing handicaps (for display)
     const { data: rpData, error: rpErr } = await supabase
       .from("round_players")
       .select("player_id,playing_handicap")
@@ -431,7 +442,6 @@ export default function MobileRoundTeeTimesPage() {
 
   async function generateFinalRoundTeeTimes() {
     setGenError("");
-    setDiag(null);
 
     if (!tourId || !roundId || !isLikelyUuid(tourId) || !isLikelyUuid(roundId)) {
       setGenError("Invalid tourId or roundId in route.");
@@ -443,6 +453,10 @@ export default function MobileRoundTeeTimesPage() {
     }
     if (roundId !== finalRoundId) {
       setGenError("This generator only runs on the final round tee-times page.");
+      return;
+    }
+    if (!isJapanTour) {
+      setGenError("This generator is restricted to the Japan Tour.");
       return;
     }
 
@@ -473,11 +487,6 @@ export default function MobileRoundTeeTimesPage() {
         }
       }
 
-      const ruleLabel =
-        individualRule.mode === "ALL"
-          ? "Individual rule: ALL rounds"
-          : `Individual rule: BEST ${individualRule.n} rounds${individualRule.finalRequired ? " (Final required)" : ""}`;
-
       // Rounds
       const { data: roundsData, error: roundsErr } = await supabase
         .from("rounds")
@@ -499,6 +508,8 @@ export default function MobileRoundTeeTimesPage() {
       });
 
       const sortedRoundIds = sortedRounds.map((r) => String(r.id));
+      const finalRid = sortedRoundIds.length ? sortedRoundIds[sortedRoundIds.length - 1] : null;
+
       const courseIds = Array.from(new Set(sortedRounds.map((r) => r.course_id).filter(Boolean))).map((x) => String(x));
 
       // Tour players
@@ -576,22 +587,13 @@ export default function MobileRoundTeeTimesPage() {
         byTee.get(p.tee)!.set(p.hole_number, { par: p.par, si: p.stroke_index });
       }
 
-      // scores (paginated)
+      // scores
       const scores = await fetchAllScores(sortedRoundIds, playerIds);
       const scoreByRoundPlayerHole = new Map<string, ScoreRow>();
       for (const s of scores) scoreByRoundPlayerHole.set(`${s.round_id}|${s.player_id}|${Number(s.hole_number)}`, s);
 
-      // Compute per-round totals + tour total following the SAME rule as leaderboard
-      const finalRid = sortedRoundIds.length ? sortedRoundIds[sortedRoundIds.length - 1] : null;
-
-      const tourTotals: Array<{
-        playerId: string;
-        name: string;
-        gender: Tee;
-        perRound: Record<string, number>;
-        countedIds: Set<string>;
-        tourTotal: number;
-      }> = [];
+      // Per-round totals + TOUR total using the same rule as leaderboard
+      const totals: Array<{ playerId: string; name: string; gender: Tee; tourTotal: number }> = [];
 
       for (const p of players) {
         const perRound: Record<string, number> = {};
@@ -640,53 +642,44 @@ export default function MobileRoundTeeTimesPage() {
           perRound[rid] = sum;
         }
 
-        let countedIds = new Set<string>();
         let tourTotal = 0;
 
         if (individualRule.mode === "BEST_N") {
-          countedIds = pickBestRoundIds({
+          const counted = pickBestRoundIds({
             sortedRoundIds,
             perRoundTotals: perRound,
             n: individualRule.n,
             finalRoundId: finalRid,
             finalRequired: individualRule.finalRequired,
           });
-          for (const rid of countedIds) tourTotal += Number(perRound[rid] ?? 0) || 0;
+          for (const rid of counted) tourTotal += Number(perRound[rid] ?? 0) || 0;
         } else {
           for (const rid of sortedRoundIds) tourTotal += Number(perRound[rid] ?? 0) || 0;
         }
 
-        tourTotals.push({
-          playerId: p.id,
-          name: p.name,
-          gender: p.gender,
-          perRound,
-          countedIds,
-          tourTotal,
-        });
+        totals.push({ playerId: p.id, name: p.name, gender: p.gender, tourTotal });
       }
 
-      // Same sort as leaderboard: best to worst
-      tourTotals.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
+      // Best -> worst
+      totals.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
 
-      const malesBestToWorst = tourTotals.filter((x) => normalizeTee(x.gender) !== "F");
-      const femalesBestToWorst = tourTotals.filter((x) => normalizeTee(x.gender) === "F");
+      const malesBestToWorst = totals.filter((x) => normalizeTee(x.gender) !== "F");
+      const femalesBestToWorst = totals.filter((x) => normalizeTee(x.gender) === "F");
 
       const maleCount = malesBestToWorst.length;
       const femaleCount = femalesBestToWorst.length;
 
       const fullGroups = Math.floor(Math.min(maleCount, femaleCount) / 2);
-
       if (fullGroups <= 0) {
         throw new Error(
           `Not enough players to form 2M+2F groups. Men=${maleCount}, Women=${femaleCount}. Need at least 2 of each.`
         );
       }
 
-      // Build groups worst -> best (bottom of leaderboard first)
+      // Worst -> best (bottom of leaderboard first)
       const builtGroups: Array<{
         groupNo: number;
-        seats: Array<{ seat: number; playerId: string; name: string; gender: Tee; tourTotal: number }>;
+        seats: Array<{ seat: number; playerId: string }>;
       }> = [];
 
       for (let i = 0; i < fullGroups; i++) {
@@ -698,25 +691,15 @@ export default function MobileRoundTeeTimesPage() {
         builtGroups.push({
           groupNo: i + 1,
           seats: [
-            { seat: 1, playerId: m1.playerId, name: m1.name, gender: "M", tourTotal: m1.tourTotal },
-            { seat: 2, playerId: m2.playerId, name: m2.name, gender: "M", tourTotal: m2.tourTotal },
-            { seat: 3, playerId: f1.playerId, name: f1.name, gender: "F", tourTotal: f1.tourTotal },
-            { seat: 4, playerId: f2.playerId, name: f2.name, gender: "F", tourTotal: f2.tourTotal },
+            { seat: 1, playerId: m1.playerId },
+            { seat: 2, playerId: m2.playerId },
+            { seat: 3, playerId: f1.playerId },
+            { seat: 4, playerId: f2.playerId },
           ],
         });
       }
 
-      const leftoversMale = maleCount - fullGroups * 2;
-      const leftoversFemale = femaleCount - fullGroups * 2;
-
-      const notes: string[] = [ruleLabel];
-      if (leftoversMale !== 0 || leftoversFemale !== 0) {
-        notes.push(
-          `Leftovers not included in 2+2 groups: Men=${leftoversMale}, Women=${leftoversFemale} (generator creates only full 2M+2F groups).`
-        );
-      }
-
-      // Replace round tee times
+      // Replace round tee-times (players first, then groups)
       const { error: delPlayersErr } = await supabase.from("round_group_players").delete().eq("round_id", roundId);
       if (delPlayersErr) throw delPlayersErr;
 
@@ -746,11 +729,9 @@ export default function MobileRoundTeeTimesPage() {
       for (const row of (insertedGroups ?? []) as any[]) groupIdByNo.set(Number(row.group_no), String(row.id));
 
       const playersInsertPayload: Array<{ round_id: string; group_id: string; player_id: string; seat: number }> = [];
-
       for (const g of builtGroups) {
         const gid = groupIdByNo.get(g.groupNo);
         if (!gid) throw new Error(`Failed to map inserted group id for group_no=${g.groupNo}`);
-
         for (const s of g.seats) {
           playersInsertPayload.push({
             round_id: roundId,
@@ -764,31 +745,6 @@ export default function MobileRoundTeeTimesPage() {
       const { error: insPlayersErr } = await supabase.from("round_group_players").insert(playersInsertPayload);
       if (insPlayersErr) throw insPlayersErr;
 
-      const diagOut: GenerationDiagnostics = {
-        ranAtIso: nowIso,
-        tourId,
-        roundId,
-        finalRoundId,
-
-        ruleLabel,
-
-        groupsCreated: builtGroups.length,
-        playersUsed: builtGroups.length * 4,
-        maleCount,
-        femaleCount,
-        leftoversMale,
-        leftoversFemale,
-        notes,
-        groups: builtGroups.map((g) => ({
-          groupNo: g.groupNo,
-          groupId: groupIdByNo.get(g.groupNo),
-          seats: g.seats,
-        })),
-      };
-
-      setDiag(diagOut);
-      setShowDiagnostics(true);
-
       await loadTeeTimes();
     } catch (e: any) {
       setGenError(e?.message ?? "Failed to generate tee times.");
@@ -796,6 +752,9 @@ export default function MobileRoundTeeTimesPage() {
       setGenerating(false);
     }
   }
+
+  const roundDate = fmtDate(parseDate(round?.created_at ?? null));
+  const course = courseName(round);
 
   return (
     <div className="min-h-dvh bg-white text-gray-900">
@@ -810,130 +769,24 @@ export default function MobileRoundTeeTimesPage() {
           {roundIndex ? `Round ${roundIndex}` : "Round"} · {roundDate} · {course}
         </div>
 
-        <div className="mx-auto max-w-md px-4 pb-3">
-          <div className="space-y-2">
-            <div className="rounded-2xl border border-gray-200 bg-white p-3 text-xs text-gray-700">
-              <div className="font-semibold text-gray-900">Final round tee-time generator (Japan Tour)</div>
-              <div className="mt-1">
-                Rule: Groups of <span className="font-semibold">2 men + 2 women</span>, ordered{" "}
-                <span className="font-semibold">worst → best</span> using the current Individual leaderboard TOUR totals{" "}
-                (including BEST_N rules if configured).
-              </div>
+        {showGenerateButton ? (
+          <div className="mx-auto max-w-md px-4 pb-3">
+            <button
+              type="button"
+              onClick={generateFinalRoundTeeTimes}
+              disabled={generating || loading}
+              className={`w-full rounded-2xl px-3 py-3 text-sm font-semibold border ${
+                generating || loading
+                  ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                  : "bg-gray-900 text-white border-gray-900 hover:bg-gray-800 active:bg-gray-700"
+              }`}
+            >
+              {generating ? "Generating..." : "Generate Final Round Tee Times"}
+            </button>
 
-              <div className="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={generateFinalRoundTeeTimes}
-                  disabled={!isFinalRound || generating || loading}
-                  className={`flex-1 rounded-xl px-3 py-2 text-sm font-semibold border ${
-                    !isFinalRound || generating || loading
-                      ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
-                      : "bg-gray-900 text-white border-gray-900 hover:bg-gray-800 active:bg-gray-700"
-                  }`}
-                >
-                  {generating ? "Generating..." : "Generate Final Round Tee Times"}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowDiagnostics((v) => !v)}
-                  className="rounded-xl px-3 py-2 text-sm font-semibold border border-gray-300 bg-white hover:bg-gray-50 active:bg-gray-100"
-                >
-                  Diagnostics {showDiagnostics ? "▲" : "▼"}
-                </button>
-              </div>
-
-              {!isFinalRound ? (
-                <div className="mt-2 text-[11px] text-gray-600">
-                  This button is enabled only on the tour’s final round tee-times page.
-                </div>
-              ) : null}
-
-              {genError ? <div className="mt-2 text-sm text-red-700">{genError}</div> : null}
-            </div>
-
-            {showDiagnostics ? (
-              <div className="rounded-2xl border border-gray-200 bg-white p-3 text-[11px] text-gray-800">
-                <div className="flex flex-wrap gap-x-3 gap-y-1 text-gray-700">
-                  <div>
-                    tourId: <span className="font-semibold text-gray-900 break-all">{tourId}</span>
-                  </div>
-                  <div>
-                    roundId: <span className="font-semibold text-gray-900 break-all">{roundId}</span>
-                  </div>
-                  <div>
-                    finalRoundId: <span className="font-semibold text-gray-900 break-all">{finalRoundId || "—"}</span>
-                  </div>
-                  <div>
-                    isFinalRound: <span className="font-semibold text-gray-900">{isFinalRound ? "YES" : "NO"}</span>
-                  </div>
-                </div>
-
-                {diag ? (
-                  <div className="mt-3 space-y-2">
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-2">
-                      <div className="font-semibold text-gray-900">Last generation</div>
-                      <div className="mt-1 text-gray-700">{diag.ruleLabel}</div>
-                      <div className="mt-1">
-                        ranAt: <span className="font-semibold">{diag.ranAtIso}</span> · groupsCreated:{" "}
-                        <span className="font-semibold">{diag.groupsCreated}</span> · playersUsed:{" "}
-                        <span className="font-semibold">{diag.playersUsed}</span>
-                      </div>
-                      <div className="mt-1">
-                        men: <span className="font-semibold">{diag.maleCount}</span> · women:{" "}
-                        <span className="font-semibold">{diag.femaleCount}</span> · leftovers M/F:{" "}
-                        <span className="font-semibold">
-                          {diag.leftoversMale}/{diag.leftoversFemale}
-                        </span>
-                      </div>
-                      {diag.notes.length ? (
-                        <div className="mt-1 text-gray-700">
-                          {diag.notes.map((n, i) => (
-                            <div key={i}>• {n}</div>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-
-                    <div className="space-y-2">
-                      {diag.groups.map((g) => (
-                        <div key={g.groupNo} className="rounded-xl border border-gray-200 p-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="font-semibold text-gray-900">
-                              Group {g.groupNo} {g.groupId ? <span className="text-gray-500">({g.groupId})</span> : null}
-                            </div>
-                            <div className="text-gray-600">DB: round_groups + round_group_players(seat)</div>
-                          </div>
-
-                          <div className="mt-2 space-y-1">
-                            {g.seats
-                              .slice()
-                              .sort((a, b) => a.seat - b.seat)
-                              .map((s) => (
-                                <div key={`${g.groupNo}-${s.seat}`} className="flex justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <span className="font-semibold">Seat {s.seat}:</span>{" "}
-                                    <span className="font-semibold text-gray-900">{s.name}</span>{" "}
-                                    <span className="text-gray-600">({s.gender})</span>
-                                    <div className="text-[10px] text-gray-500 break-all">player_id: {s.playerId}</div>
-                                  </div>
-                                  <div className="text-right text-gray-700 whitespace-nowrap">
-                                    TourTotal: <span className="font-semibold">{s.tourTotal}</span>
-                                  </div>
-                                </div>
-                              ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mt-3 text-gray-600">No generation run yet in this session.</div>
-                )}
-              </div>
-            ) : null}
+            {genError ? <div className="mt-2 text-sm text-red-700">{genError}</div> : null}
           </div>
-        </div>
+        ) : null}
       </div>
 
       <div className="mx-auto max-w-md px-4 pt-4 pb-28">
@@ -958,7 +811,6 @@ export default function MobileRoundTeeTimesPage() {
                   <div className="px-4 py-3 border-b border-gray-100">
                     <div className="text-sm font-extrabold">{title}</div>
                     {startHole ? <div className="mt-1 text-xs font-semibold text-gray-600">{startHole}</div> : null}
-                    {g.notes ? <div className="mt-1 text-[11px] text-gray-500">{g.notes}</div> : null}
                   </div>
 
                   <div className="px-4 py-3 space-y-2">
