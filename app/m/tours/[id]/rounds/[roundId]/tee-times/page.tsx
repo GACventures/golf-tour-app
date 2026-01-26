@@ -6,9 +6,8 @@ import { supabase } from "@/lib/supabaseClient";
 
 type Tee = "M" | "F";
 
-// ✅ Optional: if you know the Japan tour_id, set it here.
-// If left as "REPLACE_ME", we fall back to matching tour name === "Japan Tour".
-const JAPAN_TOUR_ID = "REPLACE_ME";
+// ✅ LOCKED: Japan Tour id
+const JAPAN_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
 
 type TourRow = { id: string; name: string | null };
 
@@ -16,6 +15,7 @@ type RoundRow = {
   id: string;
   created_at: string | null;
   round_no?: number | null;
+  course_id?: string | null;
   courses?: { name: string } | { name: string }[] | null;
 };
 
@@ -40,7 +40,6 @@ type PlayerRow = {
   gender: Tee;
 };
 
-// PostgREST relationship can return object OR array.
 type TourPlayerJoinRow = {
   player_id: string;
   players:
@@ -153,9 +152,8 @@ function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, x));
 }
 
-// Stableford (net) per hole
 function netStablefordPointsForHole(params: {
-  rawScore: string; // "" | "P" | "number"
+  rawScore: string;
   par: number;
   strokeIndex: number;
   playingHandicap: number;
@@ -180,7 +178,6 @@ function netStablefordPointsForHole(params: {
   return Math.max(0, Math.min(pts, 10));
 }
 
-// Match BEST_N selection (optionally force final round).
 function pickBestRoundIds(args: {
   sortedRoundIds: string[];
   perRoundTotals: Record<string, number>;
@@ -213,7 +210,6 @@ function pickBestRoundIds(args: {
   return chosen;
 }
 
-// Supabase may cap at 1000 rows per request, so fetch in pages.
 async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
   const pageSize = 1000;
   let from = 0;
@@ -257,10 +253,6 @@ function safeStr(v: any, fallback: string) {
   return s ? s : fallback;
 }
 
-function normalizeTourName(v: any) {
-  return String(v ?? "").trim().toLowerCase();
-}
-
 export default function MobileRoundTeeTimesPage() {
   const params = useParams<{ id: string; roundId: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -283,19 +275,8 @@ export default function MobileRoundTeeTimesPage() {
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState("");
 
+  const isJapanTour = tourId === JAPAN_TOUR_ID;
   const isFinalRound = !!finalRoundId && roundId === finalRoundId;
-
-  const isJapanTour = useMemo(() => {
-    const byId =
-      JAPAN_TOUR_ID &&
-      JAPAN_TOUR_ID !== "REPLACE_ME" &&
-      isLikelyUuid(JAPAN_TOUR_ID) &&
-      tourId === JAPAN_TOUR_ID;
-
-    const byName = normalizeTourName(tour?.name) === "japan tour";
-
-    return byId || byName;
-  }, [tourId, tour?.name]);
 
   const showGenerateButton = isJapanTour && isFinalRound;
 
@@ -303,9 +284,9 @@ export default function MobileRoundTeeTimesPage() {
     setLoading(true);
     setErrorMsg("");
 
-    // Tour (for name check)
-    const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).maybeSingle();
-    if (!tErr) setTour((tData ?? null) as TourRow | null);
+    // Tour (not used for logic now, but nice for debugging)
+    const { data: tData } = await supabase.from("tours").select("id,name").eq("id", tourId).maybeSingle();
+    setTour((tData ?? null) as TourRow | null);
 
     // Rounds list (to find final round + index)
     const { data: allRounds, error: allRoundsErr } = await supabase
@@ -331,7 +312,7 @@ export default function MobileRoundTeeTimesPage() {
     // Round header info (date + course)
     const { data: rData, error: rErr } = await supabase
       .from("rounds")
-      .select("id,created_at,round_no,courses(name)")
+      .select("id,created_at,round_no,course_id,courses(name)")
       .eq("id", roundId)
       .single();
 
@@ -444,29 +425,20 @@ export default function MobileRoundTeeTimesPage() {
       setGenError("Invalid tourId or roundId in route.");
       return;
     }
-    if (!finalRoundId) {
-      setGenError("Could not determine final round id for this tour.");
-      return;
-    }
-    if (roundId !== finalRoundId) {
-      setGenError("This generator only runs on the final round tee-times page.");
-      return;
-    }
-    if (!isJapanTour) {
-      setGenError("This generator is restricted to the Japan Tour.");
+
+    if (!(isJapanTour && isFinalRound)) {
+      setGenError("This generator only runs on the Japan Tour final round tee-times page.");
       return;
     }
 
     setGenerating(true);
 
     try {
-      // Load individual rule (must match leaderboard)
       const { data: sData, error: sErr } = await supabase
         .from("tour_grouping_settings")
         .select("individual_mode,individual_best_n,individual_final_required")
         .eq("tour_id", tourId)
         .maybeSingle();
-
       if (sErr) throw sErr;
 
       const settings = (sData ?? null) as TourGroupingSettingsRow | null;
@@ -484,14 +456,12 @@ export default function MobileRoundTeeTimesPage() {
         }
       }
 
-      // Rounds
       const { data: roundsData, error: roundsErr } = await supabase
         .from("rounds")
         .select("id,round_no,created_at,course_id")
         .eq("tour_id", tourId)
         .order("round_no", { ascending: true, nullsFirst: false })
         .order("created_at", { ascending: true });
-
       if (roundsErr) throw roundsErr;
 
       const rounds = (roundsData ?? []) as any[];
@@ -509,17 +479,14 @@ export default function MobileRoundTeeTimesPage() {
 
       const courseIds = Array.from(new Set(sortedRounds.map((r) => r.course_id).filter(Boolean))).map((x) => String(x));
 
-      // Tour players
       const { data: tpData, error: tpErr } = await supabase
         .from("tour_players")
         .select("player_id,players(id,name,gender)")
         .eq("tour_id", tourId)
         .order("name", { ascending: true, foreignTable: "players" });
-
       if (tpErr) throw tpErr;
 
       const joined = (tpData ?? []) as unknown as TourPlayerJoinRow[];
-
       const players: PlayerRow[] = joined
         .map((row) => asSingle(row.players))
         .filter((p): p is NonNullable<typeof p> => !!p)
@@ -530,16 +497,13 @@ export default function MobileRoundTeeTimesPage() {
         }));
 
       if (!players.length) throw new Error("No players found for this tour.");
-
       const playerIds = players.map((p) => p.id);
 
-      // round_players
       const { data: rpData, error: rpErr } = await supabase
         .from("round_players")
         .select("round_id,player_id,playing,playing_handicap")
         .in("round_id", sortedRoundIds)
         .in("player_id", playerIds);
-
       if (rpErr) throw rpErr;
 
       const roundPlayers: RoundPlayerRow[] = (rpData ?? []).map((x: any) => ({
@@ -552,7 +516,6 @@ export default function MobileRoundTeeTimesPage() {
       const rpByRoundPlayer = new Map<string, RoundPlayerRow>();
       for (const rp of roundPlayers) rpByRoundPlayer.set(`${rp.round_id}|${rp.player_id}`, rp);
 
-      // pars
       const pars: ParRow[] = [];
       if (courseIds.length) {
         const { data: pData, error: pErr } = await supabase
@@ -562,7 +525,6 @@ export default function MobileRoundTeeTimesPage() {
           .in("tee", ["M", "F"])
           .order("course_id", { ascending: true })
           .order("hole_number", { ascending: true });
-
         if (pErr) throw pErr;
 
         for (const x of (pData ?? []) as any[]) {
@@ -584,12 +546,10 @@ export default function MobileRoundTeeTimesPage() {
         byTee.get(p.tee)!.set(p.hole_number, { par: p.par, si: p.stroke_index });
       }
 
-      // scores
       const scores = await fetchAllScores(sortedRoundIds, playerIds);
       const scoreByRoundPlayerHole = new Map<string, ScoreRow>();
       for (const s of scores) scoreByRoundPlayerHole.set(`${s.round_id}|${s.player_id}|${Number(s.hole_number)}`, s);
 
-      // Per-round totals + TOUR total using the same rule as leaderboard
       const totals: Array<{ playerId: string; name: string; gender: Tee; tourTotal: number }> = [];
 
       for (const p of players) {
@@ -597,7 +557,6 @@ export default function MobileRoundTeeTimesPage() {
 
         for (const r of sortedRounds) {
           const rid = String(r.id);
-
           const rp = rpByRoundPlayer.get(`${rid}|${p.id}`);
           if (!rp?.playing) {
             perRound[rid] = 0;
@@ -640,7 +599,6 @@ export default function MobileRoundTeeTimesPage() {
         }
 
         let tourTotal = 0;
-
         if (individualRule.mode === "BEST_N") {
           const counted = pickBestRoundIds({
             sortedRoundIds,
@@ -657,7 +615,6 @@ export default function MobileRoundTeeTimesPage() {
         totals.push({ playerId: p.id, name: p.name, gender: p.gender, tourTotal });
       }
 
-      // Best -> worst
       totals.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
 
       const malesBestToWorst = totals.filter((x) => normalizeTee(x.gender) !== "F");
@@ -673,12 +630,9 @@ export default function MobileRoundTeeTimesPage() {
         );
       }
 
-      // Worst -> best (bottom of leaderboard first)
-      const builtGroups: Array<{
-        groupNo: number;
-        seats: Array<{ seat: number; playerId: string }>;
-      }> = [];
+      const builtGroups: Array<{ groupNo: number; seats: Array<{ seat: number; playerId: string }> }> = [];
 
+      // Worst -> best (bottom of leaderboard first)
       for (let i = 0; i < fullGroups; i++) {
         const m1 = malesBestToWorst[maleCount - 1 - i * 2];
         const m2 = malesBestToWorst[maleCount - 2 - i * 2];
@@ -696,7 +650,6 @@ export default function MobileRoundTeeTimesPage() {
         });
       }
 
-      // Replace round tee-times (players first, then groups)
       const { error: delPlayersErr } = await supabase.from("round_group_players").delete().eq("round_id", roundId);
       if (delPlayersErr) throw delPlayersErr;
 
@@ -750,7 +703,6 @@ export default function MobileRoundTeeTimesPage() {
     }
   }
 
-  // ✅ define these ONCE
   const roundDate = fmtDate(parseDate(round?.created_at ?? null));
   const course = courseName(round);
 
