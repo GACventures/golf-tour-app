@@ -33,7 +33,7 @@ type RoundPlayerRow = {
   player_id: string;
   playing: boolean;
   playing_handicap: number | null;
-  tee: Tee; // we normalize to non-null in-memory
+  tee: Tee; // normalized to non-null in-memory
 };
 
 type PlayerJoin = {
@@ -98,11 +98,18 @@ function cmpNullableNum(a: number | null, b: number | null) {
   return a - b;
 }
 
+/**
+ * Rehandicap rule:
+ * - Calculates sequential PH round-by-round (stopping at first incomplete round).
+ * - IMPORTANT: When fromRoundId is provided, we only WRITE (upsert) PH for rounds AFTER that round.
+ *   i.e., saving scores for Round N updates N+1, N+2... only.
+ */
 export async function recalcAndSaveTourHandicaps(opts: {
   supabase: SupabaseClient;
   tourId: string;
+  fromRoundId?: string; // triggering round
 }): Promise<{ ok: true; updated: number } | { ok: false; error: string }> {
-  const { supabase, tourId } = opts;
+  const { supabase, tourId, fromRoundId } = opts;
 
   // 0) Read tour flag
   const { data: tourRow, error: tourErr } = await supabase
@@ -145,6 +152,21 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
     return String(a.id).localeCompare(String(b.id));
   });
+
+  // Determine "trigger index" (round being scored)
+  // If we can find it, we only WRITE rounds with index > triggerIndex.
+  let triggerIndex: number | null = null;
+  if (fromRoundId) {
+    const idx = rounds.findIndex((r) => String(r.id) === String(fromRoundId));
+    triggerIndex = idx >= 0 ? idx : null;
+  }
+
+  // If triggerIndex is found: target rounds are AFTER it.
+  // If not found (or not provided): default to the old behavior (update all rounds).
+  const targetRounds = triggerIndex == null ? rounds : rounds.slice(triggerIndex + 1);
+
+  // If we have a valid trigger and there are no future rounds, do nothing
+  if (triggerIndex != null && targetRounds.length === 0) return { ok: true, updated: 0 };
 
   const roundIds = rounds.map((r) => r.id);
   const courseIds = Array.from(new Set(rounds.map((r) => r.course_id).filter(Boolean))) as string[];
@@ -219,7 +241,8 @@ export async function recalcAndSaveTourHandicaps(opts: {
     defaultTeeByPlayer[p.id] = p.gender ? normalizeTee(p.gender) : "M";
   }
 
-  // ✅ If rehandicapping is OFF: hard reset ALL PHs back to starting handicap
+  // If rehandicapping is OFF: reset PHs back to starting handicap
+  // IMPORTANT: if fromRoundId is provided, only reset FUTURE rounds
   if (!rehandicappingEnabled) {
     const payload: Array<{
       round_id: string;
@@ -229,11 +252,10 @@ export async function recalcAndSaveTourHandicaps(opts: {
       tee: Tee;
     }> = [];
 
-    for (const r of rounds) {
+    for (const r of targetRounds) {
       for (const p of players) {
         const existing = rpByKey.get(rpKey(r.id, p.id));
         const playing = existing?.playing === true;
-
         const tee = existing?.tee ? normalizeTee(existing.tee) : defaultTeeByPlayer[p.id] ?? "M";
         const sh = startingHcpByPlayer[p.id];
 
@@ -247,6 +269,8 @@ export async function recalcAndSaveTourHandicaps(opts: {
       }
     }
 
+    if (payload.length === 0) return { ok: true, updated: 0 };
+
     const { error: upErr } = await supabase.from("round_players").upsert(payload, {
       onConflict: "round_id,player_id",
     });
@@ -255,7 +279,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
     return { ok: true, updated: payload.length };
   }
 
-  // 4) pars (both tees; we’ll pick by player tee at runtime)
+  // 4) pars (both tees; pick by player tee at runtime)
   const { data: parsData, error: parsErr } = await supabase
     .from("pars")
     .select("course_id,hole_number,par,stroke_index,tee")
@@ -318,7 +342,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
     return true;
   }
 
-  // Compute PH per round/player
+  // Compute PH per round/player (sequential)
   const phByRoundPlayer: Record<string, Record<string, number>> = {};
 
   // init Round 1 PH = SH
@@ -420,7 +444,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
     }
   }
 
-  // Upsert PH for ALL (round,player) combos, preserving playing, and ALWAYS writing tee (NOT NULL)
+  // Upsert PH ONLY for targetRounds, preserving playing, and ALWAYS writing tee (NOT NULL)
   const payload: Array<{
     round_id: string;
     player_id: string;
@@ -429,7 +453,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
     tee: Tee;
   }> = [];
 
-  for (const r of rounds) {
+  for (const r of targetRounds) {
     for (const p of players) {
       const existing = rpByKey.get(rpKey(r.id, p.id));
       const playing = existing?.playing === true;
@@ -448,6 +472,8 @@ export async function recalcAndSaveTourHandicaps(opts: {
       });
     }
   }
+
+  if (payload.length === 0) return { ok: true, updated: 0 };
 
   const { error: upErr } = await supabase.from("round_players").upsert(payload, {
     onConflict: "round_id,player_id",
