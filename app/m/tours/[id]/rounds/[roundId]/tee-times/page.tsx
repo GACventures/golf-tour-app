@@ -437,9 +437,6 @@ export default function MobileRoundTeeTimesPage() {
     return map;
   }, [members]);
 
-  const roundDate = fmtDate(parseDate(round?.created_at ?? null));
-  const course = courseName(round);
-
   async function generateFinalRoundTeeTimes() {
     setGenError("");
 
@@ -753,6 +750,7 @@ export default function MobileRoundTeeTimesPage() {
     }
   }
 
+  // ✅ define these ONCE
   const roundDate = fmtDate(parseDate(round?.created_at ?? null));
   const course = courseName(round);
 
