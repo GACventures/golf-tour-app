@@ -34,9 +34,14 @@ type PlayerRow = {
   gender: Tee;
 };
 
+// NOTE: PostgREST can return relationship as object OR array.
+// We accept both and normalize with asSingle().
 type TourPlayerJoinRow = {
   player_id: string;
-  players: { id: string; name: string | null; gender?: Tee | null } | null;
+  players:
+    | { id: string; name: string | null; gender?: Tee | null }
+    | { id: string; name: string | null; gender?: Tee | null }[]
+    | null;
 };
 
 type RoundPlayerRow = {
@@ -61,6 +66,11 @@ type ParRow = {
   par: number;
   stroke_index: number;
 };
+
+function asSingle<T>(v: T | T[] | null | undefined): T | null {
+  if (!v) return null;
+  return Array.isArray(v) ? v[0] ?? null : v;
+}
 
 function courseName(r: RoundRow | null) {
   const c: any = r?.courses;
@@ -207,7 +217,6 @@ type GenerationDiagnostics = {
   leftoversMale: number;
   leftoversFemale: number;
   notes: string[];
-  // for display:
   groups: Array<{
     groupNo: number;
     groupId?: string;
@@ -243,7 +252,6 @@ export default function MobileRoundTeeTimesPage() {
     setLoading(true);
     setErrorMsg("");
 
-    // Determine final round id + round index by round_no (fallback created_at)
     const { data: allRounds, error: allRoundsErr } = await supabase
       .from("rounds")
       .select("id,round_no,created_at")
@@ -264,7 +272,6 @@ export default function MobileRoundTeeTimesPage() {
     const last = rr.length ? rr[rr.length - 1] : null;
     setFinalRoundId(last ? String(last.id) : "");
 
-    // Round header info (date + course)
     const { data: rData, error: rErr } = await supabase
       .from("rounds")
       .select("id,created_at,round_no,courses(name)")
@@ -278,7 +285,6 @@ export default function MobileRoundTeeTimesPage() {
     }
     setRound(rData as RoundRow);
 
-    // Tee-time groups
     const { data: gData, error: gErr } = await supabase
       .from("round_groups")
       .select("id,group_no,tee_time,start_hole,notes")
@@ -294,7 +300,6 @@ export default function MobileRoundTeeTimesPage() {
 
     const groupIds = (gData ?? []).map((g: any) => String(g.id));
 
-    // Group players (include seat for stable order)
     if (groupIds.length) {
       const { data: mData, error: mErr } = await supabase
         .from("round_group_players")
@@ -312,7 +317,6 @@ export default function MobileRoundTeeTimesPage() {
       setMembers([]);
     }
 
-    // Playing handicaps (for display)
     const { data: rpData, error: rpErr } = await supabase
       .from("round_players")
       .select("player_id,playing_handicap")
@@ -359,14 +363,13 @@ export default function MobileRoundTeeTimesPage() {
       if (!map[m.group_id]) map[m.group_id] = [];
       map[m.group_id].push(m);
     }
-    // ensure stable ordering within group (seat -> name -> id)
     for (const gid of Object.keys(map)) {
       map[gid].sort((a, b) => {
         const as = a.seat ?? 9999;
         const bs = b.seat ?? 9999;
         if (as !== bs) return as - bs;
-        const an = safeStr(Array.isArray(a.players) ? a.players?.[0]?.name : (a.players as any)?.name, "");
-        const bn = safeStr(Array.isArray(b.players) ? b.players?.[0]?.name : (b.players as any)?.name, "");
+        const an = safeStr(asSingle(a.players as any)?.name, "");
+        const bn = safeStr(asSingle(b.players as any)?.name, "");
         if (an !== bn) return an.localeCompare(bn);
         return String(a.player_id).localeCompare(String(b.player_id));
       });
@@ -397,7 +400,6 @@ export default function MobileRoundTeeTimesPage() {
     setGenerating(true);
 
     try {
-      // 1) Load rounds (for totals), players (tour), round_players, scores, pars.
       const { data: roundsData, error: roundsErr } = await supabase
         .from("rounds")
         .select("id,round_no,created_at,course_id")
@@ -413,7 +415,6 @@ export default function MobileRoundTeeTimesPage() {
       const roundIds = rounds.map((r) => String(r.id));
       const courseIds = Array.from(new Set(rounds.map((r) => r.course_id).filter(Boolean))).map((x) => String(x));
 
-      // Tour players (join players)
       const { data: tpData, error: tpErr } = await supabase
         .from("tour_players")
         .select("player_id,players(id,name,gender)")
@@ -422,9 +423,10 @@ export default function MobileRoundTeeTimesPage() {
 
       if (tpErr) throw tpErr;
 
-      const joined = (tpData ?? []) as TourPlayerJoinRow[];
+      const joined = (tpData ?? []) as unknown as TourPlayerJoinRow[];
+
       const players: PlayerRow[] = joined
-        .map((row) => row.players)
+        .map((row) => asSingle(row.players))
         .filter((p): p is NonNullable<typeof p> => !!p)
         .map((p) => ({
           id: String(p.id),
@@ -436,7 +438,6 @@ export default function MobileRoundTeeTimesPage() {
 
       const playerIds = players.map((p) => p.id);
 
-      // round_players
       const { data: rpData, error: rpErr } = await supabase
         .from("round_players")
         .select("round_id,player_id,playing,playing_handicap")
@@ -455,7 +456,6 @@ export default function MobileRoundTeeTimesPage() {
       const rpByRoundPlayer = new Map<string, RoundPlayerRow>();
       for (const rp of roundPlayers) rpByRoundPlayer.set(`${rp.round_id}|${rp.player_id}`, rp);
 
-      // pars (both tees)
       const pars: ParRow[] = [];
       if (courseIds.length) {
         const { data: pData, error: pErr } = await supabase
@@ -487,14 +487,9 @@ export default function MobileRoundTeeTimesPage() {
         byTee.get(p.tee)!.set(p.hole_number, { par: p.par, si: p.stroke_index });
       }
 
-      // scores (all rounds, paginated)
       const scores = await fetchAllScores(roundIds, playerIds);
       const scoreByRoundPlayerHole = new Map<string, ScoreRow>();
       for (const s of scores) scoreByRoundPlayerHole.set(`${s.round_id}|${s.player_id}|${Number(s.hole_number)}`, s);
-
-      // 2) Compute tour totals exactly like leaderboard individualRows (ALL rounds, using rp.playing + pars per tee)
-      const playerById = new Map<string, PlayerRow>();
-      for (const p of players) playerById.set(p.id, p);
 
       const tourTotals: Array<{ playerId: string; name: string; gender: Tee; tourTotal: number }> = [];
 
@@ -535,7 +530,6 @@ export default function MobileRoundTeeTimesPage() {
         tourTotals.push({ playerId: p.id, name: p.name, gender: p.gender, tourTotal: total });
       }
 
-      // Best -> worst (same direction as leaderboard)
       tourTotals.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
 
       const malesBestToWorst = tourTotals.filter((x) => normalizeTee(x.gender) !== "F");
@@ -552,8 +546,6 @@ export default function MobileRoundTeeTimesPage() {
         );
       }
 
-      // 3) Build groups worst -> best:
-      // lists are best->worst; worst are at the end.
       const builtGroups: Array<{
         groupNo: number;
         seats: Array<{ seat: number; playerId: string; name: string; gender: Tee; tourTotal: number }>;
@@ -565,7 +557,6 @@ export default function MobileRoundTeeTimesPage() {
         const f1 = femalesBestToWorst[femaleCount - 1 - i * 2];
         const f2 = femalesBestToWorst[femaleCount - 2 - i * 2];
 
-        // seat order deterministic: 1-2 = men, 3-4 = women
         builtGroups.push({
           groupNo: i + 1,
           seats: [
@@ -587,8 +578,6 @@ export default function MobileRoundTeeTimesPage() {
         );
       }
 
-      // 4) Replace Round 7 tee times: delete then insert.
-      // Delete players for this round (safe because round_group_players includes round_id)
       const { error: delPlayersErr } = await supabase.from("round_group_players").delete().eq("round_id", roundId);
       if (delPlayersErr) throw delPlayersErr;
 
@@ -601,7 +590,7 @@ export default function MobileRoundTeeTimesPage() {
         round_id: roundId,
         group_no: g.groupNo,
         tee_time: null as any,
-        start_hole: 1, // required (NOT NULL)
+        start_hole: 1,
         notes: "Generated from Individual leaderboard (worst→best; 2M+2F).",
         updated_at: nowIso,
       }));
@@ -617,7 +606,6 @@ export default function MobileRoundTeeTimesPage() {
       const groupIdByNo = new Map<number, string>();
       for (const row of (insertedGroups ?? []) as any[]) groupIdByNo.set(Number(row.group_no), String(row.id));
 
-      // Insert group players with seat
       const playersInsertPayload: Array<{ round_id: string; group_id: string; player_id: string; seat: number }> = [];
 
       for (const g of builtGroups) {
@@ -659,7 +647,6 @@ export default function MobileRoundTeeTimesPage() {
       setDiag(diagOut);
       setShowDiagnostics(true);
 
-      // Reload tee times from DB so the page reflects exactly what was saved.
       await loadTeeTimes();
     } catch (e: any) {
       setGenError(e?.message ?? "Failed to generate tee times.");
@@ -682,7 +669,6 @@ export default function MobileRoundTeeTimesPage() {
         </div>
 
         <div className="mx-auto max-w-md px-4 pb-3">
-          {/* Generate button (final round only) */}
           <div className="space-y-2">
             <div className="rounded-2xl border border-gray-200 bg-white p-3 text-xs text-gray-700">
               <div className="font-semibold text-gray-900">Final round tee-time generator (Japan Tour)</div>
@@ -821,26 +807,16 @@ export default function MobileRoundTeeTimesPage() {
             {groups.map((g) => {
               const timeLabel = fmtTime(g.tee_time) || "TBD";
               const title = `Group ${g.group_no} — ${timeLabel}`;
-              const startHole =
-                g.start_hole ? `Starting Hole: ${ordinal(g.start_hole)}` : "";
+              const startHole = g.start_hole ? `Starting Hole: ${ordinal(g.start_hole)}` : "";
 
               return (
-                <div
-                  key={g.id}
-                  className="rounded-2xl border border-gray-200 bg-white shadow-sm"
-                >
+                <div key={g.id} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                   <div className="px-4 py-3 border-b border-gray-100">
                     <div className="text-sm font-extrabold">{title}</div>
                     {startHole ? (
-                      <div className="mt-1 text-xs font-semibold text-gray-600">
-                        {startHole}
-                      </div>
+                      <div className="mt-1 text-xs font-semibold text-gray-600">{startHole}</div>
                     ) : null}
-                    {g.notes ? (
-                      <div className="mt-1 text-[11px] text-gray-500">
-                        {g.notes}
-                      </div>
-                    ) : null}
+                    {g.notes ? <div className="mt-1 text-[11px] text-gray-500">{g.notes}</div> : null}
                   </div>
 
                   <div className="px-4 py-3 space-y-2">
