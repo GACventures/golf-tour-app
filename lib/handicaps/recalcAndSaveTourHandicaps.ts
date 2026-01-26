@@ -100,7 +100,8 @@ function cmpNullableNum(a: number | null, b: number | null) {
 
 /**
  * Rehandicap rule:
- * - Calculates sequential PH round-by-round (stopping at first incomplete round).
+ * - Calculates sequential PH round-by-round.
+ * - NO completeness gating: we ALWAYS propagate forward after any save.
  * - IMPORTANT: When fromRoundId is provided, we only WRITE (upsert) PH for rounds AFTER that round.
  *   i.e., saving scores for Round N updates N+1, N+2... only.
  */
@@ -119,7 +120,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
     .maybeSingle();
 
   if (tourErr) return { ok: false, error: tourErr.message };
-
   const rehandicappingEnabled = (tourRow as any)?.rehandicapping_enabled === true;
 
   // 1) load rounds
@@ -154,18 +154,14 @@ export async function recalcAndSaveTourHandicaps(opts: {
   });
 
   // Determine "trigger index" (round being scored)
-  // If we can find it, we only WRITE rounds with index > triggerIndex.
   let triggerIndex: number | null = null;
   if (fromRoundId) {
     const idx = rounds.findIndex((r) => String(r.id) === String(fromRoundId));
     triggerIndex = idx >= 0 ? idx : null;
   }
 
-  // If triggerIndex is found: target rounds are AFTER it.
-  // If not found (or not provided): default to the old behavior (update all rounds).
+  // If triggerIndex found: target rounds are AFTER it. Else update all rounds.
   const targetRounds = triggerIndex == null ? rounds : rounds.slice(triggerIndex + 1);
-
-  // If we have a valid trigger and there are no future rounds, do nothing
   if (triggerIndex != null && targetRounds.length === 0) return { ok: true, updated: 0 };
 
   const roundIds = rounds.map((r) => r.id);
@@ -241,8 +237,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
     defaultTeeByPlayer[p.id] = p.gender ? normalizeTee(p.gender) : "M";
   }
 
-  // If rehandicapping is OFF: reset PHs back to starting handicap
-  // IMPORTANT: if fromRoundId is provided, only reset FUTURE rounds
+  // If rehandicapping is OFF: reset PHs back to starting handicap (future only if fromRoundId provided)
   if (!rehandicappingEnabled) {
     const payload: Array<{
       round_id: string;
@@ -329,27 +324,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
     }
   }
 
-  function isRoundComplete(roundId: string): boolean {
-    const playingPlayers = players.filter((pl) => playingMap[roundId]?.[pl.id] === true);
-    if (playingPlayers.length === 0) return false;
-
-    for (const pl of playingPlayers) {
-      for (let hole = 1; hole <= 18; hole++) {
-        const raw = scoreMap[roundId]?.[pl.id]?.[hole] ?? "";
-        if (!raw) return false;
-      }
-    }
-    return true;
-  }
-
-  // Compute PH per round/player (sequential)
-  const phByRoundPlayer: Record<string, Record<string, number>> = {};
-
-  // init Round 1 PH = SH
-  const r1 = rounds[0];
-  phByRoundPlayer[r1.id] = {};
-  for (const p of players) phByRoundPlayer[r1.id][p.id] = startingHcpByPlayer[p.id];
-
   const teeForRoundPlayer = (roundId: string, playerId: string): Tee => {
     const existing = rpByKey.get(rpKey(roundId, playerId));
     if (existing?.tee) return normalizeTee(existing.tee);
@@ -377,7 +351,14 @@ export async function recalcAndSaveTourHandicaps(opts: {
     return total;
   };
 
-  // sequential recalculation; stop at first incomplete round
+  // Compute PH per round/player (sequential) — ALWAYS propagate forward (no completeness gating)
+  const phByRoundPlayer: Record<string, Record<string, number>> = {};
+
+  // Round 1 PH = starting handicap
+  const r1 = rounds[0];
+  phByRoundPlayer[r1.id] = {};
+  for (const p of players) phByRoundPlayer[r1.id][p.id] = startingHcpByPlayer[p.id];
+
   for (let i = 0; i < rounds.length; i++) {
     const r = rounds[i];
     const next = rounds[i + 1] ?? null;
@@ -391,12 +372,19 @@ export async function recalcAndSaveTourHandicaps(opts: {
       }
     }
 
-    // If no course, we can't compute stableford reliably → stop forward calc
-    if (!r.course_id) break;
+    // If no next round, we're done propagating
+    if (!next) continue;
 
-    // Only advance handicaps if the round is complete (for all playing players)
-    if (!isRoundComplete(r.id)) break;
+    // Default: carry forward
+    phByRoundPlayer[next.id] = {};
+    for (const p of players) {
+      phByRoundPlayer[next.id][p.id] = phByRoundPlayer[r.id][p.id];
+    }
 
+    // If no course for this round, we cannot compute any adjustment — keep carry-forward and continue
+    if (!r.course_id) continue;
+
+    // Compute played scores for this round (missing holes contribute 0 via raw="")
     const playedScores: number[] = [];
     const scoreByPlayer: Record<string, number | null> = {};
 
@@ -415,32 +403,33 @@ export async function recalcAndSaveTourHandicaps(opts: {
     const avgRounded =
       playedScores.length > 0 ? roundHalfUp(playedScores.reduce((s, v) => s + v, 0) / playedScores.length) : null;
 
-    if (next) {
-      phByRoundPlayer[next.id] = {};
-      for (const p of players) {
-        const prevPH = phByRoundPlayer[r.id][p.id];
-        const playedPrev = playingMap[r.id]?.[p.id] === true;
+    // If nobody is "playing", nothing to adjust — keep carry-forward and continue
+    if (avgRounded === null) continue;
 
-        if (!playedPrev || avgRounded === null) {
-          phByRoundPlayer[next.id][p.id] = prevPH;
-          continue;
-        }
+    // Apply rule to compute next round PH
+    for (const p of players) {
+      const prevPH = phByRoundPlayer[r.id][p.id];
+      const playedPrev = playingMap[r.id]?.[p.id] === true;
 
-        const prevScore = scoreByPlayer[p.id];
-        if (prevScore === null) {
-          phByRoundPlayer[next.id][p.id] = prevPH;
-          continue;
-        }
-
-        const diff = (avgRounded - prevScore) / 3;
-        const raw = roundHalfUp(prevPH + diff);
-
-        const sh = startingHcpByPlayer[p.id];
-        const max = sh + 3;
-        const min = ceilHalfStart(sh);
-
-        phByRoundPlayer[next.id][p.id] = clamp(raw, min, max);
+      if (!playedPrev) {
+        phByRoundPlayer[next.id][p.id] = prevPH;
+        continue;
       }
+
+      const prevScore = scoreByPlayer[p.id];
+      if (prevScore === null) {
+        phByRoundPlayer[next.id][p.id] = prevPH;
+        continue;
+      }
+
+      const diff = (avgRounded - prevScore) / 3;
+      const raw = roundHalfUp(prevPH + diff);
+
+      const sh = startingHcpByPlayer[p.id];
+      const max = sh + 3;
+      const min = ceilHalfStart(sh);
+
+      phByRoundPlayer[next.id][p.id] = clamp(raw, min, max);
     }
   }
 
