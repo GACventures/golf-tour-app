@@ -102,12 +102,10 @@ export type RehandicapDebug = {
   triggerIndex: number | null;
   targetRoundsCount: number;
   roundsOrdered: Array<{ id: string; round_no: number | null; course_id: string | null }>;
-  stopReason?: string;
-
-  // NEW: confirm we fetched everything we need
-  expectedScoreRows: number;
-  fetchedScoreRows: number;
-
+  expectedScoreRows?: number;
+  fetchedScoreRows?: number;
+  fetchedScorePages?: number;
+  warnings?: string[];
   perRound: Array<{
     round_no: number | null;
     round_id: string;
@@ -126,10 +124,15 @@ export type RehandicapDebug = {
 };
 
 /**
- * Rehandicap rule:
+ * Rehandicap rule (UPDATED):
  * - Calculates sequential PH round-by-round.
- * - Uses ONLY players who are marked playing=true AND have ALL 18 holes filled for that round.
- * - If a player is not "complete" for a round, their PH is carried forward unchanged.
+ * - A player is "complete" if they have a (non-empty) value for all 18 holes (including "P").
+ * - If a player is not complete for a round, their PH is carried forward unchanged.
+ *
+ * IMPORTANT CHANGE:
+ * - We DO NOT stop if a round has 0 complete players.
+ *   Instead avgRounded=null and ALL PHs simply carry forward to the next round, and we keep going.
+ *
  * - When fromRoundId is provided, we only WRITE (upsert) PH for rounds AFTER that round.
  */
 export async function recalcAndSaveTourHandicaps(opts: {
@@ -146,9 +149,8 @@ export async function recalcAndSaveTourHandicaps(opts: {
     triggerIndex: null,
     targetRoundsCount: 0,
     roundsOrdered: [],
-    expectedScoreRows: 0,
-    fetchedScoreRows: 0,
     perRound: [],
+    warnings: [],
   };
 
   // 0) Read tour flag
@@ -249,8 +251,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
   if (players.length === 0) return { ok: true, updated: 0, debug };
   const playerIds = players.map((p) => p.id);
 
-  debug.expectedScoreRows = rounds.length * players.length * 18;
-
   // 3) round_players
   const { data: rpData, error: rpErr } = await supabase
     .from("round_players")
@@ -339,18 +339,64 @@ export async function recalcAndSaveTourHandicaps(opts: {
     parsByCourseTee[cid][tee][hole] = { par: Number(row.par), si: Number(row.stroke_index) };
   }
 
-  // 5) scores  (IMPORTANT: fetch ALL rows via range)
-  const { data: scoresData, error: scoresErr } = await supabase
-    .from("scores")
-    .select("round_id,player_id,hole_number,strokes,pickup")
-    .in("round_id", roundIds)
-    .in("player_id", playerIds)
-    .range(0, 10000); // 7*20*18=2520, so this safely covers it
+  // 5) scores (PAGINATED to avoid 1000 row cap)
+  const expectedScoreRows = rounds.length * players.length * 18;
+  debug.expectedScoreRows = expectedScoreRows;
 
-  if (scoresErr) return { ok: false, error: scoresErr.message, debug };
-  const scores = (scoresData ?? []) as ScoreRow[];
+  async function fetchAllScoresPaged(): Promise<ScoreRow[]> {
+    const pageSize = 1000;
+    let from = 0;
+    let page = 0;
+    const out: ScoreRow[] = [];
+
+    while (true) {
+      page += 1;
+
+      const { data, error } = await supabase
+        .from("scores")
+        .select("round_id,player_id,hole_number,strokes,pickup")
+        .in("round_id", roundIds)
+        .in("player_id", playerIds)
+        .order("round_id", { ascending: true })
+        .order("player_id", { ascending: true })
+        .order("hole_number", { ascending: true })
+        .range(from, from + pageSize - 1);
+
+      if (error) throw error;
+
+      const rows = (data ?? []) as ScoreRow[];
+      out.push(...rows);
+
+      if (rows.length < pageSize) {
+        debug.fetchedScorePages = page;
+        return out;
+      }
+
+      from += pageSize;
+
+      // safety guard (should never hit)
+      if (page > 50_000) {
+        debug.warnings?.push("Score pagination safety guard triggered (unexpected).");
+        debug.fetchedScorePages = page;
+        return out;
+      }
+    }
+  }
+
+  let scores: ScoreRow[] = [];
+  try {
+    scores = await fetchAllScoresPaged();
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? "Failed to fetch scores (paged).", debug };
+  }
 
   debug.fetchedScoreRows = scores.length;
+
+  if (scores.length < expectedScoreRows) {
+    debug.warnings?.push(
+      `Fetched fewer score rows than expected (${scores.length} < ${expectedScoreRows}). This can occur if some score rows do not exist in DB for some players/rounds.`
+    );
+  }
 
   const scoreMap: Record<string, Record<string, Record<number, string>>> = {};
   for (const s of scores) {
@@ -364,9 +410,9 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
   // playing map
   const playingMap: Record<string, Record<string, boolean>> = {};
-  for (const p of players) {
-    for (const r of rounds) {
-      if (!playingMap[r.id]) playingMap[r.id] = {};
+  for (const r of rounds) {
+    playingMap[r.id] = {};
+    for (const p of players) {
       const existing = rpByKey.get(rpKey(r.id, p.id));
       playingMap[r.id][p.id] = existing?.playing === true;
     }
@@ -382,14 +428,12 @@ export async function recalcAndSaveTourHandicaps(opts: {
     let c = 0;
     for (let hole = 1; hole <= 18; hole++) {
       const raw = scoreMap[roundId]?.[playerId]?.[hole] ?? "";
-      if (raw) c++;
+      if (raw) c += 1;
     }
     return c;
   };
 
-  const isPlayerComplete = (roundId: string, playerId: string): boolean => {
-    return holesFilledCount(roundId, playerId) === 18;
-  };
+  const isPlayerComplete = (roundId: string, playerId: string): boolean => holesFilledCount(roundId, playerId) === 18;
 
   const stablefordTotal = (roundId: string, courseId: string, playerId: string, ph: number): number => {
     const cid = String(courseId);
@@ -415,15 +459,17 @@ export async function recalcAndSaveTourHandicaps(opts: {
   // sequential PH map
   const phByRoundPlayer: Record<string, Record<string, number>> = {};
 
-  // init round 1
+  // init first round PHs = starting
   const r1 = rounds[0];
   phByRoundPlayer[r1.id] = {};
   for (const p of players) phByRoundPlayer[r1.id][p.id] = startingHcpByPlayer[p.id];
 
+  // MAIN LOOP (NO EARLY STOP)
   for (let i = 0; i < rounds.length; i++) {
     const r = rounds[i];
     const next = rounds[i + 1] ?? null;
 
+    // ensure current round PH map exists (carry forward from previous round if needed)
     if (!phByRoundPlayer[r.id]) {
       phByRoundPlayer[r.id] = {};
       const prev = rounds[i - 1];
@@ -432,22 +478,19 @@ export async function recalcAndSaveTourHandicaps(opts: {
       }
     }
 
-    if (!r.course_id) {
-      debug.stopReason = `Stop: round ${r.round_no ?? "?"} has no course_id`;
-      break;
-    }
-
     const playedPlayers = players.filter((pl) => playingMap[r.id]?.[pl.id] === true);
     const completePlayers = playedPlayers.filter((pl) => isPlayerComplete(r.id, pl.id));
-
     const playedCount = playedPlayers.length;
     const completeCount = completePlayers.length;
 
-    // sample: show up to 6 played players even if none complete
-    const samplePlayers = (completePlayers.length > 0 ? completePlayers : playedPlayers).slice(0, 6);
+    // If no course_id OR no pars for course, we cannot calculate stableford; carry forward.
+    const canScore =
+      !!r.course_id && !!parsByCourseTee[String(r.course_id)] && (Object.keys(parsByCourseTee[String(r.course_id)]?.M ?? {}).length > 0);
 
-    if (completeCount === 0) {
-      debug.stopReason = `Stop: round ${r.round_no ?? "?"} has 0 complete players (of ${playedCount} playing)`;
+    if (!canScore) {
+      if (!r.course_id) debug.warnings?.push(`Round ${r.round_no ?? "?"} has no course_id; PH carried forward.`);
+      else debug.warnings?.push(`Round ${r.round_no ?? "?"} missing pars for its course; PH carried forward.`);
+
       debug.perRound.push({
         round_no: r.round_no ?? null,
         round_id: r.id,
@@ -455,7 +498,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
         playingCount: playedCount,
         completeCount,
         avgRounded: null,
-        sample: samplePlayers.map((pl) => ({
+        sample: completePlayers.slice(0, 6).map((pl) => ({
           player_id: pl.id,
           prevPH: phByRoundPlayer[r.id][pl.id],
           holesFilled: holesFilledCount(r.id, pl.id),
@@ -463,28 +506,55 @@ export async function recalcAndSaveTourHandicaps(opts: {
           nextPH: null,
         })),
       });
-      break;
+
+      if (next) {
+        phByRoundPlayer[next.id] = {};
+        for (const p of players) {
+          phByRoundPlayer[next.id][p.id] = phByRoundPlayer[r.id][p.id];
+        }
+      }
+      continue;
     }
 
+    // compute stableford totals for complete players only
     const scoreByPlayer: Record<string, number | null> = {};
     const playedScores: number[] = [];
 
     for (const p of players) {
       const isPlaying = playingMap[r.id]?.[p.id] === true;
       const isComplete = isPlaying && isPlayerComplete(r.id, p.id);
+
       if (!isComplete) {
         scoreByPlayer[p.id] = null;
         continue;
       }
 
       const ph = phByRoundPlayer[r.id][p.id];
-      const sc = stablefordTotal(r.id, r.course_id, p.id, ph);
+      const sc = stablefordTotal(r.id, String(r.course_id), p.id, ph);
       scoreByPlayer[p.id] = sc;
       playedScores.push(sc);
     }
 
+    // If no complete players, avgRounded=null, carry forward (but DO NOT STOP)
     const avgRounded =
       playedScores.length > 0 ? roundHalfUp(playedScores.reduce((s, v) => s + v, 0) / playedScores.length) : null;
+
+    // debug sample (use up to 6 players from the tour list, not only completes, so you can see holesFilled)
+    const samplePlayers = players.slice(0, 6);
+    const sample = samplePlayers.map((pl) => {
+      const hf = holesFilledCount(r.id, pl.id);
+      const prevPH = phByRoundPlayer[r.id][pl.id];
+      const isPlaying = playingMap[r.id]?.[pl.id] === true;
+      const isComplete = isPlaying && hf === 18;
+      const st = isComplete ? (scoreByPlayer[pl.id] ?? null) : null;
+      return {
+        player_id: pl.id,
+        prevPH,
+        holesFilled: hf,
+        stableford: st,
+        nextPH: null as number | null,
+      };
+    });
 
     debug.perRound.push({
       round_no: r.round_no ?? null,
@@ -493,23 +563,19 @@ export async function recalcAndSaveTourHandicaps(opts: {
       playingCount: playedCount,
       completeCount,
       avgRounded,
-      sample: samplePlayers.map((pl) => ({
-        player_id: pl.id,
-        prevPH: phByRoundPlayer[r.id][pl.id],
-        holesFilled: holesFilledCount(r.id, pl.id),
-        stableford: scoreByPlayer[pl.id],
-        nextPH: null,
-      })),
+      sample,
     });
 
     if (next) {
       phByRoundPlayer[next.id] = {};
+
       for (const p of players) {
         const prevPH = phByRoundPlayer[r.id][p.id];
 
         const isPlaying = playingMap[r.id]?.[p.id] === true;
         const isComplete = isPlaying && isPlayerComplete(r.id, p.id);
 
+        // carry forward unless complete and avg exists
         if (!isComplete || avgRounded === null) {
           phByRoundPlayer[next.id][p.id] = prevPH;
           continue;
@@ -531,6 +597,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
         const nextPH = clamp(raw, min, max);
         phByRoundPlayer[next.id][p.id] = nextPH;
 
+        // fill debug sample nextPH if present
         const d = debug.perRound[debug.perRound.length - 1];
         const s = d?.sample?.find((x) => x.player_id === p.id);
         if (s) s.nextPH = nextPH;
