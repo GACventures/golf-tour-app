@@ -138,6 +138,29 @@ type HoleFxState =
   | { stage: "inSnap"; dir: "next" | "prev" }
   | { stage: "in"; dir: "next" | "prev" };
 
+// === Rehandicap debug types ===
+type RehandicapDebugRow = {
+  round_no: number | null;
+  round_id: string;
+  player_id: string;
+  playing: boolean;
+  tee: string | null;
+  playing_handicap: number | null;
+};
+
+type RehandicapDebugState = {
+  ts: string;
+  tourId: string;
+  fromRoundId: string;
+  toursRehandicappingEnabled: boolean | null;
+
+  recalcResult?: any;
+  error?: string;
+
+  before?: RehandicapDebugRow[];
+  after?: RehandicapDebugRow[];
+};
+
 export default function MobileScoreEntryPage() {
   const params = useParams();
   const sp = useSearchParams();
@@ -168,6 +191,10 @@ export default function MobileScoreEntryPage() {
 
   // DEBUG banner to prove rehandicapping is called
   const [rehandicapMsg, setRehandicapMsg] = useState<string>("");
+
+  // === NEW: On-screen rehandicap debug panel ===
+  const [rehDebug, setRehDebug] = useState<RehandicapDebugState | null>(null);
+  const [rehDebugOpen, setRehDebugOpen] = useState<boolean>(true);
 
   const [hole, setHole] = useState(1);
 
@@ -252,17 +279,14 @@ export default function MobileScoreEntryPage() {
     }
 
     if (holeFx.stage === "out") {
-      // Consistent mapping:
-      // next (hole++) should move content right->left => current slides left (negative)
-      // prev (hole--) should move content left->right => current slides right (positive)
+      // next (hole++) => slide left
+      // prev (hole--) => slide right
       const x = holeFx.dir === "next" ? `-${off}` : off;
       return { transform: `translateX(${x})`, transition: base, willChange: "transform" };
     }
 
     if (holeFx.stage === "inSnap") {
-      // Start new content off-screen in the direction it should come from:
-      // next (hole++) comes from right => +off
-      // prev (hole--) comes from left => -off
+      // next comes from right; prev comes from left
       const x = holeFx.dir === "next" ? off : `-${off}`;
       return { transform: `translateX(${x})`, transition: "none", willChange: "transform" };
     }
@@ -317,6 +341,86 @@ export default function MobileScoreEntryPage() {
     setRoundPlayers(rpRows);
   }
 
+  // === NEW: pull a snapshot of future PH values so you can see before/after ===
+  async function fetchFuturePHDebug(opts: {
+    tourId: string;
+    fromRoundId: string;
+    takeRounds?: number;
+    takePlayers?: number;
+  }): Promise<RehandicapDebugRow[]> {
+    const { tourId, fromRoundId, takeRounds = 3, takePlayers = 6 } = opts;
+
+    const { data: rounds, error: rErr } = await supabase
+      .from("rounds")
+      .select("id,round_no,played_on,created_at")
+      .eq("tour_id", tourId);
+
+    if (rErr) throw new Error(`rehDebug rounds error: ${rErr.message}`);
+
+    const ordered = [...(rounds ?? [])].sort((a: any, b: any) => {
+      const an = a.round_no ?? 9999;
+      const bn = b.round_no ?? 9999;
+      if (an !== bn) return an - bn;
+
+      const ap = a.played_on ?? "";
+      const bp = b.played_on ?? "";
+      if (ap && bp && ap !== bp) return ap < bp ? -1 : 1;
+
+      const ac = a.created_at ?? "";
+      const bc = b.created_at ?? "";
+      if (ac && bc && ac !== bc) return ac < bc ? -1 : 1;
+
+      return String(a.id).localeCompare(String(b.id));
+    });
+
+    const idx = ordered.findIndex((x: any) => String(x.id) === String(fromRoundId));
+    const futureRounds = idx >= 0 ? ordered.slice(idx + 1, idx + 1 + takeRounds) : ordered.slice(0, takeRounds);
+
+    if (futureRounds.length === 0) return [];
+
+    const futureRoundIds = futureRounds.map((x: any) => x.id);
+
+    const { data: rpAny, error: rpErr } = await supabase
+      .from("round_players")
+      .select("round_id,player_id,playing,playing_handicap,tee")
+      .in("round_id", futureRoundIds);
+
+    if (rpErr) throw new Error(`rehDebug round_players error: ${rpErr.message}`);
+
+    const rows = (rpAny ?? []) as any[];
+
+    // pick first N unique players
+    const uniq: string[] = [];
+    for (const row of rows) {
+      const pid = String(row.player_id);
+      if (!uniq.includes(pid)) uniq.push(pid);
+      if (uniq.length >= takePlayers) break;
+    }
+    const picked = new Set(uniq);
+
+    const roundNoById: Record<string, number | null> = {};
+    for (const fr of futureRounds) roundNoById[String(fr.id)] = fr.round_no ?? null;
+
+    const filtered: RehandicapDebugRow[] = rows
+      .filter((x) => picked.has(String(x.player_id)))
+      .map((x) => ({
+        round_no: roundNoById[String(x.round_id)] ?? null,
+        round_id: String(x.round_id),
+        player_id: String(x.player_id),
+        playing: x.playing === true,
+        tee: x.tee == null ? null : String(x.tee),
+        playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
+      }))
+      .sort((a, b) => {
+        const ar = a.round_no ?? 9999;
+        const br = b.round_no ?? 9999;
+        if (ar !== br) return ar - br;
+        return a.player_id.localeCompare(b.player_id);
+      });
+
+    return filtered;
+  }
+
   // Load
   useEffect(() => {
     if (!roundId) return;
@@ -328,6 +432,7 @@ export default function MobileScoreEntryPage() {
       setSaveErr("");
       setSavedMsg("");
       setRehandicapMsg("");
+      setRehDebug(null);
 
       try {
         // Round
@@ -552,6 +657,7 @@ export default function MobileScoreEntryPage() {
     setSaveErr("");
     setSavedMsg("");
     setRehandicapMsg("");
+    setRehDebug(null);
 
     if (!roundId) return;
     if (isLocked) {
@@ -610,20 +716,51 @@ export default function MobileScoreEntryPage() {
         if (error) throw error;
       }
 
-      // Trigger rehandicap recalculation for the tour (DEBUG banner on page)
+      // Trigger rehandicap recalculation for the tour (DEBUG banner + DEBUG panel)
       try {
         const tid = await fetchTourIdForRound(roundId);
         if (tid) {
           setRehandicapMsg("Rehandicapping running…");
 
-          const res = await recalcAndSaveTourHandicaps({
-  supabase,
-  tourId: tid,
-  fromRoundId: roundId,
-});
+          // Read tour toggle
+          const { data: tourRow, error: tErr } = await supabase
+            .from("tours")
+            .select("id,rehandicapping_enabled")
+            .eq("id", tid)
+            .maybeSingle();
 
+          if (tErr) throw tErr;
+
+          const toursRehandicappingEnabled =
+            tourRow?.rehandicapping_enabled === true ? true : tourRow?.rehandicapping_enabled === false ? false : null;
+
+          // Snapshot BEFORE (future rounds)
+          const before = await fetchFuturePHDebug({ tourId: tid, fromRoundId: roundId });
+
+          // Run recalc
+          const res = await recalcAndSaveTourHandicaps({
+            supabase,
+            tourId: tid,
+            fromRoundId: roundId,
+          });
+
+          // Snapshot AFTER (future rounds)
+          const after = await fetchFuturePHDebug({ tourId: tid, fromRoundId: roundId });
 
           const ts = new Date().toLocaleTimeString();
+
+          const dbg: RehandicapDebugState = {
+            ts: new Date().toISOString(),
+            tourId: tid,
+            fromRoundId: roundId,
+            toursRehandicappingEnabled,
+            recalcResult: res,
+            before,
+            after,
+          };
+
+          console.log("[rehDebug]", dbg);
+          setRehDebug(dbg);
 
           if (!res.ok) {
             setRehandicapMsg(`Rehandicapping FAILED @ ${ts}: ${res.error}`);
@@ -639,6 +776,16 @@ export default function MobileScoreEntryPage() {
         const ts = new Date().toLocaleTimeString();
         setRehandicapMsg(`Rehandicapping ERROR @ ${ts}: ${e?.message ?? "unknown"}`);
         setSaveErr(`Saved, but rehandicap error: ${e?.message ?? "unknown"}`);
+
+        const dbg: RehandicapDebugState = {
+          ts: new Date().toISOString(),
+          tourId: "(unknown)",
+          fromRoundId: roundId,
+          toursRehandicappingEnabled: null,
+          error: String(e?.message ?? e),
+        };
+        console.error("[rehDebug error]", e);
+        setRehDebug(dbg);
       }
 
       initialScoresRef.current = { [meId]: { ...(scores[meId] ?? {}) } };
@@ -704,8 +851,8 @@ export default function MobileScoreEntryPage() {
     if (dt > 1200) return;
 
     const threshold = 70;
-    if (dx <= -threshold) animateHoleChange("next"); // swipe right->left => next (consistent right->left animation)
-    if (dx >= threshold) animateHoleChange("prev"); // swipe left->right => prev (consistent left->right animation)
+    if (dx <= -threshold) animateHoleChange("next");
+    if (dx >= threshold) animateHoleChange("prev");
   }
 
   useEffect(() => {
@@ -871,8 +1018,7 @@ export default function MobileScoreEntryPage() {
   }
 
   function HoleBoxEntryOnly() {
-    const holeScale =
-      holePulse === "up" ? 1.22 : holePulse === "down" ? 1.0 : 1.0;
+    const holeScale = holePulse === "up" ? 1.22 : holePulse === "down" ? 1.0 : 1.0;
 
     const holeStyle: React.CSSProperties = {
       transform: `scale(${holeScale})`,
@@ -1079,6 +1225,8 @@ export default function MobileScoreEntryPage() {
     );
   }
 
+  const dirtyNow = isDirty();
+
   // Focus mode screen (layout hides global nav/header)
   return (
     <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden">
@@ -1127,11 +1275,11 @@ export default function MobileScoreEntryPage() {
         </div>
       </div>
 
-      {/* Content area: allow internal scroll within fixed screen */}
+      {/* Content area */}
       <div
         className="px-4 py-3 space-y-3 overflow-y-auto"
         style={{
-          height: "calc(100dvh - 56px - 84px)", // top strip (56) + hole/summary + tabs (approx)
+          height: "calc(100dvh - 56px - 84px)",
         }}
         onTouchStart={tab === "entry" ? onTouchStart : undefined}
         onTouchEnd={tab === "entry" ? onTouchEnd : undefined}
@@ -1143,7 +1291,7 @@ export default function MobileScoreEntryPage() {
 
             <div className="text-xs text-slate-600 text-center">
               Swipe <span className="font-semibold">left/right</span> to change hole.{" "}
-              {dirty ? <span className="text-amber-700 font-semibold">Unsaved (Me)</span> : null}
+              {dirtyNow ? <span className="text-amber-700 font-semibold">Unsaved (Me)</span> : null}
               {savedMsg ? <span className="text-green-700 font-semibold"> {savedMsg}</span> : null}
               {saveErr ? <span className="text-red-600 font-semibold"> {saveErr}</span> : null}
               {rehandicapMsg ? <span className="text-sky-700 font-semibold"> {rehandicapMsg}</span> : null}
@@ -1153,11 +1301,142 @@ export default function MobileScoreEntryPage() {
               Note: Buddy scores are for viewing/entry only and are not saved.
             </div>
 
+            {/* === NEW: Rehandicap debug panel === */}
+            {rehDebug ? (
+              <div className="mt-3 rounded-lg border border-slate-300 bg-slate-50 p-3 text-[11px] text-slate-900">
+                <div className="flex items-center justify-between">
+                  <div className="font-bold">Rehandicapping Debug</div>
+                  <button
+                    type="button"
+                    className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold"
+                    onClick={() => setRehDebugOpen((v) => !v)}
+                  >
+                    {rehDebugOpen ? "Hide" : "Show"}
+                  </button>
+                </div>
+
+                {rehDebugOpen ? (
+                  <div className="mt-2 space-y-2">
+                    <div className="space-y-1">
+                      <div>
+                        <span className="font-semibold">ts:</span> {rehDebug.ts}
+                      </div>
+                      <div>
+                        <span className="font-semibold">tourId:</span> {rehDebug.tourId}
+                      </div>
+                      <div>
+                        <span className="font-semibold">fromRoundId:</span> {rehDebug.fromRoundId}
+                      </div>
+                      <div>
+                        <span className="font-semibold">tours.rehandicapping_enabled:</span>{" "}
+                        {String(rehDebug.toursRehandicappingEnabled)}
+                      </div>
+                      <div>
+                        <span className="font-semibold">recalc result:</span>{" "}
+                        <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-white p-2 border border-slate-200">
+                          {JSON.stringify(rehDebug.recalcResult ?? null, null, 2)}
+                        </pre>
+                      </div>
+                      {rehDebug.error ? (
+                        <div className="text-red-700">
+                          <span className="font-semibold">error:</span> {rehDebug.error}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3">
+                      <div>
+                        <div className="font-semibold">Future rounds snapshot BEFORE</div>
+                        <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-white p-2 border border-slate-200 max-h-64 overflow-auto">
+                          {JSON.stringify(rehDebug.before ?? [], null, 2)}
+                        </pre>
+                      </div>
+
+                      <div>
+                        <div className="font-semibold">Future rounds snapshot AFTER</div>
+                        <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-white p-2 border border-slate-200 max-h-64 overflow-auto">
+                          {JSON.stringify(rehDebug.after ?? [], null, 2)}
+                        </pre>
+                      </div>
+                    </div>
+
+                    <div className="text-[10px] text-slate-600">
+                      Tip: also open DevTools console and look for <span className="font-mono">[rehDebug]</span>.
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
           </div>
         ) : (
           <>
             <SummaryTable />
+
+            {/* also show debug panel in Summary tab (so you can compare while viewing) */}
+            {rehDebug ? (
+              <div className="mt-3 rounded-lg border border-slate-300 bg-slate-50 p-3 text-[11px] text-slate-900">
+                <div className="flex items-center justify-between">
+                  <div className="font-bold">Rehandicapping Debug</div>
+                  <button
+                    type="button"
+                    className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold"
+                    onClick={() => setRehDebugOpen((v) => !v)}
+                  >
+                    {rehDebugOpen ? "Hide" : "Show"}
+                  </button>
+                </div>
+
+                {rehDebugOpen ? (
+                  <div className="mt-2 space-y-2">
+                    <div className="space-y-1">
+                      <div>
+                        <span className="font-semibold">ts:</span> {rehDebug.ts}
+                      </div>
+                      <div>
+                        <span className="font-semibold">tourId:</span> {rehDebug.tourId}
+                      </div>
+                      <div>
+                        <span className="font-semibold">fromRoundId:</span> {rehDebug.fromRoundId}
+                      </div>
+                      <div>
+                        <span className="font-semibold">tours.rehandicapping_enabled:</span>{" "}
+                        {String(rehDebug.toursRehandicappingEnabled)}
+                      </div>
+                      <div>
+                        <span className="font-semibold">recalc result:</span>{" "}
+                        <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-white p-2 border border-slate-200">
+                          {JSON.stringify(rehDebug.recalcResult ?? null, null, 2)}
+                        </pre>
+                      </div>
+                      {rehDebug.error ? (
+                        <div className="text-red-700">
+                          <span className="font-semibold">error:</span> {rehDebug.error}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3">
+                      <div>
+                        <div className="font-semibold">Future rounds snapshot BEFORE</div>
+                        <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-white p-2 border border-slate-200 max-h-64 overflow-auto">
+                          {JSON.stringify(rehDebug.before ?? [], null, 2)}
+                        </pre>
+                      </div>
+
+                      <div>
+                        <div className="font-semibold">Future rounds snapshot AFTER</div>
+                        <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-white p-2 border border-slate-200 max-h-64 overflow-auto">
+                          {JSON.stringify(rehDebug.after ?? [], null, 2)}
+                        </pre>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
           </>
         )}
