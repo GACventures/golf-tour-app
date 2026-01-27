@@ -108,11 +108,14 @@ export type RehandicapDebug = {
     round_id: string;
     course_id: string | null;
     playingCount: number;
+    // NOTE: keeping name "completeCount" so existing UI/debug doesn't break,
+    // but it now means "eligibleCount" (>=1 hole entered).
     completeCount: number;
     avgRounded: number | null;
     sample: Array<{
       player_id: string;
       prevPH: number;
+      holesFilled: number;
       stableford: number | null;
       nextPH: number | null;
     }>;
@@ -120,10 +123,12 @@ export type RehandicapDebug = {
 };
 
 /**
- * Rehandicap rule:
+ * Rehandicap rule (UPDATED):
  * - Calculates sequential PH round-by-round.
- * - Uses ONLY players who are marked playing=true AND have ALL 18 holes filled for that round.
- * - If a player is not "complete" for a round, their PH is carried forward unchanged.
+ * - NO "round completeness" gate.
+ * - Eligible players for adjustment = playing=true AND have >=1 hole entered for that round.
+ * - Missing holes contribute 0 Stableford points (rawScore="").
+ * - Players with 0 holes entered carry PH forward unchanged.
  * - When fromRoundId is provided, we only WRITE (upsert) PH for rounds AFTER that round.
  */
 export async function recalcAndSaveTourHandicaps(opts: {
@@ -365,15 +370,16 @@ export async function recalcAndSaveTourHandicaps(opts: {
     return defaultTeeByPlayer[playerId] ?? "M";
   };
 
-  const isPlayerComplete = (roundId: string, playerId: string): boolean => {
+  const holesFilledCount = (roundId: string, playerId: string): number => {
+    let c = 0;
     for (let hole = 1; hole <= 18; hole++) {
       const raw = scoreMap[roundId]?.[playerId]?.[hole] ?? "";
-      if (!raw) return false;
+      if (raw) c++;
     }
-    return true;
+    return c;
   };
 
-  const stablefordTotal = (roundId: string, courseId: string, playerId: string, ph: number): number => {
+  const stablefordTotalPartial = (roundId: string, courseId: string, playerId: string, ph: number): number => {
     const cid = String(courseId);
     const tee = teeForRoundPlayer(roundId, playerId);
     const holes = parsByCourseTee[cid]?.[tee] ?? parsByCourseTee[cid]?.M ?? null;
@@ -383,7 +389,10 @@ export async function recalcAndSaveTourHandicaps(opts: {
     for (let hole = 1; hole <= 18; hole++) {
       const info = holes[hole];
       if (!info) continue;
+
+      // Missing raw => "" => treated as 0 pts by netStablefordPointsForHole
       const raw = scoreMap[roundId]?.[playerId]?.[hole] ?? "";
+
       total += netStablefordPointsForHole({
         rawScore: raw,
         par: info.par,
@@ -420,38 +429,30 @@ export async function recalcAndSaveTourHandicaps(opts: {
     }
 
     const playedPlayers = players.filter((pl) => playingMap[r.id]?.[pl.id] === true);
-    const completePlayers = playedPlayers.filter((pl) => isPlayerComplete(r.id, pl.id));
-
     const playedCount = playedPlayers.length;
-    const completeCount = completePlayers.length;
 
-    if (completeCount === 0) {
-      debug.stopReason = `Stop: round ${r.round_no ?? "?"} has 0 complete players (of ${playedCount} playing)`;
-      debug.perRound.push({
-        round_no: r.round_no ?? null,
-        round_id: r.id,
-        course_id: r.course_id ?? null,
-        playingCount: playedCount,
-        completeCount,
-        avgRounded: null,
-        sample: [],
-      });
-      break;
-    }
+    // Eligible (previously "complete") now means: has >=1 hole entered
+    const eligiblePlayers = playedPlayers.filter((pl) => holesFilledCount(r.id, pl.id) > 0);
+    const eligibleCount = eligiblePlayers.length;
 
     const scoreByPlayer: Record<string, number | null> = {};
     const playedScores: number[] = [];
 
     for (const p of players) {
       const isPlaying = playingMap[r.id]?.[p.id] === true;
-      const isComplete = isPlaying && isPlayerComplete(r.id, p.id);
-      if (!isComplete) {
+      if (!isPlaying) {
+        scoreByPlayer[p.id] = null;
+        continue;
+      }
+
+      const filled = holesFilledCount(r.id, p.id);
+      if (filled <= 0) {
         scoreByPlayer[p.id] = null;
         continue;
       }
 
       const ph = phByRoundPlayer[r.id][p.id];
-      const sc = stablefordTotal(r.id, r.course_id, p.id, ph);
+      const sc = stablefordTotalPartial(r.id, r.course_id, p.id, ph);
       scoreByPlayer[p.id] = sc;
       playedScores.push(sc);
     }
@@ -459,9 +460,10 @@ export async function recalcAndSaveTourHandicaps(opts: {
     const avgRounded =
       playedScores.length > 0 ? roundHalfUp(playedScores.reduce((s, v) => s + v, 0) / playedScores.length) : null;
 
-    const sample = completePlayers.slice(0, 6).map((pl) => ({
+    const sample = eligiblePlayers.slice(0, 6).map((pl) => ({
       player_id: pl.id,
       prevPH: phByRoundPlayer[r.id][pl.id],
+      holesFilled: holesFilledCount(r.id, pl.id),
       stableford: scoreByPlayer[pl.id],
       nextPH: null as number | null,
     }));
@@ -471,7 +473,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
       round_id: r.id,
       course_id: r.course_id ?? null,
       playingCount: playedCount,
-      completeCount,
+      completeCount: eligibleCount, // repurposed
       avgRounded,
       sample,
     });
@@ -482,10 +484,10 @@ export async function recalcAndSaveTourHandicaps(opts: {
         const prevPH = phByRoundPlayer[r.id][p.id];
 
         const isPlaying = playingMap[r.id]?.[p.id] === true;
-        const isComplete = isPlaying && isPlayerComplete(r.id, p.id);
+        const filled = isPlaying ? holesFilledCount(r.id, p.id) : 0;
 
-        // carry forward unless complete and avg exists
-        if (!isComplete || avgRounded === null) {
+        // carry forward unless eligible AND avg exists
+        if (filled <= 0 || avgRounded === null) {
           phByRoundPlayer[next.id][p.id] = prevPH;
           continue;
         }
@@ -506,7 +508,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
         const nextPH = clamp(raw, min, max);
         phByRoundPlayer[next.id][p.id] = nextPH;
 
-        // also fill sample nextPH for debug if present
+        // fill sample nextPH for debug if present
         const d = debug.perRound[debug.perRound.length - 1];
         const s = d?.sample?.find((x) => x.player_id === p.id);
         if (s) s.nextPH = nextPH;
