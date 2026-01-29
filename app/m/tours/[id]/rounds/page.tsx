@@ -10,6 +10,9 @@ type RoundRow = {
   tour_id: string;
   course_id: string | null;
 
+  // ✅ preferred ordering key
+  round_no?: number | null;
+
   round_date?: string | null;
   played_on?: string | null;
   created_at: string | null;
@@ -29,7 +32,6 @@ function getCourseName(r: RoundRow) {
 
 function normalizeMode(raw: string | null): Mode {
   if (raw === "tee-times" || raw === "score" || raw === "results") return raw;
-  // ✅ DEFAULT = score
   return "score";
 }
 
@@ -63,17 +65,7 @@ function fmtAuMelbourneDate(d: Date | null): string {
 function isMissingColumnError(msg: string, column: string) {
   const m = msg.toLowerCase();
   const c = column.toLowerCase();
-  return (
-    m.includes("does not exist") &&
-    (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `))
-  );
-}
-
-// Sorting helper: prefer real round date fields (round_date/played_on) over created_at
-function roundSortKeyMs(r: RoundRow): number {
-  const best = pickBestRoundDateISO(r);
-  const d = parseDateForDisplay(best);
-  return d?.getTime() ?? 0;
+  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
 }
 
 export default function MobileRoundsHubPage() {
@@ -92,10 +84,13 @@ export default function MobileRoundsHubPage() {
     let alive = true;
 
     async function fetchRounds(selectCols: string) {
+      // Prefer server-side ordering by round_no, but also keep created_at as a stable tie-breaker.
+      // If round_no is null for some rows, client-side sorting will handle it.
       return supabase
         .from("rounds")
         .select(selectCols)
         .eq("tour_id", tourId)
+        .order("round_no", { ascending: true })
         .order("created_at", { ascending: true });
     }
 
@@ -103,7 +98,7 @@ export default function MobileRoundsHubPage() {
       setLoading(true);
       setErrorMsg("");
 
-      const baseCols = "id,tour_id,course_id,created_at,name,courses(name)";
+      const baseCols = "id,tour_id,course_id,created_at,name,round_no,courses(name)";
       const cols1 = `${baseCols},round_date,played_on`;
       const cols2 = `${baseCols},played_on`;
 
@@ -164,22 +159,25 @@ export default function MobileRoundsHubPage() {
     };
   }, [tourId]);
 
+  // ✅ Correct ordering: by round_no ascending (1..N). If null, fallback to created_at; final tie-breaker id.
   const sorted = useMemo(() => {
     const arr = [...rounds];
+
     arr.sort((a, b) => {
-      // Primary: best round date (round_date/played_on/created_at)
-      const da = roundSortKeyMs(a);
-      const db = roundSortKeyMs(b);
+      const aNo = typeof a.round_no === "number" ? a.round_no : null;
+      const bNo = typeof b.round_no === "number" ? b.round_no : null;
+
+      if (aNo != null && bNo != null && aNo !== bNo) return aNo - bNo;
+      if (aNo != null && bNo == null) return -1; // round_no rows first
+      if (aNo == null && bNo != null) return 1;
+
+      const da = parseDateForDisplay(a.created_at)?.getTime() ?? 0;
+      const db = parseDateForDisplay(b.created_at)?.getTime() ?? 0;
       if (da !== db) return da - db;
 
-      // Secondary: created_at (stable ordering when same day / missing dates)
-      const ca = parseDateForDisplay(a.created_at)?.getTime() ?? 0;
-      const cb = parseDateForDisplay(b.created_at)?.getTime() ?? 0;
-      if (ca !== cb) return ca - cb;
-
-      // Tertiary: id
       return a.id.localeCompare(b.id);
     });
+
     return arr;
   }, [rounds]);
 
@@ -215,7 +213,6 @@ export default function MobileRoundsHubPage() {
 
       <div className="mx-auto w-full max-w-md px-4 pt-4">
         <div className="flex gap-2">
-          {/* Score Entry FIRST */}
           <button
             className={`${pillBase} ${mode === "score" ? pillActive : pillIdle}`}
             onClick={() => setMode("score")}
@@ -223,7 +220,6 @@ export default function MobileRoundsHubPage() {
             Score Entry
           </button>
 
-          {/* Tee times SECOND */}
           <button
             className={`${pillBase} ${mode === "tee-times" ? pillActive : pillIdle}`}
             onClick={() => setMode("tee-times")}
@@ -254,7 +250,8 @@ export default function MobileRoundsHubPage() {
         ) : (
           <div className="space-y-2">
             {sorted.map((r, idx) => {
-              const label = `Round ${idx + 1}`;
+              const rn = r.round_no ?? idx + 1;
+              const label = `Round ${rn}`;
               const best = pickBestRoundDateISO(r);
               const d = fmtAuMelbourneDate(parseDateForDisplay(best));
               const course = getCourseName(r);
