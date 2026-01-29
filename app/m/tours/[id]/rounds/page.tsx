@@ -29,7 +29,7 @@ function getCourseName(r: RoundRow) {
 
 function normalizeMode(raw: string | null): Mode {
   if (raw === "tee-times" || raw === "score" || raw === "results") return raw;
-  // ✅ DEFAULT = score (black)
+  // ✅ DEFAULT = score
   return "score";
 }
 
@@ -67,6 +67,13 @@ function isMissingColumnError(msg: string, column: string) {
     m.includes("does not exist") &&
     (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `))
   );
+}
+
+// Sorting helper: prefer real round date fields (round_date/played_on) over created_at
+function roundSortKeyMs(r: RoundRow): number {
+  const best = pickBestRoundDateISO(r);
+  const d = parseDateForDisplay(best);
+  return d?.getTime() ?? 0;
 }
 
 export default function MobileRoundsHubPage() {
@@ -160,9 +167,17 @@ export default function MobileRoundsHubPage() {
   const sorted = useMemo(() => {
     const arr = [...rounds];
     arr.sort((a, b) => {
-      const da = parseDateForDisplay(a.created_at)?.getTime() ?? 0;
-      const db = parseDateForDisplay(b.created_at)?.getTime() ?? 0;
+      // Primary: best round date (round_date/played_on/created_at)
+      const da = roundSortKeyMs(a);
+      const db = roundSortKeyMs(b);
       if (da !== db) return da - db;
+
+      // Secondary: created_at (stable ordering when same day / missing dates)
+      const ca = parseDateForDisplay(a.created_at)?.getTime() ?? 0;
+      const cb = parseDateForDisplay(b.created_at)?.getTime() ?? 0;
+      if (ca !== cb) return ca - cb;
+
+      // Tertiary: id
       return a.id.localeCompare(b.id);
     });
     return arr;
