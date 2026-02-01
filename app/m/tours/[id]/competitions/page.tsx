@@ -637,8 +637,9 @@ export default function MobileCompetitionsPage() {
   const medalHover = (rank: number | null) => (rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50");
   const press = "active:bg-gray-100";
 
-  // unmistakable build marker
-  const BUILD_MARK = "H2Z-DIAG-BANNER-v1";
+  const BUILD_MARK = "H2Z-DIAG-BANNER-v2";
+
+  const canForce = players.length > 0 && h2zLegsNorm.length > 0;
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
@@ -653,8 +654,38 @@ export default function MobileCompetitionsPage() {
       <div className="mx-auto w-full max-w-md px-4 pt-3">
         <div className="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
           <div className="font-semibold">Debug Banner: {BUILD_MARK}</div>
+          <div>players={players.length} legs={h2zLegsNorm.length} rounds={sortedRounds.length}</div>
           <div>diag={diag ? `playerId=${diag.playerId} legNo=${diag.legNo}` : "null"}</div>
           <div>diagLines={diagLines ? `len=${diagLines.length}` : "null"}</div>
+
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              className={`rounded-lg border px-2 py-1 text-[12px] ${canForce ? "bg-white hover:bg-gray-50" : "bg-gray-100 text-gray-400"}`}
+              disabled={!canForce}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!canForce) return;
+                setDiag({ playerId: players[0].id, legNo: h2zLegsNorm[0].leg_no });
+              }}
+            >
+              Force diagnostic (P1/L1)
+            </button>
+
+            <button
+              type="button"
+              className="rounded-lg border bg-white px-2 py-1 text-[12px] hover:bg-gray-50"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setDiag(null);
+              }}
+            >
+              Clear diagnostic
+            </button>
+          </div>
+
           {diag ? (
             <div className="mt-2 rounded-lg border border-amber-200 bg-white px-2 py-2">
               <div className="text-[11px] font-semibold text-gray-700">Diagnostic output</div>
@@ -826,7 +857,11 @@ export default function MobileCompetitionsPage() {
                                     <button
                                       type="button"
                                       className="mt-1 text-[11px] underline text-gray-700"
-                                      onClick={() => toggleDiag(p.id, leg.leg_no)}
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        toggleDiag(p.id, leg.leg_no);
+                                      }}
                                     >
                                       {diag?.playerId === p.id && diag?.legNo === leg.leg_no ? "Hide diagnostic" : "Show diagnostic"}
                                     </button>
