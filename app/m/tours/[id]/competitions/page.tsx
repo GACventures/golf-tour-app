@@ -189,7 +189,8 @@ export default function MobileCompetitionsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
-  const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([];
+  const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([]);
+
 
   const [openDetail, setOpenDetail] = useState<
     | { kind: "fixed"; playerId: string; key: FixedCompKey }
