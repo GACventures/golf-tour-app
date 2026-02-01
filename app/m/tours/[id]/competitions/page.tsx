@@ -199,7 +199,6 @@ export default function MobileCompetitionsPage() {
 
   const [diag, setDiag] = useState<{ playerId: string; legNo: number } | null>(null);
 
-  // NEW: unfiltered DB audit for diagnostic
   const [scoreAudit, setScoreAudit] = useState<ScoreAuditState>({ status: "idle" });
 
   const fixedComps: FixedCompMeta[] = useMemo(
@@ -333,7 +332,6 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
-        // NOTE: this filtered fetch may be excluding rows if IDs mismatch (this is what we are diagnosing)
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: sData, error: sErr } = await supabase
             .from("scores")
@@ -456,7 +454,7 @@ export default function MobileCompetitionsPage() {
   }, [sortedRounds, players, roundPlayers, scores, pars]);
 
   const compMatrix = useMemo(() => {
-    const out: Record<string, Record<FixedCompKey, MatrixCell>> = {};
+    const out: Record<string, Record<FixedCompKey, any>> = {};
     for (const p of players) {
       out[p.id] = {
         napoleon: { value: null, rank: null },
@@ -505,7 +503,7 @@ export default function MobileCompetitionsPage() {
       }
     }
 
-    return out;
+    return out as Record<string, Record<FixedCompKey, MatrixCell>>;
   }, [players, fixedComps, ctx]);
 
   const h2zLegsNorm: H2ZLeg[] = useMemo(() => {
@@ -607,16 +605,18 @@ export default function MobileCompetitionsPage() {
       return;
     }
 
+    // Capture non-null diag for TS + closure safety
+    const diagSnap = diag;
+
     let alive = true;
 
     async function runAudit() {
-      const leg = h2zLegsNorm.find((l) => l.leg_no === diag.legNo);
+      const leg = h2zLegsNorm.find((l) => l.leg_no === diagSnap.legNo);
       if (!leg) {
         setScoreAudit({ status: "error", info: ["scoreAudit: leg not found"] });
         return;
       }
 
-      // Included rounds for this leg based on round_no
       const includedRounds = sortedRounds
         .filter((r) => Number.isFinite(Number(r.round_no)) && Number(r.round_no) >= leg.start_round_no && Number(r.round_no) <= leg.end_round_no)
         .map((r) => ({ round_no: r.round_no ?? null, round_id: r.id }));
@@ -628,7 +628,7 @@ export default function MobileCompetitionsPage() {
       const infoStart: string[] = [];
       infoStart.push("Score Audit (UNFILTERED by player_id)");
       infoStart.push(`leg=R${leg.start_round_no}..R${leg.end_round_no} (legNo=${leg.leg_no})`);
-      infoStart.push(`diagPlayerId=${diag.playerId}`);
+      infoStart.push(`diagPlayerId=${diagSnap.playerId}`);
       infoStart.push(`includedRounds=${includedRounds.map((r) => `R${r.round_no ?? "?"}:${r.round_id}`).join(" | ") || "(none)"}`);
       infoStart.push(`tourPlayers=${players.length}`);
 
@@ -643,8 +643,6 @@ export default function MobileCompetitionsPage() {
       }
 
       try {
-        // Fetch score rows for these rounds WITHOUT filtering by player_id.
-        // Keep it bounded to avoid huge payloads.
         const { data, error } = await supabase
           .from("scores")
           .select("round_id,player_id,hole_number,strokes,pickup")
@@ -658,21 +656,18 @@ export default function MobileCompetitionsPage() {
         const distinctScorePlayerIds = Array.from(new Set(rows.map((r) => String(r.player_id))));
         const scorePlayerIdsNotInTour = distinctScorePlayerIds.filter((pid) => !tourPlayerIds.has(pid));
 
-        // For each included round, show whether the diagnostic player has ANY rows in DB
         const byRoundForDiag = includedRounds.map((r) => {
-          const count = rows.filter((x) => String(x.round_id) === String(r.round_id) && String(x.player_id) === String(diag.playerId)).length;
+          const count = rows.filter((x) => String(x.round_id) === String(r.round_id) && String(x.player_id) === String(diagSnap.playerId)).length;
           return { round_no: r.round_no, round_id: r.round_id, count };
         });
 
-        // Also show how many tour players appear in DB score rows
         const scorePlayerIdsInTour = distinctScorePlayerIds.filter((pid) => tourPlayerIds.has(pid));
         const tourPlayersMissingFromScores = players
           .map((p) => String(p.id))
           .filter((pid) => !distinctScorePlayerIds.includes(pid));
 
-        // hole_number distribution for diag player (helps show if rows exist but excluded elsewhere)
         const diagRows = rows
-          .filter((x) => String(x.player_id) === String(diag.playerId))
+          .filter((x) => String(x.player_id) === String(diagSnap.playerId))
           .map((x) => ({
             round_id: String(x.round_id),
             hole_number: Number(x.hole_number),
@@ -793,7 +788,7 @@ export default function MobileCompetitionsPage() {
   const medalHover = (rank: number | null) => (rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50");
   const press = "active:bg-gray-100";
 
-  const BUILD_MARK = "H2Z-DIAG-BANNER-v5";
+  const BUILD_MARK = "H2Z-DIAG-BANNER-v5b";
 
   const canForce = players.length > 0 && h2zLegsNorm.length > 0;
 
