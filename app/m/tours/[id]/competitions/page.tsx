@@ -175,6 +175,57 @@ type ScoreAuditState = {
   info: string[];
 };
 
+async function fetchAllScores(params: {
+  roundIds: string[];
+  playerIds: string[];
+  pageSize?: number;
+}): Promise<ScoreRow[]> {
+  const { roundIds, playerIds } = params;
+  const pageSize = Math.max(200, Math.min(5000, Number(params.pageSize ?? 5000)));
+
+  if (!roundIds.length || !playerIds.length) return [];
+
+  let out: ScoreRow[] = [];
+  let from = 0;
+
+  // We use deterministic ordering so pagination is stable.
+  // NOTE: Supabase/PostgREST default limit is often 1000; this loop avoids silent truncation.
+  while (true) {
+    const to = from + pageSize - 1;
+
+    const { data, error } = await supabase
+      .from("scores")
+      .select("round_id,player_id,hole_number,strokes,pickup")
+      .in("round_id", roundIds)
+      .in("player_id", playerIds)
+      .order("round_id", { ascending: true })
+      .order("player_id", { ascending: true })
+      .order("hole_number", { ascending: true })
+      .range(from, to);
+
+    if (error) throw error;
+
+    const rows = (data ?? []) as any[];
+    out = out.concat(
+      rows.map((r) => ({
+        round_id: String(r.round_id),
+        player_id: String(r.player_id),
+        hole_number: Number(r.hole_number),
+        strokes: r.strokes === null || r.strokes === undefined ? null : Number(r.strokes),
+        pickup: r.pickup === true,
+      }))
+    );
+
+    if (rows.length < pageSize) break;
+    from += pageSize;
+
+    // Safety guard (prevents infinite loop if backend ignores range for some reason)
+    if (from > 200_000) break;
+  }
+
+  return out;
+}
+
 export default function MobileCompetitionsPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -302,15 +353,11 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
+        // ✅ Scores (PAGINATED — avoids silent 1000-row truncation)
         if (roundIds.length > 0 && playerIds.length > 0) {
-          const { data: sData, error: sErr } = await supabase
-            .from("scores")
-            .select("round_id,player_id,hole_number,strokes,pickup")
-            .in("round_id", roundIds)
-            .in("player_id", playerIds);
-          if (sErr) throw sErr;
+          const all = await fetchAllScores({ roundIds, playerIds, pageSize: 5000 });
           if (!alive) return;
-          setScores((sData ?? []) as ScoreRow[]);
+          setScores(all);
         } else {
           setScores([]);
         }
@@ -557,7 +604,6 @@ export default function MobileCompetitionsPage() {
     });
   }, [diag, roundPlayers, sortedRounds, h2zLegsNorm, ctx]);
 
-  // DB audit (unchanged)
   useEffect(() => {
     if (!diag) {
       setScoreAudit({ status: "idle", info: [] });
@@ -596,7 +642,11 @@ export default function MobileCompetitionsPage() {
       }
 
       try {
-        const { data, error } = await supabase.from("scores").select("round_id,player_id,hole_number,strokes,pickup").in("round_id", includedRoundIds).limit(5000);
+        const { data, error } = await supabase
+          .from("scores")
+          .select("round_id,player_id,hole_number,strokes,pickup")
+          .in("round_id", includedRoundIds)
+          .limit(5000);
         if (error) throw error;
 
         const rows = (data ?? []) as ScoreAuditRow[];
@@ -700,7 +750,7 @@ export default function MobileCompetitionsPage() {
   }
 
   // -----------------------------
-  // ✅ CTX + SCORE-FILL INTROSPECTION
+  // ✅ Debug banner (kept)
   // -----------------------------
   const ctxAny = ctx as any;
   const runtimeCtxVersion = String(ctxAny?.__ctxVersion ?? "(none)");
@@ -756,7 +806,7 @@ export default function MobileCompetitionsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Debug banner (always visible) */}
+      {/* Debug banner */}
       <div className="mx-auto w-full max-w-md px-4 pt-3">
         <div className="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
           <div className="font-semibold">Debug Banner: H2Z-CTX-INTROSPECT-v2</div>
@@ -766,11 +816,12 @@ export default function MobileCompetitionsPage() {
           <div className="mt-2 font-semibold">Score-fill accounting (ctx.__debugScoreFill)</div>
           {debugFill ? (
             <>
-              <div>scoresIn={String(debugFill.scoresIn ?? "?")} seen={String(debugFill.seen ?? "?")} written={String(debugFill.written ?? "?")}</div>
               <div>
-                skipNoRound={String(debugFill.skipNoRound ?? "?")} skipNoPlayer={String(debugFill.skipNoPlayer ?? "?")} skipBadHole={String(debugFill.skipBadHole ?? "?")} skipOverwriteBlank={String(
-                  debugFill.skipOverwriteBlank ?? "?"
-                )}
+                scoresIn={String(debugFill.scoresIn ?? "?")} seen={String(debugFill.seen ?? "?")} written={String(debugFill.written ?? "?")}
+              </div>
+              <div>
+                skipNoRound={String(debugFill.skipNoRound ?? "?")} skipNoPlayer={String(debugFill.skipNoPlayer ?? "?")} skipBadHole={String(debugFill.skipBadHole ?? "?")} skipOverwriteBlank=
+                {String(debugFill.skipOverwriteBlank ?? "?")}
               </div>
               <div>sampleSeen0={(debugFill.sampleSeen?.[0] ?? "(none)")}</div>
               <div>sampleSkip0={(debugFill.sampleSkip?.[0] ?? "(none)")}</div>
