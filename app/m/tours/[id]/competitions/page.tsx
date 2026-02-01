@@ -20,6 +20,7 @@ import {
   type RoundPlayerLiteForTour,
   type ScoreLiteForTour,
   type ParLiteForTour,
+  type TourCompetitionContextLocal,
 } from "@/lib/competitions/buildTourCompetitionContext";
 
 type Tour = { id: string; name: string };
@@ -60,6 +61,12 @@ type ParRow = {
   tee: Tee;
   par: number;
   stroke_index: number;
+};
+
+type H2ZLegRow = {
+  leg_no: number;
+  start_round_no: number;
+  end_round_no: number;
 };
 
 function isLikelyUuid(v: string) {
@@ -141,6 +148,77 @@ type MatrixCell = {
   detail?: string | null;
 };
 
+// ---------- H2Z helpers ----------
+type H2ZCell = {
+  value: number | null; // end-of-leg running total
+  rank: number | null; // rank within leg
+  maxScore: number; // highest running total during leg
+  maxHoles: number; // holes used to reach maxScore (consecutive par-3 holes without 0 pts)
+};
+
+function isMissingRelationError(msg: string, rel: string) {
+  const m = String(msg ?? "").toLowerCase();
+  const r = rel.toLowerCase();
+  return m.includes("does not exist") && (m.includes(`relation "${r}"`) || m.includes(`relation '${r}'`) || m.includes(r));
+}
+
+function computeH2ZForLeg(args: {
+  ctx: TourCompetitionContextLocal;
+  playerId: string;
+  legRoundIdsInOrder: string[];
+}): H2ZCell {
+  const { ctx, playerId, legRoundIdsInOrder } = args;
+
+  let running = 0;
+  let curLen = 0;
+
+  let maxScore = 0;
+  let maxHoles = 0;
+
+  // For each round, in order, process par-3 holes only, in hole order
+  for (const roundId of legRoundIdsInOrder) {
+    const tr = (ctx.rounds ?? []).find((x) => x.roundId === roundId);
+    if (!tr) continue;
+
+    // If player not playing in this round, treat as "no holes" (no reset)
+    // The build context returns 0 points for non-playing, but we also need to avoid false resets.
+    // Best approach: if isComplete() returns true even when not playing, we can detect playing by checking any non-empty scores.
+    // Instead: use netPointsForHole + raw scores presence: if all 18 are blank, skip round entirely.
+    const rawArr = tr.scores?.[playerId] ?? Array(18).fill("");
+    const anyScore = rawArr.some((s) => String(s ?? "").trim().length > 0);
+    if (!anyScore) continue;
+
+    for (let holeIndex = 0; holeIndex < 18; holeIndex++) {
+      const par = Number(tr.parForPlayerHole(playerId, holeIndex) ?? 0);
+      if (par !== 3) continue;
+
+      const pts = Number(tr.netPointsForHole(playerId, holeIndex) ?? 0) || 0;
+
+      if (pts === 0) {
+        running = 0;
+        curLen = 0;
+        continue;
+      }
+
+      running += pts;
+      curLen += 1;
+
+      // Track max running score; if tie on maxScore, prefer longer hole-run
+      if (running > maxScore || (running === maxScore && curLen > maxHoles)) {
+        maxScore = running;
+        maxHoles = curLen;
+      }
+    }
+  }
+
+  return {
+    value: running,
+    rank: null,
+    maxScore,
+    maxHoles,
+  };
+}
+
 export default function MobileCompetitionsPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -155,7 +233,12 @@ export default function MobileCompetitionsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
+  // H2Z legs
+  const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([]);
+  const [h2zLegsNote, setH2zLegsNote] = useState<string>("");
+
   const [openDetail, setOpenDetail] = useState<{ playerId: string; key: FixedCompKey } | null>(null);
+  const [openH2ZDetail, setOpenH2ZDetail] = useState<{ playerId: string; legNo: number } | null>(null);
 
   const fixedComps: FixedCompMeta[] = useMemo(
     () => [
@@ -211,6 +294,10 @@ export default function MobileCompetitionsPage() {
       { label: "Closer", text: "Average Stableford points on holes 16–18" },
       { label: "Hot Streak", text: "Longest run in any round of consecutive holes where gross strokes is par or better" },
       { label: "Cold Streak", text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse" },
+      {
+        label: "H2Z",
+        text: "Cumulative Stableford score on par threes, but reset to zero whenever zero points scored on a hole",
+      },
     ],
     []
   );
@@ -223,14 +310,17 @@ export default function MobileCompetitionsPage() {
     async function loadAll() {
       setLoading(true);
       setErrorMsg("");
+      setH2zLegs([]);
+      setH2zLegsNote("");
 
       try {
-        // Keep loading tour for data integrity (even though we no longer display name in header here)
+        // Tour
         const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
         if (!alive) return;
         setTour(tData as Tour);
 
+        // Rounds (need round_no for H2Z legs)
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,name,round_no,created_at,course_id")
@@ -242,6 +332,7 @@ export default function MobileCompetitionsPage() {
         if (!alive) return;
         setRounds(rr);
 
+        // Tour players (w/ gender)
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
@@ -264,6 +355,7 @@ export default function MobileCompetitionsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
+        // Round players
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
@@ -285,6 +377,7 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
+        // Scores
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: sData, error: sErr } = await supabase
             .from("scores")
@@ -298,6 +391,7 @@ export default function MobileCompetitionsPage() {
           setScores([]);
         }
 
+        // Pars (tee specific)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
@@ -321,6 +415,42 @@ export default function MobileCompetitionsPage() {
           setPars(pr);
         } else {
           setPars([]);
+        }
+
+        // H2Z Legs (optional)
+        {
+          const { data: lData, error: lErr } = await supabase
+            .from("tour_h2z_legs")
+            .select("leg_no,start_round_no,end_round_no")
+            .eq("tour_id", tourId)
+            .order("leg_no", { ascending: true });
+
+          if (lErr) {
+            // If table not yet created, don't fail whole page
+            if (isMissingRelationError(lErr.message, "tour_h2z_legs")) {
+              if (!alive) return;
+              setH2zLegs([]);
+              setH2zLegsNote("H2Z legs table not found (tour_h2z_legs). Create it to enable H2Z.");
+            } else {
+              if (!alive) return;
+              setH2zLegs([]);
+              setH2zLegsNote(`H2Z legs not loaded: ${lErr.message}`);
+            }
+          } else {
+            const legs = (lData ?? []) as any[];
+            const cleaned: H2ZLegRow[] = legs
+              .map((x) => ({
+                leg_no: Number(x.leg_no),
+                start_round_no: Number(x.start_round_no),
+                end_round_no: Number(x.end_round_no),
+              }))
+              .filter((x) => Number.isFinite(x.leg_no) && Number.isFinite(x.start_round_no) && Number.isFinite(x.end_round_no))
+              .sort((a, b) => a.leg_no - b.leg_no);
+
+            if (!alive) return;
+            setH2zLegs(cleaned);
+            setH2zLegsNote(cleaned.length === 0 ? "No H2Z legs defined yet." : "");
+          }
         }
       } catch (e: any) {
         if (!alive) return;
@@ -348,6 +478,16 @@ export default function MobileCompetitionsPage() {
     });
     return arr;
   }, [rounds]);
+
+  const roundNoById = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of sortedRounds) {
+      if (!r?.id) continue;
+      const n = Number(r.round_no);
+      if (Number.isFinite(n)) m.set(r.id, n);
+    }
+    return m;
+  }, [sortedRounds]);
 
   const ctx = useMemo(() => {
     const roundsLite: TourRoundLite[] = sortedRounds.map((r) => ({
@@ -447,10 +587,62 @@ export default function MobileCompetitionsPage() {
     return out;
   }, [players, fixedComps, ctx]);
 
+  const h2z = useMemo(() => {
+    // Build per player per leg matrix from ctx + round_no mapping.
+    // If no legs, return empty.
+    const legs = (h2zLegs ?? []).filter((l) => Number.isFinite(l.leg_no) && l.start_round_no <= l.end_round_no);
+    if (legs.length === 0) return { legs: [] as H2ZLegRow[], matrix: {} as Record<string, Record<number, H2ZCell>> };
+
+    // Build leg -> roundIds in order
+    const roundIdsInOrder = (sortedRounds ?? []).map((r) => r.id);
+    const legRoundIds: Record<number, string[]> = {};
+    for (const leg of legs) {
+      const ids = roundIdsInOrder.filter((rid) => {
+        const rn = roundNoById.get(rid);
+        if (!Number.isFinite(rn)) return false;
+        return rn! >= leg.start_round_no && rn! <= leg.end_round_no;
+      });
+      legRoundIds[leg.leg_no] = ids;
+    }
+
+    const matrix: Record<string, Record<number, H2ZCell>> = {};
+    for (const p of players) {
+      matrix[p.id] = {};
+      for (const leg of legs) {
+        const ids = legRoundIds[leg.leg_no] ?? [];
+        matrix[p.id][leg.leg_no] = computeH2ZForLeg({ ctx, playerId: p.id, legRoundIdsInOrder: ids });
+      }
+    }
+
+    // Rank within each leg using end-of-leg value (higher is better)
+    for (const leg of legs) {
+      const entries: Array<{ id: string; value: number }> = [];
+      for (const p of players) {
+        const cell = matrix[p.id]?.[leg.leg_no];
+        const v = Number(cell?.value ?? 0);
+        entries.push({ id: p.id, value: Number.isFinite(v) ? v : 0 });
+      }
+      const ranks = rankWithTies(entries, false);
+      for (const p of players) {
+        const rk = ranks.get(p.id);
+        if (matrix[p.id]?.[leg.leg_no]) matrix[p.id][leg.leg_no].rank = typeof rk === "number" ? rk : null;
+      }
+    }
+
+    return { legs, matrix };
+  }, [h2zLegs, sortedRounds, roundNoById, ctx, players]);
+
   function toggleDetail(playerId: string, key: FixedCompKey) {
     setOpenDetail((prev) => {
       if (prev && prev.playerId === playerId && prev.key === key) return null;
       return { playerId, key };
+    });
+  }
+
+  function toggleH2ZDetail(playerId: string, legNo: number) {
+    setOpenH2ZDetail((prev) => {
+      if (prev && prev.playerId === playerId && prev.legNo === legNo) return null;
+      return { playerId, legNo };
     });
   }
 
@@ -475,9 +667,11 @@ export default function MobileCompetitionsPage() {
   const thBase = "border-b border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700";
   const tdBase = "px-3 py-2 text-right text-sm text-gray-900 align-top";
 
+  const h2zCols = h2z.legs ?? [];
+
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Sticky header: ONLY the word “Competitions” between the lines */}
+      {/* Sticky header */}
       <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-sm font-semibold text-gray-900">Competitions</div>
@@ -498,7 +692,6 @@ export default function MobileCompetitionsPage() {
           <div className="rounded-2xl border p-4 text-sm text-gray-700">No rounds found for this tour.</div>
         ) : (
           <>
-            {/* ✅ Make the TABLE the vertical scroll container so sticky top works */}
             <div className="rounded-2xl border border-gray-200 bg-white shadow-sm max-h-[70vh] overflow-auto">
               <table className="min-w-full border-collapse table-fixed">
                 <thead>
@@ -510,9 +703,21 @@ export default function MobileCompetitionsPage() {
                       Player
                     </th>
 
+                    {/* Existing fixed comps */}
                     {fixedComps.map((c) => (
                       <th key={c.key} className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>
                         {c.label}
+                      </th>
+                    ))}
+
+                    {/* Dynamic H2Z legs */}
+                    {h2zCols.map((leg) => (
+                      <th
+                        key={`h2z-${leg.leg_no}`}
+                        className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}
+                        title={`Hero to Zero leg ${leg.leg_no}`}
+                      >
+                        {`H2Z: R${leg.start_round_no} - R${leg.end_round_no}`}
                       </th>
                     ))}
                   </tr>
@@ -521,6 +726,7 @@ export default function MobileCompetitionsPage() {
                 <tbody>
                   {players.map((p) => {
                     const row = compMatrix[p.id] ?? ({} as any);
+                    const h2zRow = h2z.matrix?.[p.id] ?? {};
 
                     return (
                       <tr key={p.id} className="border-b last:border-b-0">
@@ -531,6 +737,7 @@ export default function MobileCompetitionsPage() {
                           {p.name}
                         </td>
 
+                        {/* Existing fixed comps */}
                         {fixedComps.map((c) => {
                           const cell = row?.[c.key] as MatrixCell | undefined;
                           const value = cell?.value ?? null;
@@ -607,6 +814,55 @@ export default function MobileCompetitionsPage() {
                             </td>
                           );
                         })}
+
+                        {/* H2Z dynamic cells */}
+                        {h2zCols.map((leg) => {
+                          const cell = h2zRow?.[leg.leg_no] as H2ZCell | undefined;
+                          const value = cell?.value ?? null;
+                          const rank = cell?.rank ?? null;
+
+                          const isOpen = openH2ZDetail?.playerId === p.id && openH2ZDetail?.legNo === leg.leg_no;
+
+                          const boxBase = "inline-flex min-w-[92px] justify-end rounded-md px-2 py-1";
+                          const medal =
+                            rank === 1
+                              ? "border border-yellow-500 bg-yellow-300 text-gray-900"
+                              : rank === 2
+                              ? "border border-gray-400 bg-gray-200 text-gray-900"
+                              : rank === 3
+                              ? "border border-amber-700 bg-amber-400 text-gray-900"
+                              : "bg-transparent";
+                          const medalHover =
+                            rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50";
+                          const press = "active:bg-gray-100";
+
+                          return (
+                            <td key={`h2z-${leg.leg_no}`} className={tdBase}>
+                              <div className="inline-flex flex-col items-end gap-1">
+                                {value === null ? (
+                                  <span className="text-gray-400">—</span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className={`${boxBase} ${medal} ${medalHover} ${press}`}
+                                    onClick={() => toggleH2ZDetail(p.id, leg.leg_no)}
+                                    aria-label={`H2Z detail leg ${leg.leg_no}`}
+                                  >
+                                    {`${Math.round(value)} `}
+                                    <span className="text-gray-500">{`(${rank ?? 0})`}</span>
+                                  </button>
+                                )}
+
+                                {value !== null && isOpen ? (
+                                  <div className="max-w-[180px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm text-left">
+                                    <div className="font-semibold text-gray-900">{`H2Z max: ${cell?.maxScore ?? 0} pts`}</div>
+                                    <div className="text-gray-700">{`(${cell?.maxHoles ?? 0} hole${(cell?.maxHoles ?? 0) === 1 ? "" : "s"})`}</div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </td>
+                          );
+                        })}
                       </tr>
                     );
                   })}
@@ -616,7 +872,12 @@ export default function MobileCompetitionsPage() {
               <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
                 Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as
                 better. Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown.
+                {h2zCols.length > 0 ? " Tap H2Z cells for max detail." : ""}
               </div>
+
+              {h2zCols.length === 0 && h2zLegsNote ? (
+                <div className="border-t bg-white px-3 py-2 text-xs text-gray-500">{h2zLegsNote}</div>
+              ) : null}
             </div>
 
             <div className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
