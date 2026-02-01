@@ -22,7 +22,12 @@ import {
   type ParLiteForTour,
 } from "@/lib/competitions/buildTourCompetitionContext";
 
-import { computeH2ZForPlayer, type H2ZLeg } from "@/lib/competitions/h2z";
+import {
+  computeH2ZForPlayer,
+  traceH2ZForPlayerLeg,
+  type H2ZLeg,
+  type H2ZTraceRow,
+} from "@/lib/competitions/h2z";
 
 type Tour = { id: string; name: string };
 
@@ -175,7 +180,7 @@ export default function MobileCompetitionsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
-  // ✅ H2Z legs
+  // H2Z legs
   const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([]);
 
   const [openDetail, setOpenDetail] = useState<
@@ -240,7 +245,7 @@ export default function MobileCompetitionsPage() {
       { label: "Cold Streak", text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse" },
       {
         label: "H2Z",
-        text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole",
+        text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a Par 3 hole",
       },
     ],
     []
@@ -359,7 +364,7 @@ export default function MobileCompetitionsPage() {
           setPars([]);
         }
 
-        // ✅ H2Z legs
+        // H2Z legs
         {
           const { data: lData, error: lErr } = await supabase
             .from("tour_h2z_legs")
@@ -560,6 +565,30 @@ export default function MobileCompetitionsPage() {
     return perPlayer;
   }, [players, sortedRounds, roundPlayers, ctx, h2zLegsNorm]);
 
+  // ✅ H2Z trace diagnostic (computed only when an H2Z cell is open)
+  const h2zTrace: H2ZTraceRow[] = useMemo(() => {
+    if (!openDetail || openDetail.kind !== "h2z") return [];
+
+    const leg = h2zLegsNorm.find((l) => l.leg_no === openDetail.legNo);
+    if (!leg) return [];
+
+    const playingSet = new Set<string>();
+    for (const rp of roundPlayers) {
+      if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
+    }
+    const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
+
+    const roundsInOrder = sortedRounds.map((r) => ({ roundId: r.id, round_no: r.round_no }));
+
+    return traceH2ZForPlayerLeg({
+      ctx: ctx as unknown as CompetitionContext,
+      leg,
+      roundsInOrder,
+      isPlayingInRound,
+      playerId: openDetail.playerId,
+    });
+  }, [openDetail, h2zLegsNorm, roundPlayers, sortedRounds, ctx]);
+
   function toggleFixedDetail(playerId: string, key: FixedCompKey) {
     setOpenDetail((prev) => {
       if (prev?.kind === "fixed" && prev.playerId === playerId && prev.key === key) return null;
@@ -605,9 +634,7 @@ export default function MobileCompetitionsPage() {
       ? "border border-amber-700 bg-amber-400 text-gray-900"
       : "bg-transparent";
 
-  const medalHover = (rank: number | null) =>
-    rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50";
-
+  const medalHover = (rank: number | null) => (rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50");
   const press = "active:bg-gray-100";
 
   return (
@@ -649,7 +676,6 @@ export default function MobileCompetitionsPage() {
                       </th>
                     ))}
 
-                    {/* ✅ H2Z legs appended */}
                     {h2zLegsNorm.map((leg) => (
                       <th key={`h2z-${leg.leg_no}`} className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>
                         {h2zHeading(leg)}
@@ -735,7 +761,6 @@ export default function MobileCompetitionsPage() {
                           );
                         })}
 
-                        {/* ✅ H2Z cells */}
                         {h2zLegsNorm.map((leg) => {
                           const cell = h2zMatrix?.[p.id]?.[leg.leg_no];
                           const final = cell?.final ?? null;
@@ -772,16 +797,48 @@ export default function MobileCompetitionsPage() {
                                 )}
 
                                 {final !== null && isOpen ? (
-                                  <div className="max-w-[180px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm text-left">
-                                    {/* ✅ FIX: don't treat 0 as "missing" */}
-                                    {best !== null && bestLen !== null ? (
-                                      <>
-                                        Peak: <span className="font-semibold">{best}</span>{" "}
-                                        <span className="text-gray-500">({bestLen})</span>
-                                      </>
-                                    ) : (
-                                      <span className="text-gray-400">No non-zero Par 3 run</span>
-                                    )}
+                                  <div className="max-w-[280px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-2 text-[11px] text-gray-700 shadow-sm text-left">
+                                    <div>
+                                      Peak: <span className="font-semibold">{best ?? 0}</span>{" "}
+                                      <span className="text-gray-500">({bestLen ?? 0} par-3 holes)</span>
+                                    </div>
+
+                                    {/* ✅ H2Z trace diagnostic */}
+                                    <div className="mt-2 border-t pt-2">
+                                      <div className="font-semibold text-gray-900">Diagnostic trace (Par 3s only)</div>
+                                      {h2zTrace.length === 0 ? (
+                                        <div className="text-gray-500 mt-1">
+                                          No Par 3 events found in this leg (or player not marked playing / missing pars).
+                                        </div>
+                                      ) : (
+                                        <div className="mt-2 max-h-[240px] overflow-auto rounded border bg-white">
+                                          <table className="min-w-full border-collapse">
+                                            <thead className="sticky top-0 bg-gray-50">
+                                              <tr>
+                                                <th className="px-2 py-1 text-left text-[10px] font-semibold text-gray-700 border-b">R</th>
+                                                <th className="px-2 py-1 text-left text-[10px] font-semibold text-gray-700 border-b">Hole</th>
+                                                <th className="px-2 py-1 text-left text-[10px] font-semibold text-gray-700 border-b">Strokes</th>
+                                                <th className="px-2 py-1 text-left text-[10px] font-semibold text-gray-700 border-b">Par</th>
+                                                <th className="px-2 py-1 text-left text-[10px] font-semibold text-gray-700 border-b">Stbf</th>
+                                                <th className="px-2 py-1 text-left text-[10px] font-semibold text-gray-700 border-b">H2Z after</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {h2zTrace.map((tr, idx) => (
+                                                <tr key={`${tr.leg_no}-${tr.round_no}-${tr.hole_no}-${idx}`} className="border-b last:border-b-0">
+                                                  <td className="px-2 py-1 text-[11px] text-gray-800">{tr.round_no}</td>
+                                                  <td className="px-2 py-1 text-[11px] text-gray-800">{tr.hole_no}</td>
+                                                  <td className="px-2 py-1 text-[11px] text-gray-800">{tr.raw || "—"}</td>
+                                                  <td className="px-2 py-1 text-[11px] text-gray-800">{tr.par}</td>
+                                                  <td className="px-2 py-1 text-[11px] text-gray-900 font-semibold">{tr.stableford}</td>
+                                                  <td className="px-2 py-1 text-[11px] text-gray-900 font-semibold">{tr.h2z_after}</td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      )}
+                                    </div>
                                   </div>
                                 ) : null}
                               </div>
@@ -797,7 +854,7 @@ export default function MobileCompetitionsPage() {
               <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
                 Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as
                 better. Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown. Tap H2Z to see peak
-                score and (holes count).
+                score and diagnostic trace.
               </div>
             </div>
 
