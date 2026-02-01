@@ -189,7 +189,6 @@ export default function MobileCompetitionsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
-  // ✅ H2Z legs
   const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([]);
 
   const [openDetail, setOpenDetail] = useState<
@@ -198,9 +197,7 @@ export default function MobileCompetitionsPage() {
     | null
   >(null);
 
-  // ✅ Diagnostic panel state
   const [diag, setDiag] = useState<{ playerId: string; legNo: number } | null>(null);
-
   const [scoreAudit, setScoreAudit] = useState<ScoreAuditState>({ status: "idle", info: [] });
 
   const fixedComps: FixedCompMeta[] = useMemo(
@@ -209,38 +206,12 @@ export default function MobileCompetitionsPage() {
       { key: "bigGeorge", label: "Big George", competitionId: "tour_big_george_par4_avg", format: (v) => fmt2(v) },
       { key: "grandCanyon", label: "Grand Canyon", competitionId: "tour_grand_canyon_par5_avg", format: (v) => fmt2(v) },
       { key: "wizard", label: "Wizard", competitionId: "tour_wizard_four_plus_pct", format: (v) => fmtPct0(v) },
-      {
-        key: "bagelMan",
-        label: "Bagel Man",
-        competitionId: "tour_bagel_man_zero_pct",
-        lowerIsBetter: true,
-        format: (v) => fmtPct0(v),
-      },
-      {
-        key: "eclectic",
-        label: "Eclectic",
-        competitionId: "tour_eclectic_total",
-        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
-      },
+      { key: "bagelMan", label: "Bagel Man", competitionId: "tour_bagel_man_zero_pct", lowerIsBetter: true, format: (v) => fmtPct0(v) },
+      { key: "eclectic", label: "Eclectic", competitionId: "tour_eclectic_total", format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)) },
       { key: "schumacher", label: "Schumacher", competitionId: "tour_schumacher_first3_avg", format: (v) => fmt2(v) },
       { key: "closer", label: "Closer", competitionId: "tour_closer_last3_avg", format: (v) => fmt2(v) },
-      {
-        key: "hotStreak",
-        label: "Hot Streak",
-        competitionId: "tour_hot_streak_best_run",
-        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
-        tappable: true,
-        detailFromStatsKey: "streak_where",
-      },
-      {
-        key: "coldStreak",
-        label: "Cold Streak",
-        competitionId: "tour_cold_streak_best_run",
-        lowerIsBetter: true,
-        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
-        tappable: true,
-        detailFromStatsKey: "streak_where",
-      },
+      { key: "hotStreak", label: "Hot Streak", competitionId: "tour_hot_streak_best_run", format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)), tappable: true, detailFromStatsKey: "streak_where" },
+      { key: "coldStreak", label: "Cold Streak", competitionId: "tour_cold_streak_best_run", lowerIsBetter: true, format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)), tappable: true, detailFromStatsKey: "streak_where" },
     ],
     []
   );
@@ -257,10 +228,7 @@ export default function MobileCompetitionsPage() {
       { label: "Closer", text: "Average Stableford points on holes 16–18" },
       { label: "Hot Streak", text: "Longest run in any round of consecutive holes where gross strokes is par or better" },
       { label: "Cold Streak", text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse" },
-      {
-        label: "H2Z",
-        text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole",
-      },
+      { label: "H2Z", text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole" },
     ],
     []
   );
@@ -275,13 +243,11 @@ export default function MobileCompetitionsPage() {
       setErrorMsg("");
 
       try {
-        // Tour
         const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
         if (!alive) return;
         setTour(tData as Tour);
 
-        // Rounds
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,name,round_no,created_at,course_id")
@@ -293,7 +259,6 @@ export default function MobileCompetitionsPage() {
         if (!alive) return;
         setRounds(rr);
 
-        // Players (tour_players join)
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
@@ -316,7 +281,6 @@ export default function MobileCompetitionsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
-        // Round players
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
@@ -338,7 +302,6 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
-        // Scores
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: sData, error: sErr } = await supabase
             .from("scores")
@@ -352,7 +315,6 @@ export default function MobileCompetitionsPage() {
           setScores([]);
         }
 
-        // Pars (M/F)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
@@ -378,18 +340,15 @@ export default function MobileCompetitionsPage() {
           setPars([]);
         }
 
-        // ✅ H2Z legs
-        {
-          const { data: lData, error: lErr } = await supabase
-            .from("tour_h2z_legs")
-            .select("tour_id,leg_no,start_round_no,end_round_no")
-            .eq("tour_id", tourId)
-            .order("leg_no", { ascending: true });
+        const { data: lData, error: lErr } = await supabase
+          .from("tour_h2z_legs")
+          .select("tour_id,leg_no,start_round_no,end_round_no")
+          .eq("tour_id", tourId)
+          .order("leg_no", { ascending: true });
 
-          if (lErr) throw lErr;
-          if (!alive) return;
-          setH2zLegs((lData ?? []) as H2ZLegRow[]);
-        }
+        if (lErr) throw lErr;
+        if (!alive) return;
+        setH2zLegs((lData ?? []) as H2ZLegRow[]);
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load competitions.");
@@ -400,7 +359,6 @@ export default function MobileCompetitionsPage() {
     }
 
     void loadAll();
-
     return () => {
       alive = false;
     };
@@ -528,17 +486,14 @@ export default function MobileCompetitionsPage() {
   }, [h2zLegs]);
 
   const h2zMatrix = useMemo(() => {
-    // round|player -> playing?
     const playingSet = new Set<string>();
     for (const rp of roundPlayers) {
       if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
     }
     const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
 
-    // rounds in order with round_no
     const roundsInOrder = sortedRounds.map((r) => ({ roundId: r.id, round_no: r.round_no }));
 
-    // Per player, per leg results
     const perPlayer: Record<string, Record<number, H2ZCell>> = {};
     for (const p of players) perPlayer[p.id] = {};
 
@@ -562,7 +517,6 @@ export default function MobileCompetitionsPage() {
       }
     }
 
-    // Rank within each leg by final desc
     for (const leg of h2zLegsNorm) {
       const entries = players.map((p) => ({
         id: p.id,
@@ -745,6 +699,46 @@ export default function MobileCompetitionsPage() {
     );
   }
 
+  // -----------------------------
+  // ✅ CTX + SCORE-FILL INTROSPECTION
+  // -----------------------------
+  const ctxAny = ctx as any;
+  const runtimeCtxVersion = String(ctxAny?.__ctxVersion ?? "(none)");
+
+  const debugFill = (ctxAny?.__debugScoreFill ?? null) as
+    | null
+    | {
+        version?: string;
+        roundsIn?: number;
+        playersIn?: number;
+        scoresIn?: number;
+        seen?: number;
+        written?: number;
+        skipNoRound?: number;
+        skipNoPlayer?: number;
+        skipBadHole?: number;
+        skipOverwriteBlank?: number;
+        sampleSeen?: string[];
+        sampleWritten?: string[];
+        sampleSkip?: string[];
+      };
+
+  const round0 = ctxAny?.rounds?.[0];
+  const round0Scores: Record<string, string[]> = (round0?.scores ?? {}) as any;
+  const round0ScoreKeys = Object.keys(round0Scores);
+  const round0KeysSample = round0ScoreKeys.slice(0, 3).join(",") || "(none)";
+
+  const diagPid = diag?.playerId ?? "";
+  const hasDiagKey = diagPid ? Object.prototype.hasOwnProperty.call(round0Scores, diagPid) : false;
+  const diagArr = hasDiagKey ? (round0Scores[diagPid] as string[]) : null;
+  const diagArrNonBlankCount = diagArr ? diagArr.filter((x) => String(x ?? "").trim() !== "").length : 0;
+  const diagArrSample10 = diagArr
+    ? diagArr
+        .slice(0, 10)
+        .map((x) => (String(x ?? "").trim() ? String(x).trim() : "_"))
+        .join(",")
+    : "(no arr)";
+
   const thBase = "border-b border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700";
   const tdBase = "px-3 py-2 text-right text-sm text-gray-900 align-top";
 
@@ -757,34 +751,36 @@ export default function MobileCompetitionsPage() {
       : rank === 3
       ? "border border-amber-700 bg-amber-400 text-gray-900"
       : "bg-transparent";
-
   const medalHover = (rank: number | null) => (rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50");
   const press = "active:bg-gray-100";
-
-  // -----------------------------
-  // ✅ CTX SCORE INTROSPECTION
-  // -----------------------------
-  const ctxAny = ctx as any;
-  const runtimeCtxVersion = String(ctxAny?.__ctxVersion ?? "(none)");
-  const round0 = ctxAny?.rounds?.[0];
-  const round0Scores: Record<string, string[]> = (round0?.scores ?? {}) as any;
-  const round0ScoreKeys = Object.keys(round0Scores);
-  const round0KeysSample = round0ScoreKeys.slice(0, 3).join(",") || "(none)";
-  const diagPid = diag?.playerId ?? "";
-  const hasDiagKey = diagPid ? Object.prototype.hasOwnProperty.call(round0Scores, diagPid) : false;
-  const diagArr = hasDiagKey ? (round0Scores[diagPid] as string[]) : null;
-  const diagArrNonBlankCount = diagArr ? diagArr.filter((x) => String(x ?? "").trim() !== "").length : 0;
-  const diagArrSample10 = diagArr ? diagArr.slice(0, 10).map((x) => (String(x ?? "").trim() ? String(x).trim() : "_")).join(",") : "(no arr)";
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       {/* Debug banner (always visible) */}
       <div className="mx-auto w-full max-w-md px-4 pt-3">
         <div className="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
-          <div className="font-semibold">Debug Banner: H2Z-CTX-INTROSPECT-v1</div>
+          <div className="font-semibold">Debug Banner: H2Z-CTX-INTROSPECT-v2</div>
           <div>BUILD_TOUR_CTX_VERSION(import)={BUILD_TOUR_CTX_VERSION}</div>
           <div>ctx.__ctxVersion(runtime)={runtimeCtxVersion}</div>
-          <div>ctx.rounds.length={String(ctxAny?.rounds?.length ?? 0)}</div>
+
+          <div className="mt-2 font-semibold">Score-fill accounting (ctx.__debugScoreFill)</div>
+          {debugFill ? (
+            <>
+              <div>scoresIn={String(debugFill.scoresIn ?? "?")} seen={String(debugFill.seen ?? "?")} written={String(debugFill.written ?? "?")}</div>
+              <div>
+                skipNoRound={String(debugFill.skipNoRound ?? "?")} skipNoPlayer={String(debugFill.skipNoPlayer ?? "?")} skipBadHole={String(debugFill.skipBadHole ?? "?")} skipOverwriteBlank={String(
+                  debugFill.skipOverwriteBlank ?? "?"
+                )}
+              </div>
+              <div>sampleSeen0={(debugFill.sampleSeen?.[0] ?? "(none)")}</div>
+              <div>sampleSkip0={(debugFill.sampleSkip?.[0] ?? "(none)")}</div>
+              <div>sampleWritten0={(debugFill.sampleWritten?.[0] ?? "(none)")}</div>
+            </>
+          ) : (
+            <div>(no __debugScoreFill found on ctx)</div>
+          )}
+
+          <div className="mt-2">ctx.rounds.length={String(ctxAny?.rounds?.length ?? 0)}</div>
           <div>round0.roundId={String(round0?.roundId ?? "(none)")}</div>
           <div>round0.scores keys={round0ScoreKeys.length} sample={round0KeysSample}</div>
           <div>diag={diag ? `playerId=${diag.playerId} legNo=${diag.legNo}` : "null"}</div>
