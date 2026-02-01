@@ -564,27 +564,102 @@ export default function MobileCompetitionsPage() {
   }, [players, sortedRounds, roundPlayers, ctx, h2zLegsNorm]);
 
   const diagLines = useMemo(() => {
+    // IMPORTANT: never return null when diag is set, so panel always renders.
     if (!diag) return null;
 
-    const playingSet = new Set<string>();
-    for (const rp of roundPlayers) {
-      if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
+    const lines: string[] = [];
+
+    try {
+      const playingSet = new Set<string>();
+      for (const rp of roundPlayers) {
+        if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
+      }
+      const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
+
+      const leg = h2zLegsNorm.find((l) => l.leg_no === diag.legNo);
+      if (!leg) return ["Diagnostic: leg not found"];
+
+      const roundsInOrder = sortedRounds.map((r) => ({ roundId: r.id, round_no: r.round_no }));
+
+      // Always add a header so you can see the panel is "alive"
+      lines.push("=== H2Z Diagnostic Panel Alive ===");
+      lines.push(`playerId=${diag.playerId}`);
+      lines.push(`legNo=${diag.legNo} rounds=${leg.start_round_no}..${leg.end_round_no}`);
+      lines.push(`roundsInOrder=${roundsInOrder.length}`);
+      lines.push(
+        `ctx.netPointsForHole=${typeof (ctx as any)?.netPointsForHole} ctx.parForPlayerHole=${typeof (ctx as any)?.parForPlayerHole}`
+      );
+
+      // Local tracer (independent of h2z.ts) for first included round:
+      const lo = Math.min(leg.start_round_no, leg.end_round_no);
+      const hi = Math.max(leg.start_round_no, leg.end_round_no);
+
+      const included = roundsInOrder
+        .map((r, idx) => ({
+          roundId: r.roundId,
+          roundIndex: idx,
+          roundNo: typeof r.round_no === "number" ? r.round_no : idx + 1,
+          playing: isPlayingInRound(r.roundId, diag.playerId),
+        }))
+        .filter((r) => r.roundNo >= lo && r.roundNo <= hi);
+
+      lines.push(`includedRounds(by bounds)=${included.length}`);
+      for (const r of included) {
+        lines.push(`- R${r.roundNo} idx=${r.roundIndex} playing=${r.playing ? "yes" : "no"} roundId=${r.roundId}`);
+      }
+
+      const playable = included.filter((r) => r.playing);
+      lines.push(`playableRounds=${playable.length}`);
+
+      // Sample Par 3 scan for first playable round (shows whether ctx has par/points)
+      const first = playable[0];
+      if (!first) {
+        lines.push("No playable rounds for this player+leg. (round_players.playing likely false)");
+      } else {
+        lines.push(`-- Local Par3 scan (first playable round R${first.roundNo}) --`);
+
+        let par3Count = 0;
+        for (let hole = 1; hole <= 18; hole++) {
+          const holeIndex = first.roundIndex * 18 + (hole - 1);
+          const par = (ctx as any)?.parForPlayerHole?.(diag.playerId, holeIndex) ?? null;
+          const pts = (ctx as any)?.netPointsForHole?.(diag.playerId, holeIndex) ?? 0;
+          const strokesRaw =
+            (ctx as any)?.scores?.[diag.playerId]?.[holeIndex] != null ? String((ctx as any).scores[diag.playerId][holeIndex]) : null;
+
+          if (par === 3) {
+            par3Count += 1;
+            lines.push(`Par3 h${hole} idx=${holeIndex} strokes=${strokesRaw ?? "null"} pts=${pts}`);
+          }
+        }
+        lines.push(`localPar3Count=${par3Count}`);
+      }
+
+      // Now call the real builder (from h2z.ts)
+      const built = buildH2ZDiagnostic({
+        ctx: ctx as any,
+        roundsInOrder,
+        isPlayingInRound,
+        playerId: diag.playerId,
+        start_round_no: leg.start_round_no,
+        end_round_no: leg.end_round_no,
+      });
+
+      if (!Array.isArray(built)) {
+        lines.push("buildH2ZDiagnostic did not return string[] (unexpected).");
+        lines.push(`typeof returned=${typeof built}`);
+      } else if (built.length === 0) {
+        lines.push("buildH2ZDiagnostic returned an empty array.");
+      } else {
+        lines.push("=== buildH2ZDiagnostic output ===");
+        lines.push(...built);
+      }
+
+      return lines;
+    } catch (e: any) {
+      lines.push("Diagnostic exception:");
+      lines.push(e?.message ?? String(e));
+      return lines;
     }
-    const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
-
-    const leg = h2zLegsNorm.find((l) => l.leg_no === diag.legNo);
-    if (!leg) return ["Diagnostic: leg not found"];
-
-    const roundsInOrder = sortedRounds.map((r) => ({ roundId: r.id, round_no: r.round_no }));
-
-    return buildH2ZDiagnostic({
-      ctx: ctx as any,
-      roundsInOrder,
-      isPlayingInRound,
-      playerId: diag.playerId,
-      start_round_no: leg.start_round_no,
-      end_round_no: leg.end_round_no,
-    });
   }, [diag, roundPlayers, sortedRounds, h2zLegsNorm, ctx]);
 
   function toggleFixedDetail(playerId: string, key: FixedCompKey) {
@@ -835,14 +910,16 @@ export default function MobileCompetitionsPage() {
               </div>
             </div>
 
-            {/* ✅ Diagnostic output */}
-            {diagLines ? (
+            {/* ✅ Diagnostic output (render when diag is set, even if lines are empty) */}
+            {diag ? (
               <div className="mt-3 rounded-2xl border border-gray-200 bg-white shadow-sm">
                 <div className="border-b bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-700">
                   H2Z Diagnostic (player + selected leg)
                 </div>
                 <div className="px-4 py-3">
-                  <pre className="whitespace-pre-wrap text-[12px] leading-snug text-gray-800">{diagLines.join("\n")}</pre>
+                  <pre className="whitespace-pre-wrap text-[12px] leading-snug text-gray-800">
+                    {(diagLines ?? ["(diagLines is null)"]).join("\n")}
+                  </pre>
                 </div>
               </div>
             ) : null}
