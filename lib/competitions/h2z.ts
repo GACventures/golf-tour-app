@@ -1,6 +1,17 @@
 // lib/competitions/h2z.ts
 
-export type H2ZLegRow = {
+/**
+ * H2Z rules:
+ * - Consider Par 3 holes only
+ * - Add Stableford points on each Par 3
+ * - Reset running total to 0 whenever Stableford points = 0 on a Par 3
+ * - Report per-leg:
+ *   finalScore (running total at end of leg)
+ *   bestScore (peak running total within the leg)
+ *   bestLen (count of Par 3 holes in that best run)
+ */
+
+export type H2ZLeg = {
   tour_id: string;
   leg_no: number;
   start_round_no: number;
@@ -9,10 +20,13 @@ export type H2ZLegRow = {
   updated_at?: string;
 };
 
+// Backwards-compatible alias (some code may have referenced this)
+export type H2ZLegRow = H2ZLeg;
+
 export type H2ZResult = {
-  finalScore: number; // running total at end of leg
-  bestScore: number; // peak running total within the leg
-  bestLen: number; // number of Par 3 holes in that best run
+  finalScore: number;
+  bestScore: number;
+  bestLen: number;
 };
 
 export type H2ZPar3Event = {
@@ -28,7 +42,7 @@ export type H2ZPar3Event = {
   running_after: number;
   reset: boolean;
 
-  // “best run” tracking at the moment of this event
+  // run tracking
   current_run_len_after: number;
   current_run_score_after: number;
   best_score_after: number;
@@ -37,7 +51,7 @@ export type H2ZPar3Event = {
 
 export type H2ZDiagnostic = {
   player_id: string;
-  leg: Pick<H2ZLegRow, "leg_no" | "start_round_no" | "end_round_no">;
+  leg: Pick<H2ZLeg, "leg_no" | "start_round_no" | "end_round_no">;
   issues: string[];
 
   rounds_all_ordered: Array<{
@@ -61,8 +75,8 @@ export type H2ZDiagnostic = {
   };
 };
 
-// Minimal shape of what we need from CompetitionContext.
-// We intentionally keep this loose to avoid assuming ctx.rounds exists.
+// Minimal shape of the competition context we need.
+// IMPORTANT: must not assume ctx.rounds exists without safe checking.
 type AnyCompetitionContext = {
   rounds?: any;
   scores?: any;
@@ -96,7 +110,6 @@ function getOrderedRounds(ctx: AnyCompetitionContext, issues: string[]) {
     }>;
   }
 
-  // Normalize
   const normalized = raw
     .map((r: any, idx: number) => {
       const id = typeof r?.id === "string" ? r.id : null;
@@ -112,13 +125,11 @@ function getOrderedRounds(ctx: AnyCompetitionContext, issues: string[]) {
       return !!r.id;
     });
 
-  // If we have usable round_no for most rounds, sort by it; else keep original order.
   const usableCount = normalized.filter((r: any) => isFiniteNumber(r.roundNoDb)).length;
   const useRoundNoSort = usableCount >= Math.max(1, Math.floor(normalized.length * 0.6));
 
   const sorted = [...normalized].sort((a: any, b: any) => {
     if (useRoundNoSort) {
-      // Nulls go last, otherwise numeric sort
       const an = a.roundNoDb;
       const bn = b.roundNoDb;
       if (an == null && bn == null) return a.originalIndex - b.originalIndex;
@@ -130,7 +141,6 @@ function getOrderedRounds(ctx: AnyCompetitionContext, issues: string[]) {
     return a.originalIndex - b.originalIndex;
   });
 
-  // Assign effective round_no (fallback to orderIndex+1)
   const ordered = sorted.map((r: any, orderIndex: number) => {
     const effective = r.roundNoDb ?? orderIndex + 1;
     if (r.roundNoDb == null) {
@@ -146,7 +156,6 @@ function getOrderedRounds(ctx: AnyCompetitionContext, issues: string[]) {
     };
   });
 
-  // Detect duplicates in effective round_no (can cause weird leg selection)
   const seen = new Map<number, string[]>();
   for (const r of ordered) {
     const arr = seen.get(r.round_no_effective) ?? [];
@@ -168,7 +177,7 @@ function getOrderedRounds(ctx: AnyCompetitionContext, issues: string[]) {
 
 function selectRoundsForLeg(
   orderedRounds: ReturnType<typeof getOrderedRounds>,
-  leg: Pick<H2ZLegRow, "start_round_no" | "end_round_no" | "leg_no">,
+  leg: Pick<H2ZLeg, "start_round_no" | "end_round_no" | "leg_no">,
   issues: string[]
 ) {
   const start = safeInt(leg.start_round_no);
@@ -193,17 +202,21 @@ function selectRoundsForLeg(
   if (included.length === 0) {
     issues.push(
       `Leg ${leg.leg_no} selected zero rounds using inclusive bounds [${lo}..${hi}]. ` +
-        `Check that rounds.round_no is populated correctly for this tour and that ctx.rounds is ordered/complete.`
+        `Check rounds.round_no for this tour and confirm ctx.rounds includes these rounds.`
     );
   }
 
   return included;
 }
 
+/**
+ * Core compute: returns H2ZResult plus optional H2ZDiagnostic.
+ * This is the function your UI already imports.
+ */
 export function computeH2ZForPlayer(
   ctx: AnyCompetitionContext,
   playerId: string,
-  leg: H2ZLegRow,
+  leg: H2ZLeg,
   opts?: { diagnostic?: boolean }
 ): { result: H2ZResult; diagnostic?: H2ZDiagnostic } {
   const issues: string[] = [];
@@ -224,7 +237,6 @@ export function computeH2ZForPlayer(
   let running = 0;
   let bestScore = 0;
 
-  // Track current run (since last reset)
   let currentRunScore = 0;
   let currentRunLen = 0;
   let bestLen = 0;
@@ -235,7 +247,8 @@ export function computeH2ZForPlayer(
     for (let holeNumber = 1; holeNumber <= 18; holeNumber++) {
       const holeIndex = r.round_order_index * 18 + (holeNumber - 1);
 
-      const par = typeof parForPlayerHole === "function" ? parForPlayerHole(playerId, holeIndex) : null;
+      const par =
+        typeof parForPlayerHole === "function" ? parForPlayerHole(playerId, holeIndex) : null;
 
       if (par !== 3) continue;
 
@@ -334,18 +347,47 @@ export function computeH2ZForPlayer(
 }
 
 /**
- * Convenience helper: compute for multiple players for a given leg.
- * (Useful if the UI expects a function like this.)
+ * Compatibility export expected by your UI:
+ * buildH2ZDiagnostic(ctx, playerId, leg)
+ * Returns a diagnostic payload (and never throws).
+ */
+export function buildH2ZDiagnostic(ctx: AnyCompetitionContext, playerId: string, leg: H2ZLeg): H2ZDiagnostic {
+  try {
+    const computed = computeH2ZForPlayer(ctx, playerId, leg, { diagnostic: true });
+    return (
+      computed.diagnostic ?? {
+        player_id: playerId,
+        leg: { leg_no: leg.leg_no, start_round_no: leg.start_round_no, end_round_no: leg.end_round_no },
+        issues: ["Diagnostic unexpectedly missing; compute returned no diagnostic."],
+        rounds_all_ordered: [],
+        rounds_included: [],
+        par3_events: [],
+        summary: { included_round_count: 0, par3_count_seen: 0 },
+      }
+    );
+  } catch (e: any) {
+    return {
+      player_id: playerId,
+      leg: { leg_no: leg.leg_no, start_round_no: leg.start_round_no, end_round_no: leg.end_round_no },
+      issues: [`Exception while building diagnostic: ${e?.message ?? String(e)}`],
+      rounds_all_ordered: [],
+      rounds_included: [],
+      par3_events: [],
+      summary: { included_round_count: 0, par3_count_seen: 0 },
+    };
+  }
+}
+
+/**
+ * Optional helper (you can use later if desired):
+ * compute all players for a leg and optionally attach one player's diagnostic.
  */
 export function computeH2ZForLeg(
   ctx: AnyCompetitionContext,
   playerIds: string[],
-  leg: H2ZLegRow,
+  leg: H2ZLeg,
   opts?: { diagnosticPlayerId?: string | null }
-): {
-  byPlayer: Record<string, H2ZResult>;
-  diagnostic?: H2ZDiagnostic | null;
-} {
+): { byPlayer: Record<string, H2ZResult>; diagnostic?: H2ZDiagnostic | null } {
   const byPlayer: Record<string, H2ZResult> = {};
   let diagnostic: H2ZDiagnostic | null = null;
 
