@@ -175,7 +175,6 @@ export default function MobileCompetitionsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
-  // ✅ H2Z legs
   const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([]);
 
   const [openDetail, setOpenDetail] = useState<
@@ -184,7 +183,6 @@ export default function MobileCompetitionsPage() {
     | null
   >(null);
 
-  // ✅ Diagnostic panel state
   const [diag, setDiag] = useState<{ playerId: string; legNo: number } | null>(null);
 
   const fixedComps: FixedCompMeta[] = useMemo(
@@ -259,13 +257,11 @@ export default function MobileCompetitionsPage() {
       setErrorMsg("");
 
       try {
-        // Tour
         const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
         if (!alive) return;
         setTour(tData as Tour);
 
-        // Rounds
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,name,round_no,created_at,course_id")
@@ -277,7 +273,6 @@ export default function MobileCompetitionsPage() {
         if (!alive) return;
         setRounds(rr);
 
-        // Players (tour_players join)
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
@@ -300,7 +295,6 @@ export default function MobileCompetitionsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
-        // Round players
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
@@ -322,7 +316,6 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
-        // Scores
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: sData, error: sErr } = await supabase
             .from("scores")
@@ -336,7 +329,6 @@ export default function MobileCompetitionsPage() {
           setScores([]);
         }
 
-        // Pars (M/F)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
@@ -362,7 +354,6 @@ export default function MobileCompetitionsPage() {
           setPars([]);
         }
 
-        // ✅ H2Z legs
         {
           const { data: lData, error: lErr } = await supabase
             .from("tour_h2z_legs")
@@ -512,17 +503,14 @@ export default function MobileCompetitionsPage() {
   }, [h2zLegs]);
 
   const h2zMatrix = useMemo(() => {
-    // round|player -> playing?
     const playingSet = new Set<string>();
     for (const rp of roundPlayers) {
       if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
     }
     const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
 
-    // rounds in order with round_no
     const roundsInOrder = sortedRounds.map((r) => ({ roundId: r.id, round_no: r.round_no }));
 
-    // Per player, per leg results
     const perPlayer: Record<string, Record<number, H2ZCell>> = {};
     for (const p of players) perPlayer[p.id] = {};
 
@@ -546,7 +534,6 @@ export default function MobileCompetitionsPage() {
       }
     }
 
-    // Rank within each leg by final desc
     for (const leg of h2zLegsNorm) {
       const entries = players.map((p) => ({
         id: p.id,
@@ -564,77 +551,20 @@ export default function MobileCompetitionsPage() {
   }, [players, sortedRounds, roundPlayers, ctx, h2zLegsNorm]);
 
   const diagLines = useMemo(() => {
-    // IMPORTANT: never return null when diag is set, so panel always renders.
     if (!diag) return null;
 
-    const lines: string[] = [];
+    const playingSet = new Set<string>();
+    for (const rp of roundPlayers) {
+      if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
+    }
+    const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
+
+    const leg = h2zLegsNorm.find((l) => l.leg_no === diag.legNo);
+    if (!leg) return ["Diagnostic: leg not found"];
+
+    const roundsInOrder = sortedRounds.map((r) => ({ roundId: r.id, round_no: r.round_no }));
 
     try {
-      const playingSet = new Set<string>();
-      for (const rp of roundPlayers) {
-        if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
-      }
-      const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
-
-      const leg = h2zLegsNorm.find((l) => l.leg_no === diag.legNo);
-      if (!leg) return ["Diagnostic: leg not found"];
-
-      const roundsInOrder = sortedRounds.map((r) => ({ roundId: r.id, round_no: r.round_no }));
-
-      // Always add a header so you can see the panel is "alive"
-      lines.push("=== H2Z Diagnostic Panel Alive ===");
-      lines.push(`playerId=${diag.playerId}`);
-      lines.push(`legNo=${diag.legNo} rounds=${leg.start_round_no}..${leg.end_round_no}`);
-      lines.push(`roundsInOrder=${roundsInOrder.length}`);
-      lines.push(
-        `ctx.netPointsForHole=${typeof (ctx as any)?.netPointsForHole} ctx.parForPlayerHole=${typeof (ctx as any)?.parForPlayerHole}`
-      );
-
-      // Local tracer (independent of h2z.ts) for first included round:
-      const lo = Math.min(leg.start_round_no, leg.end_round_no);
-      const hi = Math.max(leg.start_round_no, leg.end_round_no);
-
-      const included = roundsInOrder
-        .map((r, idx) => ({
-          roundId: r.roundId,
-          roundIndex: idx,
-          roundNo: typeof r.round_no === "number" ? r.round_no : idx + 1,
-          playing: isPlayingInRound(r.roundId, diag.playerId),
-        }))
-        .filter((r) => r.roundNo >= lo && r.roundNo <= hi);
-
-      lines.push(`includedRounds(by bounds)=${included.length}`);
-      for (const r of included) {
-        lines.push(`- R${r.roundNo} idx=${r.roundIndex} playing=${r.playing ? "yes" : "no"} roundId=${r.roundId}`);
-      }
-
-      const playable = included.filter((r) => r.playing);
-      lines.push(`playableRounds=${playable.length}`);
-
-      // Sample Par 3 scan for first playable round (shows whether ctx has par/points)
-      const first = playable[0];
-      if (!first) {
-        lines.push("No playable rounds for this player+leg. (round_players.playing likely false)");
-      } else {
-        lines.push(`-- Local Par3 scan (first playable round R${first.roundNo}) --`);
-
-        let par3Count = 0;
-        for (let hole = 1; hole <= 18; hole++) {
-          const holeIndex = first.roundIndex * 18 + (hole - 1);
-          const par = (ctx as any)?.parForPlayerHole?.(diag.playerId, holeIndex) ?? null;
-          const pts = (ctx as any)?.netPointsForHole?.(diag.playerId, holeIndex) ?? 0;
-          const strokesRaw =
-            (ctx as any)?.scores?.[diag.playerId]?.[holeIndex] != null ? String((ctx as any).scores[diag.playerId][holeIndex]) : null;
-
-          if (par === 3) {
-            par3Count += 1;
-            lines.push(`Par3 h${hole} idx=${holeIndex} strokes=${strokesRaw ?? "null"} pts=${pts}`);
-          }
-        }
-        lines.push(`localPar3Count=${par3Count}`);
-      }
-
-      // Now call the real builder (from h2z.ts)
       const built = buildH2ZDiagnostic({
         ctx: ctx as any,
         roundsInOrder,
@@ -644,21 +574,11 @@ export default function MobileCompetitionsPage() {
         end_round_no: leg.end_round_no,
       });
 
-      if (!Array.isArray(built)) {
-        lines.push("buildH2ZDiagnostic did not return string[] (unexpected).");
-        lines.push(`typeof returned=${typeof built}`);
-      } else if (built.length === 0) {
-        lines.push("buildH2ZDiagnostic returned an empty array.");
-      } else {
-        lines.push("=== buildH2ZDiagnostic output ===");
-        lines.push(...built);
-      }
-
-      return lines;
+      if (!Array.isArray(built)) return ["Diagnostic: buildH2ZDiagnostic did not return string[]"];
+      if (built.length === 0) return ["Diagnostic: buildH2ZDiagnostic returned empty []"];
+      return built;
     } catch (e: any) {
-      lines.push("Diagnostic exception:");
-      lines.push(e?.message ?? String(e));
-      return lines;
+      return ["Diagnostic exception:", e?.message ?? String(e)];
     }
   }, [diag, roundPlayers, sortedRounds, h2zLegsNorm, ctx]);
 
@@ -715,8 +635,10 @@ export default function MobileCompetitionsPage() {
       : "bg-transparent";
 
   const medalHover = (rank: number | null) => (rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50");
-
   const press = "active:bg-gray-100";
+
+  // unmistakable build marker
+  const BUILD_MARK = "H2Z-DIAG-BANNER-v1";
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
@@ -724,6 +646,23 @@ export default function MobileCompetitionsPage() {
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-sm font-semibold text-gray-900">Competitions</div>
           {tour?.name ? <div className="text-xs text-gray-600">{tour.name}</div> : null}
+        </div>
+      </div>
+
+      {/* ALWAYS-VISIBLE DEBUG BANNER */}
+      <div className="mx-auto w-full max-w-md px-4 pt-3">
+        <div className="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+          <div className="font-semibold">Debug Banner: {BUILD_MARK}</div>
+          <div>diag={diag ? `playerId=${diag.playerId} legNo=${diag.legNo}` : "null"}</div>
+          <div>diagLines={diagLines ? `len=${diagLines.length}` : "null"}</div>
+          {diag ? (
+            <div className="mt-2 rounded-lg border border-amber-200 bg-white px-2 py-2">
+              <div className="text-[11px] font-semibold text-gray-700">Diagnostic output</div>
+              <pre className="mt-1 whitespace-pre-wrap text-[11px] leading-snug text-gray-900">
+                {(diagLines ?? ["(diagLines is null)"]).join("\n")}
+              </pre>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -909,20 +848,6 @@ export default function MobileCompetitionsPage() {
                 score and (holes count). Use “Show diagnostic” to trace one player’s Par 3 H2Z.
               </div>
             </div>
-
-            {/* ✅ Diagnostic output (render when diag is set, even if lines are empty) */}
-            {diag ? (
-              <div className="mt-3 rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <div className="border-b bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-700">
-                  H2Z Diagnostic (player + selected leg)
-                </div>
-                <div className="px-4 py-3">
-                  <pre className="whitespace-pre-wrap text-[12px] leading-snug text-gray-800">
-                    {(diagLines ?? ["(diagLines is null)"]).join("\n")}
-                  </pre>
-                </div>
-              </div>
-            ) : null}
 
             <div className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="border-b bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-700">Definitions</div>
