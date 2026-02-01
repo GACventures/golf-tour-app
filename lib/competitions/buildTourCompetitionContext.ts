@@ -1,8 +1,6 @@
 import type { CompetitionContext } from "./types";
 import { netStablefordPointsForHole } from "@/lib/stableford";
 
-export const BUILD_TOUR_CTX_VERSION = "BTC-v3-scores-matrix-stamp";
-
 export type Tee = "M" | "F";
 
 export type TourRoundLite = {
@@ -114,24 +112,46 @@ export function buildTourCompetitionContext(params: {
   }
 
   /**
-   * round|player -> hole(1..18) -> raw string ("", "P", "5", etc)
+   * ✅ NEW: Direct-fill score matrices.
+   *
+   * This avoids any composite-key/grouping subtlety by writing directly:
+   * roundId -> (playerId -> 18-slot array)
    */
-  const scoresByRoundPlayer = new Map<string, Map<number, string>>();
+  const holes = Array.from({ length: 18 }, (_, i) => i + 1);
+
+  // Pre-create blank arrays for every round/player
+  const scoresByRoundId = new Map<string, Record<string, string[]>>();
+  for (const r of rounds) {
+    const rid = String(r.id);
+    const byPlayer: Record<string, string[]> = {};
+    for (const p of players) byPlayer[String(p.id)] = Array(18).fill("");
+    scoresByRoundId.set(rid, byPlayer);
+  }
+
+  // Fill from scores rows
   for (const s of scores) {
     const roundId = String(s.round_id);
     const playerId = String(s.player_id);
+
+    const byPlayer = scoresByRoundId.get(roundId);
+    if (!byPlayer) continue;
+
+    const arr = byPlayer[playerId];
+    if (!arr) continue; // score row for a player not in this tour list
+
     const holeNo = clampHoleTo1to18(s.hole_number);
     if (!holeNo) continue;
 
-    const key = `${roundId}|${playerId}`;
-    if (!scoresByRoundPlayer.has(key)) scoresByRoundPlayer.set(key, new Map());
-
     const raw = normalizeRawScore(s.strokes, s.pickup).trim().toUpperCase();
-    scoresByRoundPlayer.get(key)!.set(holeNo, raw);
+    const idx = holeNo - 1;
+
+    // Don't overwrite a real value with blank
+    if (raw === "" && String(arr[idx] ?? "").trim() !== "") continue;
+
+    arr[idx] = raw;
   }
 
   const playerById = new Map(players.map((p) => [String(p.id), p]));
-  const holes = Array.from({ length: 18 }, (_, i) => i + 1);
 
   const tourRounds: TourRoundContextLocal[] = rounds
     .filter((r) => !!r.id)
@@ -142,30 +162,15 @@ export function buildTourCompetitionContext(params: {
       const byTee = courseId ? parsByCourseTeeHole.get(courseId) : undefined;
 
       // Baseline arrays are still provided for compatibility.
+      // Use Men's if present, else Women's, else zeros.
       const baselineTee: Tee = byTee?.has("M") ? "M" : "F";
       const baselineMap = byTee?.get(baselineTee);
 
       const parsByHole = holes.map((h) => baselineMap?.get(h)?.par ?? 0);
       const strokeIndexByHole = holes.map((h) => baselineMap?.get(h)?.si ?? 0);
 
-      // Build 18-length raw-score arrays per player from grouped scores
-      const scoresMatrix: Record<string, string[]> = {};
-      for (const p of players) {
-        const pid = String(p.id);
-        const arr = Array(18).fill("");
-
-        const key = `${roundId}|${pid}`;
-        const byHole = scoresByRoundPlayer.get(key);
-
-        if (byHole) {
-          for (let hole = 1; hole <= 18; hole++) {
-            const v = byHole.get(hole);
-            if (typeof v === "string") arr[hole - 1] = v;
-          }
-        }
-
-        scoresMatrix[pid] = arr;
-      }
+      // Get the already-filled score matrix for this round
+      const scoresMatrix: Record<string, string[]> = scoresByRoundId.get(roundId) ?? {};
 
       const isPlayingInRound = (playerId: string) => {
         const rp = rpByRoundPlayer.get(`${roundId}|${String(playerId)}`);
@@ -173,12 +178,14 @@ export function buildTourCompetitionContext(params: {
       };
 
       const isComplete = (playerId: string) => {
+        // If not playing in that round, treat as complete (lets comps skip/ignore)
         if (!isPlayingInRound(playerId)) return true;
         const arr = scoresMatrix[String(playerId)] ?? Array(18).fill("");
         for (let i = 0; i < 18; i++) if (!String(arr[i] ?? "").trim()) return false;
         return true;
       };
 
+      // ✅ Tee-specific par (used for bucketing Par 3/4/5 comps)
       const parForPlayerHole = (playerId: string, holeIndex: number) => {
         const player = playerById.get(String(playerId));
         const tee: Tee = normalizeTee(player?.gender);
@@ -193,6 +200,7 @@ export function buildTourCompetitionContext(params: {
         const player = playerById.get(String(playerId));
         if (!player) return 0;
 
+        // Not playing? score 0
         if (!isPlayingInRound(playerId)) return 0;
 
         const tee: Tee = normalizeTee(player.gender);
@@ -228,6 +236,8 @@ export function buildTourCompetitionContext(params: {
       };
     });
 
+  // For tour competitions, ctx.players.playing is used only by eligibility.onlyPlaying.
+  // Consider a player "playing" in tour scope if they are marked playing in ANY round.
   const playedAny = (playerId: string) =>
     rounds.some((r) => {
       const rp = rpByRoundPlayer.get(`${String(r.id)}|${String(playerId)}`);
@@ -244,9 +254,6 @@ export function buildTourCompetitionContext(params: {
     })),
     rounds: tourRounds,
   };
-
-  // ✅ Version stamp so we can prove which file is actually running
-  (ctx as any).__ctxVersion = BUILD_TOUR_CTX_VERSION;
 
   return ctx;
 }
