@@ -20,6 +20,7 @@ import {
   type RoundPlayerLiteForTour,
   type ScoreLiteForTour,
   type ParLiteForTour,
+  BUILD_TOUR_CTX_VERSION,
 } from "@/lib/competitions/buildTourCompetitionContext";
 
 import { computeH2ZForPlayer, type H2ZLeg, buildH2ZDiagnostic } from "@/lib/competitions/h2z";
@@ -113,7 +114,7 @@ function rankWithTies(entries: Array<{ id: string; value: number }>, lowerIsBett
     const v = Number.isFinite(e.value) ? e.value : 0;
 
     if (lastValue === null || v !== lastValue) {
-      currentRank = seen; // 1,1,3 style
+      currentRank = seen;
       lastValue = v;
     }
     rankById.set(e.id, currentRank);
@@ -137,7 +138,7 @@ type FixedCompKey =
 type FixedCompMeta = {
   key: FixedCompKey;
   label: string;
-  competitionId: string; // matches catalog id
+  competitionId: string;
   lowerIsBetter?: boolean;
   format: (v: number) => string;
   detailFromStatsKey?: string;
@@ -169,7 +170,6 @@ type ScoreAuditRow = {
   pickup?: boolean | null;
 };
 
-// ✅ Make info exist on all variants so TS is happy in render
 type ScoreAuditState = {
   status: "idle" | "loading" | "ready" | "error";
   info: string[];
@@ -189,7 +189,7 @@ export default function MobileCompetitionsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
-  const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([]);
+  const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([];
 
   const [openDetail, setOpenDetail] = useState<
     | { kind: "fixed"; playerId: string; key: FixedCompKey }
@@ -198,7 +198,6 @@ export default function MobileCompetitionsPage() {
   >(null);
 
   const [diag, setDiag] = useState<{ playerId: string; legNo: number } | null>(null);
-
   const [scoreAudit, setScoreAudit] = useState<ScoreAuditState>({ status: "idle", info: [] });
 
   const fixedComps: FixedCompMeta[] = useMemo(
@@ -207,38 +206,12 @@ export default function MobileCompetitionsPage() {
       { key: "bigGeorge", label: "Big George", competitionId: "tour_big_george_par4_avg", format: (v) => fmt2(v) },
       { key: "grandCanyon", label: "Grand Canyon", competitionId: "tour_grand_canyon_par5_avg", format: (v) => fmt2(v) },
       { key: "wizard", label: "Wizard", competitionId: "tour_wizard_four_plus_pct", format: (v) => fmtPct0(v) },
-      {
-        key: "bagelMan",
-        label: "Bagel Man",
-        competitionId: "tour_bagel_man_zero_pct",
-        lowerIsBetter: true,
-        format: (v) => fmtPct0(v),
-      },
-      {
-        key: "eclectic",
-        label: "Eclectic",
-        competitionId: "tour_eclectic_total",
-        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
-      },
+      { key: "bagelMan", label: "Bagel Man", competitionId: "tour_bagel_man_zero_pct", lowerIsBetter: true, format: (v) => fmtPct0(v) },
+      { key: "eclectic", label: "Eclectic", competitionId: "tour_eclectic_total", format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)) },
       { key: "schumacher", label: "Schumacher", competitionId: "tour_schumacher_first3_avg", format: (v) => fmt2(v) },
       { key: "closer", label: "Closer", competitionId: "tour_closer_last3_avg", format: (v) => fmt2(v) },
-      {
-        key: "hotStreak",
-        label: "Hot Streak",
-        competitionId: "tour_hot_streak_best_run",
-        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
-        tappable: true,
-        detailFromStatsKey: "streak_where",
-      },
-      {
-        key: "coldStreak",
-        label: "Cold Streak",
-        competitionId: "tour_cold_streak_best_run",
-        lowerIsBetter: true,
-        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
-        tappable: true,
-        detailFromStatsKey: "streak_where",
-      },
+      { key: "hotStreak", label: "Hot Streak", competitionId: "tour_hot_streak_best_run", format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)), tappable: true, detailFromStatsKey: "streak_where" },
+      { key: "coldStreak", label: "Cold Streak", competitionId: "tour_cold_streak_best_run", lowerIsBetter: true, format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)), tappable: true, detailFromStatsKey: "streak_where" },
     ],
     []
   );
@@ -255,10 +228,7 @@ export default function MobileCompetitionsPage() {
       { label: "Closer", text: "Average Stableford points on holes 16–18" },
       { label: "Hot Streak", text: "Longest run in any round of consecutive holes where gross strokes is par or better" },
       { label: "Cold Streak", text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse" },
-      {
-        label: "H2Z",
-        text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole",
-      },
+      { label: "H2Z", text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole" },
     ],
     []
   );
@@ -299,11 +269,7 @@ export default function MobileCompetitionsPage() {
         const ps: PlayerRow[] = (tpData ?? [])
           .map((row: any) => row.players)
           .filter(Boolean)
-          .map((p: any) => ({
-            id: String(p.id),
-            name: safeName(p.name, "(unnamed)"),
-            gender: p.gender ? normalizeTee(p.gender) : null,
-          }));
+          .map((p: any) => ({ id: String(p.id), name: safeName(p.name, "(unnamed)"), gender: p.gender ? normalizeTee(p.gender) : null }));
 
         if (!alive) return;
         setPlayers(ps);
@@ -319,15 +285,14 @@ export default function MobileCompetitionsPage() {
             .in("player_id", playerIds);
           if (rpErr) throw rpErr;
 
-          const rpRows: RoundPlayerRow[] = (rpData ?? []).map((x: any) => ({
-            round_id: String(x.round_id),
-            player_id: String(x.player_id),
-            playing: x.playing === true,
-            playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
-          }));
-
-          if (!alive) return;
-          setRoundPlayers(rpRows);
+          setRoundPlayers(
+            (rpData ?? []).map((x: any) => ({
+              round_id: String(x.round_id),
+              player_id: String(x.player_id),
+              playing: x.playing === true,
+              playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
+            }))
+          );
         } else {
           setRoundPlayers([]);
         }
@@ -356,31 +321,27 @@ export default function MobileCompetitionsPage() {
             .order("hole_number", { ascending: true });
           if (pErr) throw pErr;
 
-          const pr: ParRow[] = (pData ?? []).map((x: any) => ({
-            course_id: String(x.course_id),
-            hole_number: Number(x.hole_number),
-            tee: normalizeTee(x.tee),
-            par: Number(x.par),
-            stroke_index: Number(x.stroke_index),
-          }));
-
-          if (!alive) return;
-          setPars(pr);
+          setPars(
+            (pData ?? []).map((x: any) => ({
+              course_id: String(x.course_id),
+              hole_number: Number(x.hole_number),
+              tee: normalizeTee(x.tee),
+              par: Number(x.par),
+              stroke_index: Number(x.stroke_index),
+            }))
+          );
         } else {
           setPars([]);
         }
 
-        {
-          const { data: lData, error: lErr } = await supabase
-            .from("tour_h2z_legs")
-            .select("tour_id,leg_no,start_round_no,end_round_no")
-            .eq("tour_id", tourId)
-            .order("leg_no", { ascending: true });
-
-          if (lErr) throw lErr;
-          if (!alive) return;
-          setH2zLegs((lData ?? []) as H2ZLegRow[]);
-        }
+        const { data: lData, error: lErr } = await supabase
+          .from("tour_h2z_legs")
+          .select("tour_id,leg_no,start_round_no,end_round_no")
+          .eq("tour_id", tourId)
+          .order("leg_no", { ascending: true });
+        if (lErr) throw lErr;
+        if (!alive) return;
+        setH2zLegs((lData ?? []) as H2ZLegRow[]);
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load competitions.");
@@ -409,17 +370,9 @@ export default function MobileCompetitionsPage() {
   }, [rounds]);
 
   const ctx = useMemo(() => {
-    const roundsLite: TourRoundLite[] = sortedRounds.map((r) => ({
-      id: r.id,
-      name: r.name,
-      course_id: r.course_id,
-    }));
+    const roundsLite: TourRoundLite[] = sortedRounds.map((r) => ({ id: r.id, name: r.name, course_id: r.course_id }));
 
-    const playersLite: PlayerLiteForTour[] = players.map((p) => ({
-      id: p.id,
-      name: p.name,
-      gender: p.gender ? normalizeTee(p.gender) : null,
-    }));
+    const playersLite: PlayerLiteForTour[] = players.map((p) => ({ id: p.id, name: p.name, gender: p.gender ? normalizeTee(p.gender) : null }));
 
     const rpLite: RoundPlayerLiteForTour[] = roundPlayers.map((rp) => ({
       round_id: rp.round_id,
@@ -444,17 +397,11 @@ export default function MobileCompetitionsPage() {
       stroke_index: Number(p.stroke_index),
     }));
 
-    return buildTourCompetitionContext({
-      rounds: roundsLite,
-      players: playersLite,
-      roundPlayers: rpLite,
-      scores: scoresLite,
-      pars: parsLite,
-    });
+    return buildTourCompetitionContext({ rounds: roundsLite, players: playersLite, roundPlayers: rpLite, scores: scoresLite, pars: parsLite });
   }, [sortedRounds, players, roundPlayers, scores, pars]);
 
   const compMatrix = useMemo(() => {
-    const out: Record<string, Record<FixedCompKey, any>> = {};
+    const out: Record<string, Record<FixedCompKey, MatrixCell>> = {};
     for (const p of players) {
       out[p.id] = {
         napoleon: { value: null, rank: null },
@@ -503,16 +450,12 @@ export default function MobileCompetitionsPage() {
       }
     }
 
-    return out as Record<string, Record<FixedCompKey, MatrixCell>>;
+    return out;
   }, [players, fixedComps, ctx]);
 
   const h2zLegsNorm: H2ZLeg[] = useMemo(() => {
     return (h2zLegs ?? [])
-      .map((l) => ({
-        leg_no: Number(l.leg_no),
-        start_round_no: Number(l.start_round_no),
-        end_round_no: Number(l.end_round_no),
-      }))
+      .map((l) => ({ leg_no: Number(l.leg_no), start_round_no: Number(l.start_round_no), end_round_no: Number(l.end_round_no) }))
       .filter((l) => Number.isFinite(l.leg_no) && Number.isFinite(l.start_round_no) && Number.isFinite(l.end_round_no))
       .filter((l) => l.leg_no >= 1 && l.end_round_no >= l.start_round_no)
       .sort((a, b) => a.leg_no - b.leg_no);
@@ -520,9 +463,7 @@ export default function MobileCompetitionsPage() {
 
   const h2zMatrix = useMemo(() => {
     const playingSet = new Set<string>();
-    for (const rp of roundPlayers) {
-      if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
-    }
+    for (const rp of roundPlayers) if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
     const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
 
     const roundsInOrder = sortedRounds.map((r) => ({ roundId: r.id, round_no: r.round_no }));
@@ -531,31 +472,16 @@ export default function MobileCompetitionsPage() {
     for (const p of players) perPlayer[p.id] = {};
 
     for (const p of players) {
-      const res = computeH2ZForPlayer({
-        ctx: ctx as any,
-        legs: h2zLegsNorm,
-        roundsInOrder,
-        isPlayingInRound,
-        playerId: p.id,
-      });
+      const res = computeH2ZForPlayer({ ctx: ctx as any, legs: h2zLegsNorm, roundsInOrder, isPlayingInRound, playerId: p.id });
 
       for (const leg of h2zLegsNorm) {
         const r = res[leg.leg_no];
-        perPlayer[p.id][leg.leg_no] = {
-          final: r ? r.finalScore : null,
-          rank: null,
-          best: r ? r.bestScore : null,
-          bestLen: r ? r.bestLen : null,
-        };
+        perPlayer[p.id][leg.leg_no] = { final: r ? r.finalScore : null, rank: null, best: r ? r.bestScore : null, bestLen: r ? r.bestLen : null };
       }
     }
 
     for (const leg of h2zLegsNorm) {
-      const entries = players.map((p) => ({
-        id: p.id,
-        value: Number(perPlayer[p.id]?.[leg.leg_no]?.final ?? 0),
-      }));
-
+      const entries = players.map((p) => ({ id: p.id, value: Number(perPlayer[p.id]?.[leg.leg_no]?.final ?? 0) }));
       const rankById = rankWithTies(entries, false);
       for (const p of players) {
         const rk = rankById.get(p.id);
@@ -570,9 +496,7 @@ export default function MobileCompetitionsPage() {
     if (!diag) return null;
 
     const playingSet = new Set<string>();
-    for (const rp of roundPlayers) {
-      if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
-    }
+    for (const rp of roundPlayers) if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
     const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
 
     const leg = h2zLegsNorm.find((l) => l.leg_no === diag.legNo);
@@ -580,31 +504,24 @@ export default function MobileCompetitionsPage() {
 
     const roundsInOrder = sortedRounds.map((r) => ({ roundId: r.id, round_no: r.round_no }));
 
-    try {
-      const built = buildH2ZDiagnostic({
-        ctx: ctx as any,
-        roundsInOrder,
-        isPlayingInRound,
-        playerId: diag.playerId,
-        start_round_no: leg.start_round_no,
-        end_round_no: leg.end_round_no,
-      });
-
-      if (!Array.isArray(built)) return ["Diagnostic: buildH2ZDiagnostic did not return string[]"];
-      if (built.length === 0) return ["Diagnostic: buildH2ZDiagnostic returned empty []"];
-      return built;
-    } catch (e: any) {
-      return ["Diagnostic exception:", e?.message ?? String(e)];
-    }
+    return buildH2ZDiagnostic({
+      ctx: ctx as any,
+      roundsInOrder,
+      isPlayingInRound,
+      playerId: diag.playerId,
+      start_round_no: leg.start_round_no,
+      end_round_no: leg.end_round_no,
+    });
   }, [diag, roundPlayers, sortedRounds, h2zLegsNorm, ctx]);
 
+  // Unfiltered DB audit (as before)
   useEffect(() => {
     if (!diag) {
       setScoreAudit({ status: "idle", info: [] });
       return;
     }
-
     const diagSnap = diag;
+
     let alive = true;
 
     async function runAudit() {
@@ -619,7 +536,6 @@ export default function MobileCompetitionsPage() {
         .map((r) => ({ round_no: r.round_no ?? null, round_id: r.id }));
 
       const includedRoundIds = includedRounds.map((r) => r.round_id);
-
       const tourPlayerIds = new Set(players.map((p) => String(p.id)));
 
       const infoStart: string[] = [];
@@ -632,45 +548,29 @@ export default function MobileCompetitionsPage() {
       setScoreAudit({ status: "loading", info: infoStart });
 
       if (includedRoundIds.length === 0) {
-        setScoreAudit({
-          status: "ready",
-          info: [...infoStart, "No included rounds => nothing to audit (check round_no values)."],
-        });
+        setScoreAudit({ status: "ready", info: [...infoStart, "No included rounds => nothing to audit (check round_no values)."] });
         return;
       }
 
       try {
-        const { data, error } = await supabase
-          .from("scores")
-          .select("round_id,player_id,hole_number,strokes,pickup")
-          .in("round_id", includedRoundIds)
-          .limit(5000);
-
+        const { data, error } = await supabase.from("scores").select("round_id,player_id,hole_number,strokes,pickup").in("round_id", includedRoundIds).limit(5000);
         if (error) throw error;
 
         const rows = (data ?? []) as ScoreAuditRow[];
 
         const distinctScorePlayerIds = Array.from(new Set(rows.map((r) => String(r.player_id))));
         const scorePlayerIdsNotInTour = distinctScorePlayerIds.filter((pid) => !tourPlayerIds.has(pid));
+        const scorePlayerIdsInTour = distinctScorePlayerIds.filter((pid) => tourPlayerIds.has(pid));
+        const tourPlayersMissingFromScores = players.map((p) => String(p.id)).filter((pid) => !distinctScorePlayerIds.includes(pid));
 
         const byRoundForDiag = includedRounds.map((r) => {
           const count = rows.filter((x) => String(x.round_id) === String(r.round_id) && String(x.player_id) === String(diagSnap.playerId)).length;
           return { round_no: r.round_no, round_id: r.round_id, count };
         });
 
-        const scorePlayerIdsInTour = distinctScorePlayerIds.filter((pid) => tourPlayerIds.has(pid));
-        const tourPlayersMissingFromScores = players
-          .map((p) => String(p.id))
-          .filter((pid) => !distinctScorePlayerIds.includes(pid));
-
         const diagRows = rows
           .filter((x) => String(x.player_id) === String(diagSnap.playerId))
-          .map((x) => ({
-            round_id: String(x.round_id),
-            hole_number: Number(x.hole_number),
-            strokes: x.strokes,
-            pickup: x.pickup === true,
-          }))
+          .map((x) => ({ round_id: String(x.round_id), hole_number: Number(x.hole_number), strokes: x.strokes, pickup: x.pickup === true }))
           .sort((a, b) => a.hole_number - b.hole_number);
 
         const diagHoleNums = diagRows.map((x) => x.hole_number);
@@ -681,19 +581,9 @@ export default function MobileCompetitionsPage() {
         info.push(`distinctScorePlayerIds=${distinctScorePlayerIds.length}`);
         info.push(`scorePlayerIdsInTour=${scorePlayerIdsInTour.length}`);
         info.push(`scorePlayerIdsNotInTour=${scorePlayerIdsNotInTour.length}`);
-        if (scorePlayerIdsNotInTour.length) {
-          info.push(`notInTour(sample up to 10)=${scorePlayerIdsNotInTour.slice(0, 10).join(",")}`);
-        }
-
         info.push(`tourPlayersMissingFromScores=${tourPlayersMissingFromScores.length}`);
-        if (tourPlayersMissingFromScores.length) {
-          info.push(`missingFromScores(sample up to 10)=${tourPlayersMissingFromScores.slice(0, 10).join(",")}`);
-        }
-
         info.push("diagPlayer rows per included round:");
-        for (const rr of byRoundForDiag) {
-          info.push(`- R${rr.round_no ?? "?"}: ${rr.count} rows (roundId=${rr.round_id})`);
-        }
+        for (const rr of byRoundForDiag) info.push(`- R${rr.round_no ?? "?"}: ${rr.count} rows (roundId=${rr.round_id})`);
 
         info.push(`diagPlayer totalRowsInTheseRounds=${diagRows.length}`);
         if (diagRows.length) {
@@ -716,10 +606,7 @@ export default function MobileCompetitionsPage() {
         setScoreAudit({ status: "ready", info });
       } catch (e: any) {
         if (!alive) return;
-        setScoreAudit({
-          status: "error",
-          info: [...infoStart, "Audit failed:", e?.message ?? String(e)],
-        });
+        setScoreAudit({ status: "error", info: [...infoStart, "Audit failed:", e?.message ?? String(e)] });
       }
     }
 
@@ -734,6 +621,13 @@ export default function MobileCompetitionsPage() {
     setOpenDetail((prev) => {
       if (prev?.kind === "fixed" && prev.playerId === playerId && prev.key === key) return null;
       return { kind: "fixed", playerId, key };
+    });
+  }
+
+  function toggleH2ZDetail(playerId: string, legNo: number) {
+    setOpenDetail((prev) => {
+      if (prev?.kind === "h2z" && prev.playerId === playerId && prev.legNo === legNo) return null;
+      return { kind: "h2z", playerId, legNo };
     });
   }
 
@@ -778,8 +672,12 @@ export default function MobileCompetitionsPage() {
   const medalHover = (rank: number | null) => (rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50");
   const press = "active:bg-gray-100";
 
-  const BUILD_MARK = "H2Z-DIAG-BANNER-v5c";
-  const canForce = players.length > 0 && h2zLegsNorm.length > 0;
+  // ✅ NEW: runtime proof of ctx file + score sample
+  const ctxAny = ctx as any;
+  const runtimeCtxVersion = String(ctxAny?.__ctxVersion ?? "(none)");
+  const diagPlayerId = diag?.playerId ?? "";
+  const round0 = ctxAny?.rounds?.[0];
+  const scoreSample = diagPlayerId && round0?.scores?.[diagPlayerId] ? (round0.scores[diagPlayerId] as string[]).slice(0, 5).join(",") : "(no sample)";
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
@@ -790,24 +688,26 @@ export default function MobileCompetitionsPage() {
         </div>
       </div>
 
-      {/* DEBUG BANNER */}
+      {/* Debug banner */}
       <div className="mx-auto w-full max-w-md px-4 pt-3">
         <div className="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
-          <div className="font-semibold">Debug Banner: {BUILD_MARK}</div>
-          <div>players={players.length} legs={h2zLegsNorm.length} rounds={sortedRounds.length}</div>
-          <div>scoresRowsLoadedFiltered={scores.length}</div>
-          <div>diag={diag ? `playerId=${diag.playerId} legNo=${diag.legNo}` : "null"}</div>
-          <div>diagLines={diagLines ? `len=${diagLines.length}` : "null"}</div>
+          <div className="font-semibold">Debug Banner: H2Z-CTX-STAMP-v1</div>
+          <div>buildTourCompetitionContext export={BUILD_TOUR_CTX_VERSION}</div>
+          <div>ctx.__ctxVersion(runtime)={runtimeCtxVersion}</div>
+          <div>ctx score sample (round1, diag player, holes 1..5)={scoreSample}</div>
+
+          <div className="mt-1">
+            diag={diag ? `playerId=${diag.playerId} legNo=${diag.legNo}` : "null"} | diagLines={diagLines ? `len=${diagLines.length}` : "null"}
+          </div>
 
           <div className="mt-2 flex gap-2">
             <button
               type="button"
-              className={`rounded-lg border px-2 py-1 text-[12px] ${canForce ? "bg-white hover:bg-gray-50" : "bg-gray-100 text-gray-400"}`}
-              disabled={!canForce}
+              className="rounded-lg border bg-white px-2 py-1 text-[12px] hover:bg-gray-50"
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                if (!canForce) return;
+                if (players.length === 0 || h2zLegsNorm.length === 0) return;
                 setDiag({ playerId: players[0].id, legNo: h2zLegsNorm[0].leg_no });
               }}
             >
@@ -850,8 +750,8 @@ export default function MobileCompetitionsPage() {
         </div>
       </div>
 
+      {/* The rest of your existing UI (table + definitions) stays exactly as you provided */}
       <main className="mx-auto w-full max-w-md px-4 py-4">
-        {/* Table etc unchanged from your current working version */}
         {loading ? (
           <div className="space-y-3">
             <div className="h-5 w-40 rounded bg-gray-100" />
@@ -864,9 +764,162 @@ export default function MobileCompetitionsPage() {
         ) : sortedRounds.length === 0 ? (
           <div className="rounded-2xl border p-4 text-sm text-gray-700">No rounds found for this tour.</div>
         ) : (
-          <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-3 text-sm text-gray-700">
-            This build is diagnostic-only. (Your table UI is unchanged in the previous file version you already have.)
-          </div>
+          <>
+            <div className="rounded-2xl border border-gray-200 bg-white shadow-sm max-h-[70vh] overflow-auto">
+              <table className="min-w-full border-collapse table-fixed">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className={`sticky left-0 top-0 z-50 bg-gray-50 border-r border-gray-200 ${thBase} text-left`} style={{ width: 140, minWidth: 140 }}>
+                      Player
+                    </th>
+
+                    {fixedComps.map((c) => (
+                      <th key={c.key} className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>
+                        {c.label}
+                      </th>
+                    ))}
+
+                    {h2zLegsNorm.map((leg) => (
+                      <th key={`h2z-${leg.leg_no}`} className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>
+                        {h2zHeading(leg)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {players.map((p) => {
+                    const row = compMatrix[p.id] ?? ({} as any);
+
+                    return (
+                      <tr key={p.id} className="border-b last:border-b-0">
+                        <td className="sticky left-0 z-30 bg-white border-r border-gray-200 px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap" style={{ width: 140, minWidth: 140 }}>
+                          {p.name}
+                        </td>
+
+                        {fixedComps.map((c) => {
+                          const cell = row?.[c.key] as MatrixCell | undefined;
+                          const value = cell?.value ?? null;
+                          const rank = cell?.rank ?? null;
+
+                          const tappable = c.tappable === true;
+                          const isOpen = openDetail?.kind === "fixed" && openDetail.playerId === p.id && openDetail.key === c.key;
+                          const detail = (cell?.detail ?? "").trim();
+
+                          const show =
+                            value === null ? (
+                              <span className="text-gray-400">—</span>
+                            ) : (
+                              <>
+                                {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
+                              </>
+                            );
+
+                          if (c.key === "eclectic") {
+                            return (
+                              <td key={c.key} className={tdBase}>
+                                {value === null ? (
+                                  <span className="text-gray-400">—</span>
+                                ) : (
+                                  <Link href={`/m/tours/${tourId}/competitions/eclectic/${p.id}`} className={`${boxBase} ${medalClass(rank)} ${medalHover(rank)} ${press}`} aria-label="Open Eclectic breakdown">
+                                    {show}
+                                  </Link>
+                                )}
+                              </td>
+                            );
+                          }
+
+                          return (
+                            <td key={c.key} className={tdBase}>
+                              <div className="inline-flex flex-col items-end gap-1">
+                                {value === null ? (
+                                  <span className="text-gray-400">—</span>
+                                ) : tappable ? (
+                                  <button type="button" className={`${boxBase} ${medalClass(rank)} ${medalHover(rank)} ${press}`} onClick={() => toggleFixedDetail(p.id, c.key)} aria-label={`${c.label} detail`}>
+                                    {show}
+                                  </button>
+                                ) : (
+                                  <span className={`${boxBase} ${medalClass(rank)}`}>{show}</span>
+                                )}
+
+                                {tappable && isOpen ? (
+                                  <div className="max-w-[160px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm text-left">
+                                    {detail ? detail : <span className="text-gray-400">No streak found</span>}
+                                  </div>
+                                ) : null}
+                              </div>
+                            </td>
+                          );
+                        })}
+
+                        {h2zLegsNorm.map((leg) => {
+                          const cell = h2zMatrix?.[p.id]?.[leg.leg_no];
+                          const final = cell?.final ?? null;
+                          const rank = cell?.rank ?? null;
+
+                          const isOpen = openDetail?.kind === "h2z" && openDetail.playerId === p.id && openDetail.legNo === leg.leg_no;
+                          const best = cell?.best ?? null;
+                          const bestLen = cell?.bestLen ?? null;
+
+                          const show =
+                            final === null ? (
+                              <span className="text-gray-400">—</span>
+                            ) : (
+                              <>
+                                {final} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
+                              </>
+                            );
+
+                          return (
+                            <td key={`h2z-${leg.leg_no}`} className={tdBase}>
+                              <div className="inline-flex flex-col items-end gap-1">
+                                {final === null ? (
+                                  <span className="text-gray-400">—</span>
+                                ) : (
+                                  <button type="button" className={`${boxBase} ${medalClass(rank)} ${medalHover(rank)} ${press}`} onClick={() => toggleH2ZDetail(p.id, leg.leg_no)} aria-label={`H2Z detail leg ${leg.leg_no}`}>
+                                    {show}
+                                  </button>
+                                )}
+
+                                {final !== null && isOpen ? (
+                                  <div className="max-w-[180px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm text-left">
+                                    <div>
+                                      Peak: <span className="font-semibold">{best ?? 0}</span> <span className="text-gray-500">({bestLen ?? 0})</span>
+                                    </div>
+                                    <button type="button" className="mt-1 text-[11px] underline text-gray-700" onClick={() => toggleDiag(p.id, leg.leg_no)}>
+                                      {diag?.playerId === p.id && diag?.legNo === leg.leg_no ? "Hide diagnostic" : "Show diagnostic"}
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+
+              <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as better. Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown. Tap H2Z to see peak score and (holes count). Use “Show diagnostic” to trace one player’s Par 3 H2Z.
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
+              <div className="border-b bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-700">Definitions</div>
+              <div className="px-4 py-3">
+                <ul className="space-y-2 text-sm text-gray-800">
+                  {definitions.map((d) => (
+                    <li key={d.label} className="leading-snug">
+                      <span className="font-semibold text-gray-900">{d.label}</span> <span className="text-gray-600">—</span>{" "}
+                      <span className="text-gray-800">{d.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </>
         )}
       </main>
 

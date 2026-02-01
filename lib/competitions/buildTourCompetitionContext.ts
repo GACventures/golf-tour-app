@@ -1,6 +1,8 @@
 import type { CompetitionContext } from "./types";
 import { netStablefordPointsForHole } from "@/lib/stableford";
 
+export const BUILD_TOUR_CTX_VERSION = "BTC-v3-scores-matrix-stamp";
+
 export type Tee = "M" | "F";
 
 export type TourRoundLite = {
@@ -48,7 +50,7 @@ export type TourRoundContextLocal = {
   netPointsForHole: (playerId: string, holeIndex: number) => number;
   isComplete: (playerId: string) => boolean;
 
-  // tee-specific par for bucketing (Napoleon/Big George/Grand Canyon)
+  // ✅ tee-specific par for bucketing (Napoleon/Big George/Grand Canyon)
   parForPlayerHole: (playerId: string, holeIndex: number) => number;
 };
 
@@ -112,12 +114,7 @@ export function buildTourCompetitionContext(params: {
   }
 
   /**
-   * ✅ Robust score grouping:
    * round|player -> hole(1..18) -> raw string ("", "P", "5", etc)
-   *
-   * IMPORTANT GUARD:
-   * Never overwrite a non-blank score with a blank.
-   * (If duplicate score rows exist, ordering must not erase real values.)
    */
   const scoresByRoundPlayer = new Map<string, Map<number, string>>();
   for (const s of scores) {
@@ -130,13 +127,7 @@ export function buildTourCompetitionContext(params: {
     if (!scoresByRoundPlayer.has(key)) scoresByRoundPlayer.set(key, new Map());
 
     const raw = normalizeRawScore(s.strokes, s.pickup).trim().toUpperCase();
-    const byHole = scoresByRoundPlayer.get(key)!;
-
-    const prev = byHole.get(holeNo);
-    // If we already have a non-blank value, do not replace it with blank.
-    if (typeof prev === "string" && prev.trim() !== "" && raw.trim() === "") continue;
-
-    byHole.set(holeNo, raw);
+    scoresByRoundPlayer.get(key)!.set(holeNo, raw);
   }
 
   const playerById = new Map(players.map((p) => [String(p.id), p]));
@@ -151,7 +142,6 @@ export function buildTourCompetitionContext(params: {
       const byTee = courseId ? parsByCourseTeeHole.get(courseId) : undefined;
 
       // Baseline arrays are still provided for compatibility.
-      // Use Men's if present, else Women's, else zeros.
       const baselineTee: Tee = byTee?.has("M") ? "M" : "F";
       const baselineMap = byTee?.get(baselineTee);
 
@@ -183,14 +173,12 @@ export function buildTourCompetitionContext(params: {
       };
 
       const isComplete = (playerId: string) => {
-        // If not playing in that round, treat as complete (lets comps skip/ignore)
         if (!isPlayingInRound(playerId)) return true;
         const arr = scoresMatrix[String(playerId)] ?? Array(18).fill("");
         for (let i = 0; i < 18; i++) if (!String(arr[i] ?? "").trim()) return false;
         return true;
       };
 
-      // ✅ Tee-specific par (used for bucketing Par 3/4/5 comps)
       const parForPlayerHole = (playerId: string, holeIndex: number) => {
         const player = playerById.get(String(playerId));
         const tee: Tee = normalizeTee(player?.gender);
@@ -205,7 +193,6 @@ export function buildTourCompetitionContext(params: {
         const player = playerById.get(String(playerId));
         if (!player) return 0;
 
-        // Not playing? score 0
         if (!isPlayingInRound(playerId)) return 0;
 
         const tee: Tee = normalizeTee(player.gender);
@@ -241,8 +228,6 @@ export function buildTourCompetitionContext(params: {
       };
     });
 
-  // For tour competitions, ctx.players.playing is used only by eligibility.onlyPlaying.
-  // Consider a player "playing" in tour scope if they are marked playing in ANY round.
   const playedAny = (playerId: string) =>
     rounds.some((r) => {
       const rp = rpByRoundPlayer.get(`${String(r.id)}|${String(playerId)}`);
@@ -259,6 +244,9 @@ export function buildTourCompetitionContext(params: {
     })),
     rounds: tourRounds,
   };
+
+  // ✅ Version stamp so we can prove which file is actually running
+  (ctx as any).__ctxVersion = BUILD_TOUR_CTX_VERSION;
 
   return ctx;
 }
