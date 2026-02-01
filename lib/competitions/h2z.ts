@@ -1,31 +1,6 @@
 // lib/competitions/h2z.ts
 
-/**
- * H2Z rules:
- * - Consider Par 3 holes only
- * - Add Stableford points on each Par 3
- * - Reset running total to 0 whenever Stableford points === 0 on a Par 3
- * - Report per-leg:
- *   finalScore (running total at end of leg)
- *   bestScore (peak running total within the leg)
- *   bestLen (count of Par 3 holes in that best run)
- *
- * IMPORTANT (from mobile page contract):
- * - computeH2ZForPlayer is called with an object arg:
- *   { ctx, legs, roundsInOrder, isPlayingInRound, playerId }
- *   and must return Record<leg_no, H2ZResult>
- * - buildH2ZDiagnostic is called with an object arg:
- *   { ctx, roundsInOrder, isPlayingInRound, playerId, start_round_no, end_round_no }
- *   and must return string[] lines (so UI can .join("\n"))
- *
- * CRITICAL ALIGNMENT:
- * - The competition context flattens holes by ctx.rounds order (which in this page is sortedRounds).
- * - roundsInOrder is built from sortedRounds, so we use it as the canonical ordering.
- * - holeIndex = roundIndex*18 + (hole-1)
- */
-
 export type H2ZLeg = {
-  tour_id?: string;
   leg_no: number;
   start_round_no: number;
   end_round_no: number;
@@ -37,313 +12,240 @@ export type H2ZResult = {
   bestLen: number;
 };
 
-export type H2ZPerLegMap = Record<number, H2ZResult>;
+export type H2ZDiagnostic = string[];
 
-type RoundInOrder = { roundId: string; round_no: number | null };
+type RoundsInOrderItem = { roundId: string; round_no: number | null };
 
-type AnyCompetitionContext = {
-  // These are provided by buildTourCompetitionContext
-  scores?: Record<string, any[]>;
-  netPointsForHole?: (playerId: string, holeIndex: number) => number;
-  parForPlayerHole?: (playerId: string, holeIndex: number) => number | null;
+type RoundCtxLike = {
+  roundId: string;
+  // raw scores: playerId -> [18 strings]
+  scores: Record<string, string[]>;
+  // these exist on EACH round in your ctx
+  netPointsForHole: (playerId: string, holeIndex: number) => number;
+  parForPlayerHole: (playerId: string, holeIndex: number) => number;
 };
 
-type IsPlayingInRoundFn = (roundId: string, playerId: string) => boolean;
+type TourCtxLike = {
+  rounds?: RoundCtxLike[];
+};
 
-function safeInt(v: any): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.trunc(n) : null;
+function n(x: any, fallback = 0): number {
+  const v = Number(x);
+  return Number.isFinite(v) ? v : fallback;
 }
 
-function isFiniteNumber(n: unknown): n is number {
-  return typeof n === "number" && Number.isFinite(n);
+function normScoreCell(v: any): string {
+  return String(v ?? "").trim().toUpperCase();
 }
 
-function normalizeRoundsInOrder(
-  roundsInOrder: RoundInOrder[] | undefined,
-  issues: string[]
-): Array<{ roundId: string; roundIndex: number; roundNo: number }> {
-  if (!Array.isArray(roundsInOrder) || roundsInOrder.length === 0) {
-    issues.push("roundsInOrder missing/empty");
-    return [];
-  }
+function getRoundCtx(ctx: any, roundId: string): RoundCtxLike | null {
+  const rounds = (ctx as TourCtxLike)?.rounds;
+  if (!Array.isArray(rounds)) return null;
+  const rid = String(roundId);
+  const found = rounds.find((r) => String((r as any)?.roundId) === rid);
+  if (!found) return null;
 
-  const out: Array<{ roundId: string; roundIndex: number; roundNo: number }> = [];
-
-  for (let i = 0; i < roundsInOrder.length; i++) {
-    const r = roundsInOrder[i];
-    const rid = String(r?.roundId ?? "").trim();
-    if (!rid) {
-      issues.push(`roundsInOrder[${i}] missing roundId (ignored)`);
-      continue;
-    }
-
-    const rn = safeInt(r?.round_no);
-    const roundNo = rn ?? i + 1; // infer if null
-    if (rn == null) {
-      issues.push(`roundId=${rid} has null round_no; inferred roundNo=${roundNo} from order`);
-    }
-
-    out.push({ roundId: rid, roundIndex: i, roundNo });
-  }
-
-  return out;
+  const okScores = found && typeof found === "object" && found.scores && typeof found.netPointsForHole === "function" && typeof found.parForPlayerHole === "function";
+  return okScores ? (found as RoundCtxLike) : null;
 }
 
-function computeH2ZForOneLeg(params: {
-  ctx: AnyCompetitionContext;
+function roundsForLeg(roundsInOrder: RoundsInOrderItem[], startRoundNo: number, endRoundNo: number) {
+  const start = n(startRoundNo, 0);
+  const end = n(endRoundNo, 0);
+
+  return roundsInOrder.filter((r) => {
+    const rn = r.round_no;
+    if (!Number.isFinite(Number(rn))) return false;
+    return Number(rn) >= start && Number(rn) <= end;
+  });
+}
+
+function computeH2ZForPlayerInLeg(args: {
+  ctx: any;
+  roundsInOrder: RoundsInOrderItem[];
+  isPlayingInRound: (roundId: string, playerId: string) => boolean;
   playerId: string;
-  leg: { leg_no: number; start_round_no: number; end_round_no: number };
-  roundsInOrder: RoundInOrder[];
-  isPlayingInRound: IsPlayingInRoundFn;
-}): {
-  result: H2ZResult;
-  diag: {
-    issues: string[];
-    includedRounds: Array<{ roundId: string; roundIndex: number; roundNo: number; playing: boolean }>;
-    par3Events: Array<{
-      roundNo: number;
-      hole: number;
-      holeIndex: number;
-      par: number | null;
-      strokesRaw: string | null;
-      pts: number;
-      runningBefore: number;
-      runningAfter: number;
-      reset: boolean;
-    }>;
-  };
-} {
-  const { ctx, playerId, leg, roundsInOrder, isPlayingInRound } = params;
+  start_round_no: number;
+  end_round_no: number;
+}): { result: H2ZResult; diagEvents: Array<{ roundNo: number; roundId: string; holeNo: number; raw: string; par: number; pts: number; runAfter: number; didReset: boolean }> ; issues: string[]; includedRoundNos: number[] } {
+  const { ctx, roundsInOrder, isPlayingInRound, playerId, start_round_no, end_round_no } = args;
 
   const issues: string[] = [];
 
-  if (typeof ctx.netPointsForHole !== "function") issues.push("ctx.netPointsForHole missing");
-  if (typeof ctx.parForPlayerHole !== "function") issues.push("ctx.parForPlayerHole missing");
+  const legRounds = roundsForLeg(roundsInOrder, start_round_no, end_round_no);
+  const includedRoundNos = legRounds.map((r) => n(r.round_no, 0));
 
-  const rounds = normalizeRoundsInOrder(roundsInOrder, issues);
-  if (rounds.length === 0) {
-    const empty: H2ZResult = { finalScore: 0, bestScore: 0, bestLen: 0 };
-    return { result: empty, diag: { issues, includedRounds: [], par3Events: [] } };
-  }
-
-  const start = safeInt(leg.start_round_no);
-  const end = safeInt(leg.end_round_no);
-
-  if (start == null || end == null) {
-    issues.push(`Invalid leg bounds: start_round_no=${String(leg.start_round_no)} end_round_no=${String(leg.end_round_no)}`);
-    const empty: H2ZResult = { finalScore: 0, bestScore: 0, bestLen: 0 };
-    return { result: empty, diag: { issues, includedRounds: [], par3Events: [] } };
-  }
-
-  const lo = Math.min(start, end);
-  const hi = Math.max(start, end);
-
-  const includedRounds: Array<{ roundId: string; roundIndex: number; roundNo: number; playing: boolean }> = [];
-  for (const r of rounds) {
-    const within = r.roundNo >= lo && r.roundNo <= hi;
-    if (!within) continue;
-
-    const playing = !!isPlayingInRound(r.roundId, playerId);
-    includedRounds.push({ ...r, playing });
-  }
-
-  const playableRounds = includedRounds.filter((r) => r.playing);
-
-  if (includedRounds.length === 0) {
-    issues.push(`Leg ${leg.leg_no} selected zero rounds using bounds [${lo}..${hi}]`);
-  } else if (playableRounds.length === 0) {
-    issues.push(`Leg ${leg.leg_no} rounds exist, but player is not marked playing in any included round (round_players.playing=false)`);
+  if (legRounds.length === 0) {
+    issues.push("No rounds matched leg bounds (check round_no on rounds)");
+    return {
+      result: { finalScore: 0, bestScore: 0, bestLen: 0 },
+      diagEvents: [],
+      issues,
+      includedRoundNos,
+    };
   }
 
   let running = 0;
-  let bestScore = 0;
+  let best = 0;
   let bestLen = 0;
 
-  let currentRunLen = 0;
-  let currentRunScore = 0;
+  // Track current run length on Par 3s
+  let curLen = 0;
 
-  const par3Events: Array<{
-    roundNo: number;
-    hole: number;
-    holeIndex: number;
-    par: number | null;
-    strokesRaw: string | null;
-    pts: number;
-    runningBefore: number;
-    runningAfter: number;
-    reset: boolean;
-  }> = [];
+  const diagEvents: Array<{ roundNo: number; roundId: string; holeNo: number; raw: string; par: number; pts: number; runAfter: number; didReset: boolean }> = [];
 
-  for (const r of playableRounds) {
-    for (let hole = 1; hole <= 18; hole++) {
-      const holeIndex = r.roundIndex * 18 + (hole - 1);
+  for (const r of legRounds) {
+    const roundId = String(r.roundId);
+    const roundNo = n(r.round_no, 0);
 
-      const par = ctx.parForPlayerHole ? ctx.parForPlayerHole(playerId, holeIndex) : null;
+    if (!isPlayingInRound(roundId, playerId)) {
+      // Not playing in this round -> skip entirely (don’t reset)
+      continue;
+    }
+
+    const roundCtx = getRoundCtx(ctx, roundId);
+    if (!roundCtx) {
+      issues.push(`Round ctx missing/invalid for roundId=${roundId}`);
+      continue;
+    }
+
+    const scoreArr = roundCtx.scores?.[String(playerId)];
+    if (!Array.isArray(scoreArr) || scoreArr.length < 18) {
+      issues.push(`scores missing for player in roundId=${roundId}`);
+      continue;
+    }
+
+    for (let holeIndex = 0; holeIndex < 18; holeIndex++) {
+      const holeNo = holeIndex + 1;
+
+      const raw = normScoreCell(scoreArr[holeIndex]);
+
+      // IMPORTANT:
+      // - "" means not entered yet => skip (do not reset, do not count)
+      // - "P" means pickup => treat as played with 0 points => does reset
+      if (raw === "") continue;
+
+      const par = n(roundCtx.parForPlayerHole(playerId, holeIndex), 0);
+
+      // Only Par 3 holes
       if (par !== 3) continue;
 
-      const strokesRaw =
-        ctx.scores?.[playerId]?.[holeIndex] != null ? String(ctx.scores[playerId][holeIndex]) : null;
+      const pts = raw === "P" ? 0 : n(roundCtx.netPointsForHole(playerId, holeIndex), 0);
 
-      let pts = 0;
-      if (ctx.netPointsForHole) {
-        const rawPts = ctx.netPointsForHole(playerId, holeIndex);
-        pts = isFiniteNumber(rawPts) ? rawPts : 0;
-        if (!isFiniteNumber(rawPts)) issues.push(`Non-numeric points at holeIndex=${holeIndex}; treating as 0`);
-      }
-
-      const runningBefore = running;
-
-      let reset = false;
+      let didReset = false;
       if (pts === 0) {
         running = 0;
-        currentRunLen = 0;
-        currentRunScore = 0;
-        reset = true;
+        curLen = 0;
+        didReset = true;
       } else {
         running += pts;
-        currentRunLen += 1;
-        currentRunScore += pts;
-
-        if (running > bestScore) {
-          bestScore = running;
-          bestLen = currentRunLen;
+        curLen += 1;
+        if (running > best) {
+          best = running;
+          bestLen = curLen;
+        } else if (running === best && curLen > bestLen) {
+          // if tied best score, keep the longer run
+          bestLen = curLen;
         }
       }
 
-      par3Events.push({
-        roundNo: r.roundNo,
-        hole,
-        holeIndex,
+      diagEvents.push({
+        roundNo,
+        roundId,
+        holeNo,
+        raw,
         par,
-        strokesRaw,
         pts,
-        runningBefore,
-        runningAfter: running,
-        reset,
+        runAfter: running,
+        didReset,
       });
     }
   }
 
-  const result: H2ZResult = {
-    finalScore: running,
-    bestScore,
-    bestLen,
+  return {
+    result: { finalScore: running, bestScore: best, bestLen },
+    diagEvents,
+    issues,
+    includedRoundNos,
   };
-
-  return { result, diag: { issues, includedRounds, par3Events } };
 }
 
 /**
- * Legacy compute API used by page.tsx
+ * Returns a per-leg map keyed by leg_no.
  */
-export type LegacyComputeArgs = {
-  ctx: AnyCompetitionContext;
+export function computeH2ZForPlayer(args: {
+  ctx: any;
   legs: H2ZLeg[];
-  roundsInOrder: RoundInOrder[];
-  isPlayingInRound: IsPlayingInRoundFn;
+  roundsInOrder: RoundsInOrderItem[];
+  isPlayingInRound: (roundId: string, playerId: string) => boolean;
   playerId: string;
-};
+}): Record<number, H2ZResult> {
+  const { ctx, legs, roundsInOrder, isPlayingInRound, playerId } = args;
 
-export function computeH2ZForPlayer(args: LegacyComputeArgs): H2ZPerLegMap {
-  const out: H2ZPerLegMap = {};
+  const out: Record<number, H2ZResult> = {};
 
-  const legs = Array.isArray(args.legs) ? args.legs : [];
-  for (const leg of legs) {
-    const computed = computeH2ZForOneLeg({
-      ctx: args.ctx,
-      playerId: args.playerId,
-      leg,
-      roundsInOrder: args.roundsInOrder,
-      isPlayingInRound: args.isPlayingInRound,
+  for (const leg of legs ?? []) {
+    const legNo = n(leg?.leg_no, 0);
+    if (!Number.isFinite(legNo) || legNo <= 0) continue;
+
+    const { result } = computeH2ZForPlayerInLeg({
+      ctx,
+      roundsInOrder,
+      isPlayingInRound,
+      playerId,
+      start_round_no: n(leg.start_round_no, 0),
+      end_round_no: n(leg.end_round_no, 0),
     });
-    out[leg.leg_no] = computed.result;
+
+    out[legNo] = result;
   }
 
   return out;
 }
 
 /**
- * Legacy diagnostic API used by page.tsx.
- * Must return string[] so UI can do .join("\n")
+ * Builds human-readable diagnostic lines for a single player + leg span.
+ * This is what your mobile page shows in the debug banner.
  */
-export type LegacyBuildDiagnosticArgs = {
-  ctx: AnyCompetitionContext;
-  roundsInOrder: RoundInOrder[];
-  isPlayingInRound: IsPlayingInRoundFn;
+export function buildH2ZDiagnostic(args: {
+  ctx: any;
+  roundsInOrder: RoundsInOrderItem[];
+  isPlayingInRound: (roundId: string, playerId: string) => boolean;
   playerId: string;
   start_round_no: number;
   end_round_no: number;
-};
+}): H2ZDiagnostic {
+  const { ctx, roundsInOrder, isPlayingInRound, playerId, start_round_no, end_round_no } = args;
 
-export function buildH2ZDiagnostic(args: LegacyBuildDiagnosticArgs): string[] {
-  const leg = {
-    leg_no: 0,
-    start_round_no: args.start_round_no,
-    end_round_no: args.end_round_no,
-  };
-
-  const computed = computeH2ZForOneLeg({
-    ctx: args.ctx,
-    playerId: args.playerId,
-    leg,
-    roundsInOrder: args.roundsInOrder,
-    isPlayingInRound: args.isPlayingInRound,
+  const computed = computeH2ZForPlayerInLeg({
+    ctx,
+    roundsInOrder,
+    isPlayingInRound,
+    playerId,
+    start_round_no,
+    end_round_no,
   });
 
-  return diagnosticToLines({
-    playerId: args.playerId,
-    leg,
-    issues: computed.diag.issues,
-    includedRounds: computed.diag.includedRounds,
-    par3Events: computed.diag.par3Events,
-    result: computed.result,
-  });
-}
-
-function diagnosticToLines(input: {
-  playerId: string;
-  leg: { leg_no: number; start_round_no: number; end_round_no: number };
-  issues: string[];
-  includedRounds: Array<{ roundId: string; roundIndex: number; roundNo: number; playing: boolean }>;
-  par3Events: Array<{
-    roundNo: number;
-    hole: number;
-    holeIndex: number;
-    par: number | null;
-    strokesRaw: string | null;
-    pts: number;
-    runningBefore: number;
-    runningAfter: number;
-    reset: boolean;
-  }>;
-  result: H2ZResult;
-}): string[] {
   const lines: string[] = [];
+  lines.push("H2Z diagnostic");
+  lines.push(`player=${String(playerId)}`);
+  lines.push(`legRounds=${n(start_round_no, 0)}..${n(end_round_no, 0)}`);
+  lines.push(`includedRounds=${computed.includedRoundNos.length ? computed.includedRoundNos.join(",") : "(none)"}`);
+  lines.push(`result final=${computed.result.finalScore} best=${computed.result.bestScore} bestLen=${computed.result.bestLen}`);
 
-  lines.push(`H2Z diagnostic`);
-  lines.push(`player=${input.playerId}`);
-  lines.push(`legRounds=${input.leg.start_round_no}..${input.leg.end_round_no}`);
-  lines.push(`result final=${input.result.finalScore} best=${input.result.bestScore} bestLen=${input.result.bestLen}`);
-
-  if (input.issues.length) {
-    lines.push(`issues (${input.issues.length}):`);
-    for (const i of input.issues) lines.push(`- ${i}`);
+  if (computed.issues.length) {
+    lines.push(`issues (${computed.issues.length}):`);
+    for (const it of computed.issues) lines.push(`- ${it}`);
   } else {
-    lines.push(`issues: none`);
+    lines.push("issues (0)");
   }
 
-  lines.push(`includedRounds=${input.includedRounds.length}`);
-  for (const r of input.includedRounds) {
-    lines.push(
-      `- R${r.roundNo} roundIndex=${r.roundIndex} playing=${r.playing ? "yes" : "no"} roundId=${r.roundId}`
-    );
-  }
+  lines.push(`par3Events=${computed.diagEvents.length}`);
 
-  lines.push(`par3Events=${input.par3Events.length}`);
-  for (const e of input.par3Events) {
+  for (const ev of computed.diagEvents) {
+    const resetTag = ev.didReset ? "RESET" : "";
     lines.push(
-      `R${e.roundNo} h${e.hole} idx=${e.holeIndex} par=${e.par} strokes=${e.strokesRaw ?? "null"} pts=${e.pts} run ${e.runningBefore}->${e.runningAfter}${e.reset ? " RESET" : ""}`
+      `- R${ev.roundNo} H${ev.holeNo} raw=${ev.raw} par=${ev.par} pts=${ev.pts} run=${ev.runAfter} ${resetTag}`.trim()
     );
   }
 
