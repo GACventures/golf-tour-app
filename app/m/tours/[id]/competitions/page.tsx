@@ -174,7 +174,6 @@ export default function MobileCompetitionsPage() {
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
-
   const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([]);
 
   const [openDetail, setOpenDetail] = useState<
@@ -184,9 +183,6 @@ export default function MobileCompetitionsPage() {
   >(null);
 
   const [diag, setDiag] = useState<{ playerId: string; legNo: number } | null>(null);
-
-  // 🔍 minimal debug: show per-round rows count and total
-  const [scoreFetchLog, setScoreFetchLog] = useState<string[]>([]);
 
   const fixedComps: FixedCompMeta[] = useMemo(
     () => [
@@ -258,7 +254,6 @@ export default function MobileCompetitionsPage() {
     async function loadAll() {
       setLoading(true);
       setErrorMsg("");
-      setScoreFetchLog([]);
 
       try {
         // Tour
@@ -327,7 +322,6 @@ export default function MobileCompetitionsPage() {
         // ✅ Scores (fetch one round at a time to avoid 1000-row cap)
         if (roundIds.length > 0 && playerIds.length > 0) {
           const allScores: ScoreRow[] = [];
-          const fetchLog: string[] = [];
 
           for (const r of rr) {
             const { data: sData, error: sErr } = await supabase
@@ -340,16 +334,13 @@ export default function MobileCompetitionsPage() {
 
             if (sErr) throw sErr;
             const rows = (sData ?? []) as ScoreRow[];
-            fetchLog.push(`Round ${r.round_no ?? "?"}: ${rows.length} rows`);
             allScores.push(...rows);
           }
 
           if (!alive) return;
           setScores(allScores);
-          setScoreFetchLog(fetchLog);
         } else {
           setScores([]);
-          setScoreFetchLog([]);
         }
 
         // Pars (M/F)
@@ -666,19 +657,6 @@ export default function MobileCompetitionsPage() {
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 py-4">
-        {/* Score fetch status (keep while we validate H2Z) */}
-        {scoreFetchLog.length ? (
-          <div className="mb-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-[12px] text-gray-800">
-            <div className="font-semibold">Score fetch (per round)</div>
-            <div className="mt-1 space-y-0.5">
-              {scoreFetchLog.map((l) => (
-                <div key={l}>{l}</div>
-              ))}
-            </div>
-            <div className="mt-1 font-semibold">TOTAL rows: {scores.length}</div>
-          </div>
-        ) : null}
-
         {loading ? (
           <div className="space-y-3">
             <div className="h-5 w-40 rounded bg-gray-100" />
@@ -737,9 +715,7 @@ export default function MobileCompetitionsPage() {
 
                           const tappable = c.tappable === true;
                           const isOpen =
-                            openDetail?.kind === "fixed" &&
-                            openDetail.playerId === p.id &&
-                            openDetail.key === c.key;
+                            openDetail?.kind === "fixed" && openDetail.playerId === p.id && openDetail.key === c.key;
                           const detail = (cell?.detail ?? "").trim();
 
                           const show =
@@ -803,9 +779,7 @@ export default function MobileCompetitionsPage() {
                           const rank = cell?.rank ?? null;
 
                           const isOpen =
-                            openDetail?.kind === "h2z" &&
-                            openDetail.playerId === p.id &&
-                            openDetail.legNo === leg.leg_no;
+                            openDetail?.kind === "h2z" && openDetail.playerId === p.id && openDetail.legNo === leg.leg_no;
 
                           const best = cell?.best ?? null;
                           const bestLen = cell?.bestLen ?? null;
@@ -869,16 +843,11 @@ export default function MobileCompetitionsPage() {
               </div>
             </div>
 
-            {/* Diagnostic output */}
+            {/* ✅ Diagnostic output (no heading) */}
             {diagLines ? (
               <div className="mt-3 rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <div className="border-b bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-700">
-                  H2Z Diagnostic (player + selected leg)
-                </div>
                 <div className="px-4 py-3">
-                  <pre className="whitespace-pre-wrap text-[12px] leading-snug text-gray-800">
-                    {diagLines.join("\n")}
-                  </pre>
+                  <pre className="whitespace-pre-wrap text-[12px] leading-snug text-gray-800">{diagLines.join("\n")}</pre>
                 </div>
               </div>
             ) : null}
