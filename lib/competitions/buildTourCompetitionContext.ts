@@ -1,7 +1,7 @@
 import type { CompetitionContext } from "./types";
 import { netStablefordPointsForHole } from "@/lib/stableford";
 
-export const BUILD_TOUR_CTX_VERSION = "BTC-v4-direct-fill";
+export const BUILD_TOUR_CTX_VERSION = "BTC-v5-direct-fill-debug";
 
 export type Tee = "M" | "F";
 
@@ -127,26 +127,73 @@ export function buildTourCompetitionContext(params: {
     scoresByRoundId.set(rid, byPlayer);
   }
 
+  // ✅ Debug accounting for why nothing is being written
+  const debug = {
+    version: BUILD_TOUR_CTX_VERSION,
+    roundsIn: rounds.length,
+    playersIn: players.length,
+    scoresIn: scores.length,
+    seen: 0,
+    written: 0,
+    skipNoRound: 0,
+    skipNoPlayer: 0,
+    skipBadHole: 0,
+    skipOverwriteBlank: 0,
+    sampleSeen: [] as string[],
+    sampleWritten: [] as string[],
+    sampleSkip: [] as string[],
+  };
+
   for (const s of scores) {
-    const roundId = String(s.round_id);
-    const playerId = String(s.player_id);
+    debug.seen += 1;
+
+    const roundId = String((s as any).round_id);
+    const playerId = String((s as any).player_id);
+
+    if (debug.sampleSeen.length < 8) {
+      debug.sampleSeen.push(
+        `seen: round_id=${roundId} player_id=${playerId} hole_number=${String((s as any).hole_number)} strokes=${String(
+          (s as any).strokes
+        )} pickup=${String((s as any).pickup)}`
+      );
+    }
 
     const byPlayer = scoresByRoundId.get(roundId);
-    if (!byPlayer) continue;
+    if (!byPlayer) {
+      debug.skipNoRound += 1;
+      if (debug.sampleSkip.length < 8) debug.sampleSkip.push(`skipNoRound: round_id=${roundId}`);
+      continue;
+    }
 
     const arr = byPlayer[playerId];
-    if (!arr) continue;
+    if (!arr) {
+      debug.skipNoPlayer += 1;
+      if (debug.sampleSkip.length < 8) debug.sampleSkip.push(`skipNoPlayer: round_id=${roundId} player_id=${playerId}`);
+      continue;
+    }
 
-    const holeNo = clampHoleTo1to18(s.hole_number);
-    if (!holeNo) continue;
+    const holeNo = clampHoleTo1to18((s as any).hole_number);
+    if (!holeNo) {
+      debug.skipBadHole += 1;
+      if (debug.sampleSkip.length < 8) debug.sampleSkip.push(`skipBadHole: hole_number=${String((s as any).hole_number)}`);
+      continue;
+    }
 
-    const raw = normalizeRawScore(s.strokes, s.pickup).trim().toUpperCase();
+    const raw = normalizeRawScore((s as any).strokes, (s as any).pickup).trim().toUpperCase();
     const idx = holeNo - 1;
 
     // Don't overwrite a real value with blank
-    if (raw === "" && String(arr[idx] ?? "").trim() !== "") continue;
+    if (raw === "" && String(arr[idx] ?? "").trim() !== "") {
+      debug.skipOverwriteBlank += 1;
+      continue;
+    }
 
     arr[idx] = raw;
+    debug.written += 1;
+
+    if (debug.sampleWritten.length < 8) {
+      debug.sampleWritten.push(`write: round_id=${roundId} player_id=${playerId} H${holeNo} raw=${raw || "(blank)"}`);
+    }
   }
 
   const playerById = new Map(players.map((p) => [String(p.id), p]));
@@ -245,8 +292,9 @@ export function buildTourCompetitionContext(params: {
     rounds: tourRounds,
   };
 
-  // ✅ keep debug banner compatibility
+  // Keep debug banner compatibility + attach accounting
   (ctx as any).__ctxVersion = BUILD_TOUR_CTX_VERSION;
+  (ctx as any).__debugScoreFill = debug;
 
   return ctx;
 }
