@@ -48,7 +48,7 @@ export type TourRoundContextLocal = {
   netPointsForHole: (playerId: string, holeIndex: number) => number;
   isComplete: (playerId: string) => boolean;
 
-  // ✅ tee-specific par for bucketing (Napoleon/Big George/Grand Canyon)
+  // tee-specific par for bucketing (Napoleon/Big George/Grand Canyon)
   parForPlayerHole: (playerId: string, holeIndex: number) => number;
 };
 
@@ -115,7 +115,9 @@ export function buildTourCompetitionContext(params: {
    * ✅ Robust score grouping:
    * round|player -> hole(1..18) -> raw string ("", "P", "5", etc)
    *
-   * This avoids brittle “composed key lookup per cell”.
+   * IMPORTANT GUARD:
+   * Never overwrite a non-blank score with a blank.
+   * (If duplicate score rows exist, ordering must not erase real values.)
    */
   const scoresByRoundPlayer = new Map<string, Map<number, string>>();
   for (const s of scores) {
@@ -128,7 +130,13 @@ export function buildTourCompetitionContext(params: {
     if (!scoresByRoundPlayer.has(key)) scoresByRoundPlayer.set(key, new Map());
 
     const raw = normalizeRawScore(s.strokes, s.pickup).trim().toUpperCase();
-    scoresByRoundPlayer.get(key)!.set(holeNo, raw);
+    const byHole = scoresByRoundPlayer.get(key)!;
+
+    const prev = byHole.get(holeNo);
+    // If we already have a non-blank value, do not replace it with blank.
+    if (typeof prev === "string" && prev.trim() !== "" && raw.trim() === "") continue;
+
+    byHole.set(holeNo, raw);
   }
 
   const playerById = new Map(players.map((p) => [String(p.id), p]));
