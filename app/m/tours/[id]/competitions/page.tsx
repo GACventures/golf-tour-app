@@ -114,7 +114,7 @@ function rankWithTies(entries: Array<{ id: string; value: number }>, lowerIsBett
     const v = Number.isFinite(e.value) ? e.value : 0;
 
     if (lastValue === null || v !== lastValue) {
-      currentRank = seen;
+      currentRank = seen; // 1,1,3 style
       lastValue = v;
     }
     rankById.set(e.id, currentRank);
@@ -138,7 +138,7 @@ type FixedCompKey =
 type FixedCompMeta = {
   key: FixedCompKey;
   label: string;
-  competitionId: string;
+  competitionId: string; // matches catalog id
   lowerIsBetter?: boolean;
   format: (v: number) => string;
   detailFromStatsKey?: string;
@@ -189,8 +189,8 @@ export default function MobileCompetitionsPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
 
+  // ✅ H2Z legs
   const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([]);
-
 
   const [openDetail, setOpenDetail] = useState<
     | { kind: "fixed"; playerId: string; key: FixedCompKey }
@@ -198,7 +198,9 @@ export default function MobileCompetitionsPage() {
     | null
   >(null);
 
+  // ✅ Diagnostic panel state
   const [diag, setDiag] = useState<{ playerId: string; legNo: number } | null>(null);
+
   const [scoreAudit, setScoreAudit] = useState<ScoreAuditState>({ status: "idle", info: [] });
 
   const fixedComps: FixedCompMeta[] = useMemo(
@@ -207,12 +209,38 @@ export default function MobileCompetitionsPage() {
       { key: "bigGeorge", label: "Big George", competitionId: "tour_big_george_par4_avg", format: (v) => fmt2(v) },
       { key: "grandCanyon", label: "Grand Canyon", competitionId: "tour_grand_canyon_par5_avg", format: (v) => fmt2(v) },
       { key: "wizard", label: "Wizard", competitionId: "tour_wizard_four_plus_pct", format: (v) => fmtPct0(v) },
-      { key: "bagelMan", label: "Bagel Man", competitionId: "tour_bagel_man_zero_pct", lowerIsBetter: true, format: (v) => fmtPct0(v) },
-      { key: "eclectic", label: "Eclectic", competitionId: "tour_eclectic_total", format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)) },
+      {
+        key: "bagelMan",
+        label: "Bagel Man",
+        competitionId: "tour_bagel_man_zero_pct",
+        lowerIsBetter: true,
+        format: (v) => fmtPct0(v),
+      },
+      {
+        key: "eclectic",
+        label: "Eclectic",
+        competitionId: "tour_eclectic_total",
+        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
+      },
       { key: "schumacher", label: "Schumacher", competitionId: "tour_schumacher_first3_avg", format: (v) => fmt2(v) },
       { key: "closer", label: "Closer", competitionId: "tour_closer_last3_avg", format: (v) => fmt2(v) },
-      { key: "hotStreak", label: "Hot Streak", competitionId: "tour_hot_streak_best_run", format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)), tappable: true, detailFromStatsKey: "streak_where" },
-      { key: "coldStreak", label: "Cold Streak", competitionId: "tour_cold_streak_best_run", lowerIsBetter: true, format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)), tappable: true, detailFromStatsKey: "streak_where" },
+      {
+        key: "hotStreak",
+        label: "Hot Streak",
+        competitionId: "tour_hot_streak_best_run",
+        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
+        tappable: true,
+        detailFromStatsKey: "streak_where",
+      },
+      {
+        key: "coldStreak",
+        label: "Cold Streak",
+        competitionId: "tour_cold_streak_best_run",
+        lowerIsBetter: true,
+        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
+        tappable: true,
+        detailFromStatsKey: "streak_where",
+      },
     ],
     []
   );
@@ -229,7 +257,10 @@ export default function MobileCompetitionsPage() {
       { label: "Closer", text: "Average Stableford points on holes 16–18" },
       { label: "Hot Streak", text: "Longest run in any round of consecutive holes where gross strokes is par or better" },
       { label: "Cold Streak", text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse" },
-      { label: "H2Z", text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole" },
+      {
+        label: "H2Z",
+        text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole",
+      },
     ],
     []
   );
@@ -244,11 +275,13 @@ export default function MobileCompetitionsPage() {
       setErrorMsg("");
 
       try {
+        // Tour
         const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
         if (!alive) return;
         setTour(tData as Tour);
 
+        // Rounds
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,name,round_no,created_at,course_id")
@@ -260,6 +293,7 @@ export default function MobileCompetitionsPage() {
         if (!alive) return;
         setRounds(rr);
 
+        // Players (tour_players join)
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
@@ -270,7 +304,11 @@ export default function MobileCompetitionsPage() {
         const ps: PlayerRow[] = (tpData ?? [])
           .map((row: any) => row.players)
           .filter(Boolean)
-          .map((p: any) => ({ id: String(p.id), name: safeName(p.name, "(unnamed)"), gender: p.gender ? normalizeTee(p.gender) : null }));
+          .map((p: any) => ({
+            id: String(p.id),
+            name: safeName(p.name, "(unnamed)"),
+            gender: p.gender ? normalizeTee(p.gender) : null,
+          }));
 
         if (!alive) return;
         setPlayers(ps);
@@ -278,6 +316,7 @@ export default function MobileCompetitionsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
+        // Round players
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
@@ -286,18 +325,20 @@ export default function MobileCompetitionsPage() {
             .in("player_id", playerIds);
           if (rpErr) throw rpErr;
 
-          setRoundPlayers(
-            (rpData ?? []).map((x: any) => ({
-              round_id: String(x.round_id),
-              player_id: String(x.player_id),
-              playing: x.playing === true,
-              playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
-            }))
-          );
+          const rpRows: RoundPlayerRow[] = (rpData ?? []).map((x: any) => ({
+            round_id: String(x.round_id),
+            player_id: String(x.player_id),
+            playing: x.playing === true,
+            playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
+          }));
+
+          if (!alive) return;
+          setRoundPlayers(rpRows);
         } else {
           setRoundPlayers([]);
         }
 
+        // Scores
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: sData, error: sErr } = await supabase
             .from("scores")
@@ -311,6 +352,7 @@ export default function MobileCompetitionsPage() {
           setScores([]);
         }
 
+        // Pars (M/F)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
@@ -322,27 +364,32 @@ export default function MobileCompetitionsPage() {
             .order("hole_number", { ascending: true });
           if (pErr) throw pErr;
 
-          setPars(
-            (pData ?? []).map((x: any) => ({
-              course_id: String(x.course_id),
-              hole_number: Number(x.hole_number),
-              tee: normalizeTee(x.tee),
-              par: Number(x.par),
-              stroke_index: Number(x.stroke_index),
-            }))
-          );
+          const pr: ParRow[] = (pData ?? []).map((x: any) => ({
+            course_id: String(x.course_id),
+            hole_number: Number(x.hole_number),
+            tee: normalizeTee(x.tee),
+            par: Number(x.par),
+            stroke_index: Number(x.stroke_index),
+          }));
+
+          if (!alive) return;
+          setPars(pr);
         } else {
           setPars([]);
         }
 
-        const { data: lData, error: lErr } = await supabase
-          .from("tour_h2z_legs")
-          .select("tour_id,leg_no,start_round_no,end_round_no")
-          .eq("tour_id", tourId)
-          .order("leg_no", { ascending: true });
-        if (lErr) throw lErr;
-        if (!alive) return;
-        setH2zLegs((lData ?? []) as H2ZLegRow[]);
+        // ✅ H2Z legs
+        {
+          const { data: lData, error: lErr } = await supabase
+            .from("tour_h2z_legs")
+            .select("tour_id,leg_no,start_round_no,end_round_no")
+            .eq("tour_id", tourId)
+            .order("leg_no", { ascending: true });
+
+          if (lErr) throw lErr;
+          if (!alive) return;
+          setH2zLegs((lData ?? []) as H2ZLegRow[]);
+        }
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load competitions.");
@@ -371,9 +418,17 @@ export default function MobileCompetitionsPage() {
   }, [rounds]);
 
   const ctx = useMemo(() => {
-    const roundsLite: TourRoundLite[] = sortedRounds.map((r) => ({ id: r.id, name: r.name, course_id: r.course_id }));
+    const roundsLite: TourRoundLite[] = sortedRounds.map((r) => ({
+      id: r.id,
+      name: r.name,
+      course_id: r.course_id,
+    }));
 
-    const playersLite: PlayerLiteForTour[] = players.map((p) => ({ id: p.id, name: p.name, gender: p.gender ? normalizeTee(p.gender) : null }));
+    const playersLite: PlayerLiteForTour[] = players.map((p) => ({
+      id: p.id,
+      name: p.name,
+      gender: p.gender ? normalizeTee(p.gender) : null,
+    }));
 
     const rpLite: RoundPlayerLiteForTour[] = roundPlayers.map((rp) => ({
       round_id: rp.round_id,
@@ -398,7 +453,13 @@ export default function MobileCompetitionsPage() {
       stroke_index: Number(p.stroke_index),
     }));
 
-    return buildTourCompetitionContext({ rounds: roundsLite, players: playersLite, roundPlayers: rpLite, scores: scoresLite, pars: parsLite });
+    return buildTourCompetitionContext({
+      rounds: roundsLite,
+      players: playersLite,
+      roundPlayers: rpLite,
+      scores: scoresLite,
+      pars: parsLite,
+    });
   }, [sortedRounds, players, roundPlayers, scores, pars]);
 
   const compMatrix = useMemo(() => {
@@ -456,33 +517,58 @@ export default function MobileCompetitionsPage() {
 
   const h2zLegsNorm: H2ZLeg[] = useMemo(() => {
     return (h2zLegs ?? [])
-      .map((l) => ({ leg_no: Number(l.leg_no), start_round_no: Number(l.start_round_no), end_round_no: Number(l.end_round_no) }))
+      .map((l) => ({
+        leg_no: Number(l.leg_no),
+        start_round_no: Number(l.start_round_no),
+        end_round_no: Number(l.end_round_no),
+      }))
       .filter((l) => Number.isFinite(l.leg_no) && Number.isFinite(l.start_round_no) && Number.isFinite(l.end_round_no))
       .filter((l) => l.leg_no >= 1 && l.end_round_no >= l.start_round_no)
       .sort((a, b) => a.leg_no - b.leg_no);
   }, [h2zLegs]);
 
   const h2zMatrix = useMemo(() => {
+    // round|player -> playing?
     const playingSet = new Set<string>();
-    for (const rp of roundPlayers) if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
+    for (const rp of roundPlayers) {
+      if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
+    }
     const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
 
+    // rounds in order with round_no
     const roundsInOrder = sortedRounds.map((r) => ({ roundId: r.id, round_no: r.round_no }));
 
+    // Per player, per leg results
     const perPlayer: Record<string, Record<number, H2ZCell>> = {};
     for (const p of players) perPlayer[p.id] = {};
 
     for (const p of players) {
-      const res = computeH2ZForPlayer({ ctx: ctx as any, legs: h2zLegsNorm, roundsInOrder, isPlayingInRound, playerId: p.id });
+      const res = computeH2ZForPlayer({
+        ctx: ctx as any,
+        legs: h2zLegsNorm,
+        roundsInOrder,
+        isPlayingInRound,
+        playerId: p.id,
+      });
 
       for (const leg of h2zLegsNorm) {
         const r = res[leg.leg_no];
-        perPlayer[p.id][leg.leg_no] = { final: r ? r.finalScore : null, rank: null, best: r ? r.bestScore : null, bestLen: r ? r.bestLen : null };
+        perPlayer[p.id][leg.leg_no] = {
+          final: r ? r.finalScore : null,
+          rank: null,
+          best: r ? r.bestScore : null,
+          bestLen: r ? r.bestLen : null,
+        };
       }
     }
 
+    // Rank within each leg by final desc
     for (const leg of h2zLegsNorm) {
-      const entries = players.map((p) => ({ id: p.id, value: Number(perPlayer[p.id]?.[leg.leg_no]?.final ?? 0) }));
+      const entries = players.map((p) => ({
+        id: p.id,
+        value: Number(perPlayer[p.id]?.[leg.leg_no]?.final ?? 0),
+      }));
+
       const rankById = rankWithTies(entries, false);
       for (const p of players) {
         const rk = rankById.get(p.id);
@@ -497,7 +583,9 @@ export default function MobileCompetitionsPage() {
     if (!diag) return null;
 
     const playingSet = new Set<string>();
-    for (const rp of roundPlayers) if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
+    for (const rp of roundPlayers) {
+      if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
+    }
     const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
 
     const leg = h2zLegsNorm.find((l) => l.leg_no === diag.legNo);
@@ -515,7 +603,7 @@ export default function MobileCompetitionsPage() {
     });
   }, [diag, roundPlayers, sortedRounds, h2zLegsNorm, ctx]);
 
-  // Unfiltered DB audit (as before)
+  // DB audit (unchanged)
   useEffect(() => {
     if (!diag) {
       setScoreAudit({ status: "idle", info: [] });
@@ -673,33 +761,35 @@ export default function MobileCompetitionsPage() {
   const medalHover = (rank: number | null) => (rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50");
   const press = "active:bg-gray-100";
 
-  // ✅ NEW: runtime proof of ctx file + score sample
+  // -----------------------------
+  // ✅ CTX SCORE INTROSPECTION
+  // -----------------------------
   const ctxAny = ctx as any;
   const runtimeCtxVersion = String(ctxAny?.__ctxVersion ?? "(none)");
-  const diagPlayerId = diag?.playerId ?? "";
   const round0 = ctxAny?.rounds?.[0];
-  const scoreSample = diagPlayerId && round0?.scores?.[diagPlayerId] ? (round0.scores[diagPlayerId] as string[]).slice(0, 5).join(",") : "(no sample)";
+  const round0Scores: Record<string, string[]> = (round0?.scores ?? {}) as any;
+  const round0ScoreKeys = Object.keys(round0Scores);
+  const round0KeysSample = round0ScoreKeys.slice(0, 3).join(",") || "(none)";
+  const diagPid = diag?.playerId ?? "";
+  const hasDiagKey = diagPid ? Object.prototype.hasOwnProperty.call(round0Scores, diagPid) : false;
+  const diagArr = hasDiagKey ? (round0Scores[diagPid] as string[]) : null;
+  const diagArrNonBlankCount = diagArr ? diagArr.filter((x) => String(x ?? "").trim() !== "").length : 0;
+  const diagArrSample10 = diagArr ? diagArr.slice(0, 10).map((x) => (String(x ?? "").trim() ? String(x).trim() : "_")).join(",") : "(no arr)";
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="text-sm font-semibold text-gray-900">Competitions</div>
-          {tour?.name ? <div className="text-xs text-gray-600">{tour.name}</div> : null}
-        </div>
-      </div>
-
-      {/* Debug banner */}
+      {/* Debug banner (always visible) */}
       <div className="mx-auto w-full max-w-md px-4 pt-3">
         <div className="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
-          <div className="font-semibold">Debug Banner: H2Z-CTX-STAMP-v1</div>
-          <div>buildTourCompetitionContext export={BUILD_TOUR_CTX_VERSION}</div>
+          <div className="font-semibold">Debug Banner: H2Z-CTX-INTROSPECT-v1</div>
+          <div>BUILD_TOUR_CTX_VERSION(import)={BUILD_TOUR_CTX_VERSION}</div>
           <div>ctx.__ctxVersion(runtime)={runtimeCtxVersion}</div>
-          <div>ctx score sample (round1, diag player, holes 1..5)={scoreSample}</div>
-
-          <div className="mt-1">
-            diag={diag ? `playerId=${diag.playerId} legNo=${diag.legNo}` : "null"} | diagLines={diagLines ? `len=${diagLines.length}` : "null"}
-          </div>
+          <div>ctx.rounds.length={String(ctxAny?.rounds?.length ?? 0)}</div>
+          <div>round0.roundId={String(round0?.roundId ?? "(none)")}</div>
+          <div>round0.scores keys={round0ScoreKeys.length} sample={round0KeysSample}</div>
+          <div>diag={diag ? `playerId=${diag.playerId} legNo=${diag.legNo}` : "null"}</div>
+          <div>round0 has diag key? {hasDiagKey ? "YES" : "NO"}</div>
+          <div>diagArr nonBlankCount={diagArrNonBlankCount} sample10={diagArrSample10}</div>
 
           <div className="mt-2 flex gap-2">
             <button
@@ -751,7 +841,13 @@ export default function MobileCompetitionsPage() {
         </div>
       </div>
 
-      {/* The rest of your existing UI (table + definitions) stays exactly as you provided */}
+      <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
+        <div className="mx-auto w-full max-w-md px-4 py-3">
+          <div className="text-sm font-semibold text-gray-900">Competitions</div>
+          {tour?.name ? <div className="text-xs text-gray-600">{tour.name}</div> : null}
+        </div>
+      </div>
+
       <main className="mx-auto w-full max-w-md px-4 py-4">
         {loading ? (
           <div className="space-y-3">
@@ -859,6 +955,7 @@ export default function MobileCompetitionsPage() {
                           const rank = cell?.rank ?? null;
 
                           const isOpen = openDetail?.kind === "h2z" && openDetail.playerId === p.id && openDetail.legNo === leg.leg_no;
+
                           const best = cell?.best ?? null;
                           const bestLen = cell?.bestLen ?? null;
 
@@ -885,7 +982,8 @@ export default function MobileCompetitionsPage() {
                                 {final !== null && isOpen ? (
                                   <div className="max-w-[180px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm text-left">
                                     <div>
-                                      Peak: <span className="font-semibold">{best ?? 0}</span> <span className="text-gray-500">({bestLen ?? 0})</span>
+                                      Peak: <span className="font-semibold">{best ?? 0}</span>{" "}
+                                      <span className="text-gray-500">({bestLen ?? 0})</span>
                                     </div>
                                     <button type="button" className="mt-1 text-[11px] underline text-gray-700" onClick={() => toggleDiag(p.id, leg.leg_no)}>
                                       {diag?.playerId === p.id && diag?.legNo === leg.leg_no ? "Hide diagnostic" : "Show diagnostic"}
@@ -903,7 +1001,9 @@ export default function MobileCompetitionsPage() {
               </table>
 
               <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as better. Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown. Tap H2Z to see peak score and (holes count). Use “Show diagnostic” to trace one player’s Par 3 H2Z.
+                Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as
+                better. Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown. Tap H2Z to see peak
+                score and (holes count). Use “Show diagnostic” to trace one player’s Par 3 H2Z.
               </div>
             </div>
 
@@ -913,8 +1013,8 @@ export default function MobileCompetitionsPage() {
                 <ul className="space-y-2 text-sm text-gray-800">
                   {definitions.map((d) => (
                     <li key={d.label} className="leading-snug">
-                      <span className="font-semibold text-gray-900">{d.label}</span> <span className="text-gray-600">—</span>{" "}
-                      <span className="text-gray-800">{d.text}</span>
+                      <span className="font-semibold text-gray-900">{d.label}</span>{" "}
+                      <span className="text-gray-600">—</span> <span className="text-gray-800">{d.text}</span>
                     </li>
                   ))}
                 </ul>
