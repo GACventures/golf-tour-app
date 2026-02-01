@@ -48,7 +48,7 @@ export type TourRoundContextLocal = {
   netPointsForHole: (playerId: string, holeIndex: number) => number;
   isComplete: (playerId: string) => boolean;
 
-  // ✅ NEW: tee-specific par for bucketing (Napoleon/Big George/Grand Canyon)
+  // ✅ tee-specific par for bucketing (Napoleon/Big George/Grand Canyon)
   parForPlayerHole: (playerId: string, holeIndex: number) => number;
 };
 
@@ -75,6 +75,23 @@ function normalizeTee(v: any): Tee {
   return s === "F" ? "F" : "M";
 }
 
+/**
+ * Scores.hole_number in DB might be stored as:
+ * - 1..18  (most common)
+ * - 0..17  (also common in some schemas)
+ * Normalize to 1..18 so the rest of the app uses consistent keys.
+ */
+function normalizeHoleNumberTo1to18(holeNumberRaw: any): number {
+  const n = Number(holeNumberRaw);
+  if (!Number.isFinite(n)) return NaN;
+
+  // If stored 0..17, shift to 1..18
+  if (n >= 0 && n <= 17) return n + 1;
+
+  // If stored 1..18, keep
+  return n;
+}
+
 export function buildTourCompetitionContext(params: {
   rounds: TourRoundLite[];
   players: PlayerLiteForTour[];
@@ -99,9 +116,12 @@ export function buildTourCompetitionContext(params: {
   }
 
   // round|player|hole -> score row
+  // ✅ Normalize hole_number to 1..18 so lookups work regardless of DB convention.
   const scoreByRoundPlayerHole = new Map<string, ScoreLiteForTour>();
   for (const s of scores) {
-    scoreByRoundPlayerHole.set(`${s.round_id}|${s.player_id}|${Number(s.hole_number)}`, s);
+    const hn = normalizeHoleNumberTo1to18(s.hole_number);
+    if (!Number.isFinite(hn)) continue;
+    scoreByRoundPlayerHole.set(`${s.round_id}|${s.player_id}|${hn}`, s);
   }
 
   const playerById = new Map(players.map((p) => [p.id, p]));
