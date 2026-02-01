@@ -161,6 +161,20 @@ function h2zHeading(leg: H2ZLeg) {
   return `H2Z: R${leg.start_round_no}–R${leg.end_round_no}`;
 }
 
+type ScoreAuditRow = {
+  round_id: string;
+  player_id: string;
+  hole_number: number;
+  strokes: number | null;
+  pickup?: boolean | null;
+};
+
+type ScoreAuditState =
+  | { status: "idle" }
+  | { status: "loading"; info: string[] }
+  | { status: "ready"; info: string[] }
+  | { status: "error"; info: string[] };
+
 export default function MobileCompetitionsPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -184,6 +198,9 @@ export default function MobileCompetitionsPage() {
   >(null);
 
   const [diag, setDiag] = useState<{ playerId: string; legNo: number } | null>(null);
+
+  // NEW: unfiltered DB audit for diagnostic
+  const [scoreAudit, setScoreAudit] = useState<ScoreAuditState>({ status: "idle" });
 
   const fixedComps: FixedCompMeta[] = useMemo(
     () => [
@@ -316,6 +333,7 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
+        // NOTE: this filtered fetch may be excluding rows if IDs mismatch (this is what we are diagnosing)
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: sData, error: sErr } = await supabase
             .from("scores")
@@ -582,6 +600,144 @@ export default function MobileCompetitionsPage() {
     }
   }, [diag, roundPlayers, sortedRounds, h2zLegsNorm, ctx]);
 
+  // ✅ Step 5: Unfiltered DB score audit (bypasses the player_id filter)
+  useEffect(() => {
+    if (!diag) {
+      setScoreAudit({ status: "idle" });
+      return;
+    }
+
+    let alive = true;
+
+    async function runAudit() {
+      const leg = h2zLegsNorm.find((l) => l.leg_no === diag.legNo);
+      if (!leg) {
+        setScoreAudit({ status: "error", info: ["scoreAudit: leg not found"] });
+        return;
+      }
+
+      // Included rounds for this leg based on round_no
+      const includedRounds = sortedRounds
+        .filter((r) => Number.isFinite(Number(r.round_no)) && Number(r.round_no) >= leg.start_round_no && Number(r.round_no) <= leg.end_round_no)
+        .map((r) => ({ round_no: r.round_no ?? null, round_id: r.id }));
+
+      const includedRoundIds = includedRounds.map((r) => r.round_id);
+
+      const tourPlayerIds = new Set(players.map((p) => String(p.id)));
+
+      const infoStart: string[] = [];
+      infoStart.push("Score Audit (UNFILTERED by player_id)");
+      infoStart.push(`leg=R${leg.start_round_no}..R${leg.end_round_no} (legNo=${leg.leg_no})`);
+      infoStart.push(`diagPlayerId=${diag.playerId}`);
+      infoStart.push(`includedRounds=${includedRounds.map((r) => `R${r.round_no ?? "?"}:${r.round_id}`).join(" | ") || "(none)"}`);
+      infoStart.push(`tourPlayers=${players.length}`);
+
+      setScoreAudit({ status: "loading", info: infoStart });
+
+      if (includedRoundIds.length === 0) {
+        setScoreAudit({
+          status: "ready",
+          info: [...infoStart, "No included rounds => nothing to audit (check round_no values)."],
+        });
+        return;
+      }
+
+      try {
+        // Fetch score rows for these rounds WITHOUT filtering by player_id.
+        // Keep it bounded to avoid huge payloads.
+        const { data, error } = await supabase
+          .from("scores")
+          .select("round_id,player_id,hole_number,strokes,pickup")
+          .in("round_id", includedRoundIds)
+          .limit(5000);
+
+        if (error) throw error;
+
+        const rows = (data ?? []) as ScoreAuditRow[];
+
+        const distinctScorePlayerIds = Array.from(new Set(rows.map((r) => String(r.player_id))));
+        const scorePlayerIdsNotInTour = distinctScorePlayerIds.filter((pid) => !tourPlayerIds.has(pid));
+
+        // For each included round, show whether the diagnostic player has ANY rows in DB
+        const byRoundForDiag = includedRounds.map((r) => {
+          const count = rows.filter((x) => String(x.round_id) === String(r.round_id) && String(x.player_id) === String(diag.playerId)).length;
+          return { round_no: r.round_no, round_id: r.round_id, count };
+        });
+
+        // Also show how many tour players appear in DB score rows
+        const scorePlayerIdsInTour = distinctScorePlayerIds.filter((pid) => tourPlayerIds.has(pid));
+        const tourPlayersMissingFromScores = players
+          .map((p) => String(p.id))
+          .filter((pid) => !distinctScorePlayerIds.includes(pid));
+
+        // hole_number distribution for diag player (helps show if rows exist but excluded elsewhere)
+        const diagRows = rows
+          .filter((x) => String(x.player_id) === String(diag.playerId))
+          .map((x) => ({
+            round_id: String(x.round_id),
+            hole_number: Number(x.hole_number),
+            strokes: x.strokes,
+            pickup: x.pickup === true,
+          }))
+          .sort((a, b) => a.hole_number - b.hole_number);
+
+        const diagHoleNums = diagRows.map((x) => x.hole_number);
+
+        const info: string[] = [];
+        info.push(...infoStart);
+        info.push(`unfilteredRows=${rows.length}`);
+        info.push(`distinctScorePlayerIds=${distinctScorePlayerIds.length}`);
+        info.push(`scorePlayerIdsInTour=${scorePlayerIdsInTour.length}`);
+        info.push(`scorePlayerIdsNotInTour=${scorePlayerIdsNotInTour.length}`);
+        if (scorePlayerIdsNotInTour.length) {
+          info.push(`notInTour(sample up to 10)=${scorePlayerIdsNotInTour.slice(0, 10).join(",")}`);
+        }
+
+        info.push(`tourPlayersMissingFromScores=${tourPlayersMissingFromScores.length}`);
+        if (tourPlayersMissingFromScores.length) {
+          info.push(`missingFromScores(sample up to 10)=${tourPlayersMissingFromScores.slice(0, 10).join(",")}`);
+        }
+
+        info.push("diagPlayer rows per included round:");
+        for (const rr of byRoundForDiag) {
+          info.push(`- R${rr.round_no ?? "?"}: ${rr.count} rows (roundId=${rr.round_id})`);
+        }
+
+        info.push(`diagPlayer totalRowsInTheseRounds=${diagRows.length}`);
+        if (diagRows.length) {
+          const minH = Math.min(...diagHoleNums);
+          const maxH = Math.max(...diagHoleNums);
+          const anyPickup = diagRows.some((x) => x.pickup);
+          info.push(`diagPlayer holeNoMin=${minH} holeNoMax=${maxH} anyPickup=${anyPickup ? "yes" : "no"}`);
+          info.push(`diagPlayer holes(first 18)=${diagHoleNums.slice(0, 18).join(",")}`);
+          info.push(
+            `diagPlayer sample(first 10)=${diagRows
+              .slice(0, 10)
+              .map((x) => `H${x.hole_number} strokes=${x.strokes ?? "null"} pickup=${x.pickup ? "true" : "false"}`)
+              .join(" | ")}`
+          );
+        } else {
+          info.push("diagPlayer has 0 rows in DB for these roundId(s).");
+        }
+
+        if (!alive) return;
+        setScoreAudit({ status: "ready", info });
+      } catch (e: any) {
+        if (!alive) return;
+        setScoreAudit({
+          status: "error",
+          info: [...infoStart, "Audit failed:", e?.message ?? String(e)],
+        });
+      }
+    }
+
+    void runAudit();
+
+    return () => {
+      alive = false;
+    };
+  }, [diag, h2zLegsNorm, sortedRounds, players]);
+
   function toggleFixedDetail(playerId: string, key: FixedCompKey) {
     setOpenDetail((prev) => {
       if (prev?.kind === "fixed" && prev.playerId === playerId && prev.key === key) return null;
@@ -637,7 +793,7 @@ export default function MobileCompetitionsPage() {
   const medalHover = (rank: number | null) => (rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50");
   const press = "active:bg-gray-100";
 
-  const BUILD_MARK = "H2Z-DIAG-BANNER-v2";
+  const BUILD_MARK = "H2Z-DIAG-BANNER-v5";
 
   const canForce = players.length > 0 && h2zLegsNorm.length > 0;
 
@@ -650,11 +806,12 @@ export default function MobileCompetitionsPage() {
         </div>
       </div>
 
-      {/* ALWAYS-VISIBLE DEBUG BANNER */}
+      {/* DEBUG BANNER */}
       <div className="mx-auto w-full max-w-md px-4 pt-3">
         <div className="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
           <div className="font-semibold">Debug Banner: {BUILD_MARK}</div>
           <div>players={players.length} legs={h2zLegsNorm.length} rounds={sortedRounds.length}</div>
+          <div>scoresRowsLoadedFiltered={scores.length}</div>
           <div>diag={diag ? `playerId=${diag.playerId} legNo=${diag.legNo}` : "null"}</div>
           <div>diagLines={diagLines ? `len=${diagLines.length}` : "null"}</div>
 
@@ -687,11 +844,23 @@ export default function MobileCompetitionsPage() {
           </div>
 
           {diag ? (
-            <div className="mt-2 rounded-lg border border-amber-200 bg-white px-2 py-2">
-              <div className="text-[11px] font-semibold text-gray-700">Diagnostic output</div>
-              <pre className="mt-1 whitespace-pre-wrap text-[11px] leading-snug text-gray-900">
-                {(diagLines ?? ["(diagLines is null)"]).join("\n")}
-              </pre>
+            <div className="mt-2 space-y-2">
+              <div className="rounded-lg border border-amber-200 bg-white px-2 py-2">
+                <div className="text-[11px] font-semibold text-gray-700">H2Z Diagnostic output</div>
+                <pre className="mt-1 whitespace-pre-wrap text-[11px] leading-snug text-gray-900">
+                  {(diagLines ?? ["(diagLines is null)"]).join("\n")}
+                </pre>
+              </div>
+
+              <div className="rounded-lg border border-amber-200 bg-white px-2 py-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-[11px] font-semibold text-gray-700">UNFILTERED DB score audit</div>
+                  <div className="text-[11px] text-gray-500">status={scoreAudit.status}</div>
+                </div>
+                <pre className="mt-1 whitespace-pre-wrap text-[11px] leading-snug text-gray-900">
+                  {(scoreAudit.info ?? ["(no audit info)"]).join("\n")}
+                </pre>
+              </div>
             </div>
           ) : null}
         </div>
@@ -841,7 +1010,7 @@ export default function MobileCompetitionsPage() {
                                   <button
                                     type="button"
                                     className={`${boxBase} ${medalClass(rank)} ${medalHover(rank)} ${press}`}
-                                    onClick={() => toggleH2ZDetail(p.id, leg.leg_no)}
+                                    onClick={() => setOpenDetail({ kind: "h2z", playerId: p.id, legNo: leg.leg_no })}
                                     aria-label={`H2Z detail leg ${leg.leg_no}`}
                                   >
                                     {show}
