@@ -75,20 +75,10 @@ function normalizeTee(v: any): Tee {
   return s === "F" ? "F" : "M";
 }
 
-/**
- * Scores.hole_number in DB might be stored as:
- * - 1..18  (most common)
- * - 0..17  (also common in some schemas)
- * Normalize to 1..18 so the rest of the app uses consistent keys.
- */
-function normalizeHoleNumberTo1to18(holeNumberRaw: any): number {
-  const n = Number(holeNumberRaw);
-  if (!Number.isFinite(n)) return NaN;
-
-  // If stored 0..17, shift to 1..18
-  if (n >= 0 && n <= 17) return n + 1;
-
-  // If stored 1..18, keep
+function clampHoleTo1to18(h: any): number | null {
+  const n = Number(h);
+  if (!Number.isFinite(n)) return null;
+  if (n < 1 || n > 18) return null;
   return n;
 }
 
@@ -103,35 +93,52 @@ export function buildTourCompetitionContext(params: {
 
   // round|player -> rp
   const rpByRoundPlayer = new Map<string, RoundPlayerLiteForTour>();
-  for (const rp of roundPlayers) rpByRoundPlayer.set(`${rp.round_id}|${rp.player_id}`, rp);
+  for (const rp of roundPlayers) rpByRoundPlayer.set(`${String(rp.round_id)}|${String(rp.player_id)}`, rp);
 
   // course -> tee -> hole -> {par, si}
   const parsByCourseTeeHole = new Map<string, Map<Tee, Map<number, { par: number; si: number }>>>();
   for (const p of pars) {
-    if (!parsByCourseTeeHole.has(p.course_id)) parsByCourseTeeHole.set(p.course_id, new Map());
-    const byTee = parsByCourseTeeHole.get(p.course_id)!;
+    const courseId = String(p.course_id);
+    if (!parsByCourseTeeHole.has(courseId)) parsByCourseTeeHole.set(courseId, new Map());
+    const byTee = parsByCourseTeeHole.get(courseId)!;
+
     const tee = normalizeTee(p.tee);
     if (!byTee.has(tee)) byTee.set(tee, new Map());
-    byTee.get(tee)!.set(Number(p.hole_number), { par: Number(p.par), si: Number(p.stroke_index) });
+
+    const holeNo = clampHoleTo1to18(p.hole_number);
+    if (!holeNo) continue;
+
+    byTee.get(tee)!.set(holeNo, { par: Number(p.par), si: Number(p.stroke_index) });
   }
 
-  // round|player|hole -> score row
-  // ✅ Normalize hole_number to 1..18 so lookups work regardless of DB convention.
-  const scoreByRoundPlayerHole = new Map<string, ScoreLiteForTour>();
+  /**
+   * ✅ Robust score grouping:
+   * round|player -> hole(1..18) -> raw string ("", "P", "5", etc)
+   *
+   * This avoids brittle “composed key lookup per cell”.
+   */
+  const scoresByRoundPlayer = new Map<string, Map<number, string>>();
   for (const s of scores) {
-    const hn = normalizeHoleNumberTo1to18(s.hole_number);
-    if (!Number.isFinite(hn)) continue;
-    scoreByRoundPlayerHole.set(`${s.round_id}|${s.player_id}|${hn}`, s);
+    const roundId = String(s.round_id);
+    const playerId = String(s.player_id);
+    const holeNo = clampHoleTo1to18(s.hole_number);
+    if (!holeNo) continue;
+
+    const key = `${roundId}|${playerId}`;
+    if (!scoresByRoundPlayer.has(key)) scoresByRoundPlayer.set(key, new Map());
+
+    const raw = normalizeRawScore(s.strokes, s.pickup).trim().toUpperCase();
+    scoresByRoundPlayer.get(key)!.set(holeNo, raw);
   }
 
-  const playerById = new Map(players.map((p) => [p.id, p]));
+  const playerById = new Map(players.map((p) => [String(p.id), p]));
   const holes = Array.from({ length: 18 }, (_, i) => i + 1);
 
   const tourRounds: TourRoundContextLocal[] = rounds
     .filter((r) => !!r.id)
     .map((r) => {
-      const courseId = r.course_id;
-      const roundId = r.id;
+      const courseId = r.course_id ? String(r.course_id) : null;
+      const roundId = String(r.id);
 
       const byTee = courseId ? parsByCourseTeeHole.get(courseId) : undefined;
 
@@ -143,33 +150,41 @@ export function buildTourCompetitionContext(params: {
       const parsByHole = holes.map((h) => baselineMap?.get(h)?.par ?? 0);
       const strokeIndexByHole = holes.map((h) => baselineMap?.get(h)?.si ?? 0);
 
-      // Build 18-length raw-score arrays per player
+      // Build 18-length raw-score arrays per player from grouped scores
       const scoresMatrix: Record<string, string[]> = {};
       for (const p of players) {
+        const pid = String(p.id);
         const arr = Array(18).fill("");
-        for (let hole = 1; hole <= 18; hole++) {
-          const sc = scoreByRoundPlayerHole.get(`${roundId}|${p.id}|${hole}`);
-          arr[hole - 1] = sc ? normalizeRawScore(sc.strokes, sc.pickup).trim().toUpperCase() : "";
+
+        const key = `${roundId}|${pid}`;
+        const byHole = scoresByRoundPlayer.get(key);
+
+        if (byHole) {
+          for (let hole = 1; hole <= 18; hole++) {
+            const v = byHole.get(hole);
+            if (typeof v === "string") arr[hole - 1] = v;
+          }
         }
-        scoresMatrix[p.id] = arr;
+
+        scoresMatrix[pid] = arr;
       }
 
       const isPlayingInRound = (playerId: string) => {
-        const rp = rpByRoundPlayer.get(`${roundId}|${playerId}`);
+        const rp = rpByRoundPlayer.get(`${roundId}|${String(playerId)}`);
         return rp ? rp.playing === true : false;
       };
 
       const isComplete = (playerId: string) => {
         // If not playing in that round, treat as complete (lets comps skip/ignore)
         if (!isPlayingInRound(playerId)) return true;
-        const arr = scoresMatrix[playerId] ?? Array(18).fill("");
+        const arr = scoresMatrix[String(playerId)] ?? Array(18).fill("");
         for (let i = 0; i < 18; i++) if (!String(arr[i] ?? "").trim()) return false;
         return true;
       };
 
       // ✅ Tee-specific par (used for bucketing Par 3/4/5 comps)
       const parForPlayerHole = (playerId: string, holeIndex: number) => {
-        const player = playerById.get(playerId);
+        const player = playerById.get(String(playerId));
         const tee: Tee = normalizeTee(player?.gender);
         const holeNo = holeIndex + 1;
 
@@ -179,7 +194,7 @@ export function buildTourCompetitionContext(params: {
       };
 
       const netPointsForHole = (playerId: string, holeIndex: number) => {
-        const player = playerById.get(playerId);
+        const player = playerById.get(String(playerId));
         if (!player) return 0;
 
         // Not playing? score 0
@@ -192,10 +207,10 @@ export function buildTourCompetitionContext(params: {
         const info = map?.get(holeNo);
         if (!info) return 0;
 
-        const rp = rpByRoundPlayer.get(`${roundId}|${playerId}`);
+        const rp = rpByRoundPlayer.get(`${roundId}|${String(playerId)}`);
         const hcp = Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp?.playing_handicap) : 0;
 
-        const raw = String(scoresMatrix[playerId]?.[holeIndex] ?? "").trim().toUpperCase();
+        const raw = String(scoresMatrix[String(playerId)]?.[holeIndex] ?? "").trim().toUpperCase();
 
         return netStablefordPointsForHole({
           rawScore: raw,
@@ -222,16 +237,16 @@ export function buildTourCompetitionContext(params: {
   // Consider a player "playing" in tour scope if they are marked playing in ANY round.
   const playedAny = (playerId: string) =>
     rounds.some((r) => {
-      const rp = rpByRoundPlayer.get(`${r.id}|${playerId}`);
+      const rp = rpByRoundPlayer.get(`${String(r.id)}|${String(playerId)}`);
       return rp ? rp.playing === true : false;
     });
 
   const ctx: TourCompetitionContextLocal = {
     scope: "tour",
     players: players.map((p) => ({
-      id: p.id,
+      id: String(p.id),
       name: p.name,
-      playing: playedAny(p.id),
+      playing: playedAny(String(p.id)),
       playing_handicap: 0,
     })),
     rounds: tourRounds,
