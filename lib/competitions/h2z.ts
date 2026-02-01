@@ -12,7 +12,8 @@
  */
 
 export type H2ZLeg = {
-  tour_id: string;
+  // NOTE: Optional for compatibility with UI normalization that omits tour_id.
+  tour_id?: string;
   leg_no: number;
   start_round_no: number;
   end_round_no: number;
@@ -211,7 +212,6 @@ function selectRoundsForLeg(
 
 /**
  * Core compute: returns H2ZResult plus optional H2ZDiagnostic.
- * This is the function your UI already imports.
  */
 export function computeH2ZForPlayer(
   ctx: AnyCompetitionContext,
@@ -349,9 +349,12 @@ export function computeH2ZForPlayer(
 /**
  * Compatibility export expected by your UI:
  * buildH2ZDiagnostic(ctx, playerId, leg)
- * Returns a diagnostic payload (and never throws).
  */
-export function buildH2ZDiagnostic(ctx: AnyCompetitionContext, playerId: string, leg: H2ZLeg): H2ZDiagnostic {
+export function buildH2ZDiagnostic(
+  ctx: AnyCompetitionContext,
+  playerId: string,
+  leg: H2ZLeg
+): H2ZDiagnostic {
   try {
     const computed = computeH2ZForPlayer(ctx, playerId, leg, { diagnostic: true });
     return (
@@ -379,8 +382,7 @@ export function buildH2ZDiagnostic(ctx: AnyCompetitionContext, playerId: string,
 }
 
 /**
- * Optional helper (you can use later if desired):
- * compute all players for a leg and optionally attach one player's diagnostic.
+ * Optional helper: compute all players for a leg and optionally attach one player's diagnostic.
  */
 export function computeH2ZForLeg(
   ctx: AnyCompetitionContext,
