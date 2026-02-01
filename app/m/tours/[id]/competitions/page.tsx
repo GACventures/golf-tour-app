@@ -155,6 +155,7 @@ type H2ZCell = {
   rank: number | null;
   best: number | null;
   bestLen: number | null;
+  bestWhere: string | null;
 };
 
 function h2zHeading(leg: H2ZLeg) {
@@ -539,6 +540,7 @@ export default function MobileCompetitionsPage() {
           rank: null,
           best: r ? r.bestScore : null,
           bestLen: r ? r.bestLen : null,
+          bestWhere: r ? r.bestWhere : null,
         };
       }
     }
@@ -605,7 +607,8 @@ export default function MobileCompetitionsPage() {
       ? "border border-amber-700 bg-amber-400 text-gray-900"
       : "bg-transparent";
 
-  const medalHover = (rank: number | null) => (rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50");
+  const medalHover = (rank: number | null) =>
+    rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50";
 
   const press = "active:bg-gray-100";
 
@@ -744,6 +747,7 @@ export default function MobileCompetitionsPage() {
 
                           const best = cell?.best ?? null;
                           const bestLen = cell?.bestLen ?? null;
+                          const bestWhere = (cell?.bestWhere ?? "").trim();
 
                           const show =
                             final === null ? (
@@ -771,10 +775,19 @@ export default function MobileCompetitionsPage() {
                                 )}
 
                                 {final !== null && isOpen ? (
-                                  <div className="max-w-[180px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm text-left">
+                                  <div className="max-w-[220px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm text-left">
                                     {best && bestLen ? (
                                       <>
-                                        Peak: <span className="font-semibold">{best}</span> <span className="text-gray-500">({bestLen})</span>
+                                        <div>
+                                          Peak: <span className="font-semibold">{best}</span>{" "}
+                                          <span className="text-gray-500">({bestLen} par-3 holes)</span>
+                                        </div>
+                                        <div className="mt-0.5 text-gray-600">
+                                          Where:{" "}
+                                          <span className="font-semibold text-gray-800">
+                                            {bestWhere ? bestWhere : "—"}
+                                          </span>
+                                        </div>
                                       </>
                                     ) : (
                                       <span className="text-gray-400">No non-zero Par 3 run</span>
@@ -794,7 +807,7 @@ export default function MobileCompetitionsPage() {
               <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
                 Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as
                 better. Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown. Tap H2Z to see peak
-                score and (holes count).
+                score and where it happened.
               </div>
             </div>
 

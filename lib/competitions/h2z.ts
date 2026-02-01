@@ -1,107 +1,162 @@
 // lib/competitions/h2z.ts
 import type { CompetitionContext } from "./types";
 
+/**
+ * A H2Z "leg" is a range of rounds (by round_no) over which we compute
+ * the H2Z score and peak run for each player.
+ */
 export type H2ZLeg = {
-  leg_no: number; // 1..N
-  start_round_no: number; // inclusive
-  end_round_no: number; // inclusive
+  leg_no: number;
+  start_round_no: number;
+  end_round_no: number;
 };
 
 export type H2ZLegResult = {
-  leg: H2ZLeg;
-  finalScore: number; // score at end of leg
-  bestScore: number; // highest score reached during the leg
-  bestLen: number; // number of consecutive par-3 holes used for bestScore
+  finalScore: number;
+  bestScore: number;
+  bestLen: number;
+
+  /**
+   * Peak segment "where" markers. These can span multiple rounds.
+   * Round numbers here are round_no, not round_id.
+   */
+  bestStartRoundNo: number | null;
+  bestStartHoleNo: number | null;
+  bestEndRoundNo: number | null;
+  bestEndHoleNo: number | null;
+
+  /**
+   * Human friendly string (used by UI)
+   * e.g. "R2 H4 → R2 H12" or "R2 H4 → R3 H7"
+   */
+  bestWhere: string | null;
 };
 
-export type H2ZPlayerResults = Record<number, H2ZLegResult>; // keyed by leg_no
-
-function safeInt(n: any, fallback = 0) {
-  const x = Number(n);
-  return Number.isFinite(x) ? Math.trunc(x) : fallback;
+function safeInt(v: any, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.floor(n) : fallback;
 }
 
-function isPar3ForPlayer(roundCtx: any, playerId: string, holeIndex: number) {
-  const fn = (roundCtx as any)?.parForPlayerHole;
-  if (typeof fn !== "function") return false;
-  return Number(fn(playerId, holeIndex) ?? 0) === 3;
+function fmtWhere(
+  sR: number | null,
+  sH: number | null,
+  eR: number | null,
+  eH: number | null
+): string | null {
+  if (!sR || !sH || !eR || !eH) return null;
+  if (sR === eR) return `R${sR} H${sH}–H${eH}`;
+  return `R${sR} H${sH} → R${eR} H${eH}`;
 }
 
-function ptsForHole(roundCtx: any, playerId: string, holeIndex: number) {
-  const fn = (roundCtx as any)?.netPointsForHole;
-  if (typeof fn !== "function") return 0;
-  const v = Number(fn(playerId, holeIndex) ?? 0);
-  return Number.isFinite(v) ? v : 0;
-}
-
+/**
+ * Compute H2Z per leg for a single player.
+ *
+ * Rules (as implemented):
+ * - Consider only Par 3 holes for that player (tee-specific par via ctx.rounds[].parForPlayerHole).
+ * - Iterate rounds chronologically using roundsInOrder (round_no order) and hole 1..18.
+ * - Maintain a running total ("current") and length ("currentLen") counting only Par 3 holes.
+ * - If Stableford points on a Par 3 hole is 0, reset current + currentLen to 0.
+ * - Otherwise, add points and increment currentLen.
+ * - Track bestScore + bestLen + where (start/end round_no & hole_no).
+ */
 export function computeH2ZForPlayer(params: {
-  ctx: CompetitionContext; // tour context built by buildTourCompetitionContext
+  ctx: CompetitionContext;
   legs: H2ZLeg[];
-  // rounds in display/order with round_no so we can slice by legs
   roundsInOrder: Array<{ roundId: string; round_no: number | null }>;
-  // IMPORTANT: only treat a "0 points" as reset if player was actually playing that round
   isPlayingInRound: (roundId: string, playerId: string) => boolean;
   playerId: string;
-}): H2ZPlayerResults {
+}): Record<number, H2ZLegResult> {
   const { ctx, legs, roundsInOrder, isPlayingInRound, playerId } = params;
 
-  const tourRounds: any[] = (ctx as any)?.rounds ?? [];
-  const roundCtxById = new Map<string, any>();
-  for (const r of tourRounds) roundCtxById.set(String((r as any).roundId), r);
+  const out: Record<number, H2ZLegResult> = {};
 
-  // Pre-normalize legs
-  const normLegs = (legs ?? [])
-    .map((l) => ({
-      leg_no: safeInt(l.leg_no, 0),
-      start_round_no: Math.max(1, safeInt(l.start_round_no, 1)),
-      end_round_no: Math.max(1, safeInt(l.end_round_no, 1)),
-    }))
-    .filter((l) => l.leg_no >= 1 && l.end_round_no >= l.start_round_no)
-    .sort((a, b) => a.leg_no - b.leg_no);
+  for (const leg of legs) {
+    const startNo = safeInt(leg.start_round_no, 0);
+    const endNo = safeInt(leg.end_round_no, 0);
 
-  const out: H2ZPlayerResults = {};
+    // default result
+    let current = 0;
+    let currentLen = 0;
 
-  for (const leg of normLegs) {
-    let cur = 0;
-    let best = 0;
-    let curLen = 0;
+    let bestScore = 0;
     let bestLen = 0;
 
-    for (const r of roundsInOrder) {
-      const rn = safeInt(r.round_no, -1);
-      if (rn < leg.start_round_no || rn > leg.end_round_no) continue;
+    // Track current segment start
+    let segStartRoundNo: number | null = null;
+    let segStartHoleNo: number | null = null;
 
-      const roundId = String(r.roundId);
-      const roundCtx = roundCtxById.get(roundId);
+    // Track best segment boundaries
+    let bestStartRoundNo: number | null = null;
+    let bestStartHoleNo: number | null = null;
+    let bestEndRoundNo: number | null = null;
+    let bestEndHoleNo: number | null = null;
+
+    const roundsForLeg = roundsInOrder.filter((r) => {
+      const rn = safeInt(r.round_no, 0);
+      return rn >= startNo && rn <= endNo;
+    });
+
+    for (const r of roundsForLeg) {
+      const rn = safeInt(r.round_no, 0);
+      if (!r.roundId) continue;
+
+      // If not playing, skip the entire round (does not reset).
+      if (!isPlayingInRound(r.roundId, playerId)) continue;
+
+      const roundCtx = (ctx as any)?.rounds?.find((x: any) => x.roundId === r.roundId);
       if (!roundCtx) continue;
 
-      // If not playing this round, skip entirely (do NOT reset)
-      if (!isPlayingInRound(roundId, playerId)) continue;
+      for (let holeIndex = 0; holeIndex < 18; holeIndex++) {
+        const holeNo = holeIndex + 1;
 
-      for (let i = 0; i < 18; i++) {
-        if (!isPar3ForPlayer(roundCtx, playerId, i)) continue;
+        // Tee-specific par for this player/hole
+        const par = Number(roundCtx?.parForPlayerHole?.(playerId, holeIndex) ?? 0);
+        if (par !== 3) continue;
 
-        const pts = ptsForHole(roundCtx, playerId, i);
+        const pts = Number(roundCtx?.netPointsForHole?.(playerId, holeIndex) ?? 0);
 
-        if (pts === 0) {
-          cur = 0;
-          curLen = 0;
-        } else {
-          cur += pts;
-          curLen += 1;
-          if (cur > best) {
-            best = cur;
-            bestLen = curLen;
-          }
+        if (!Number.isFinite(pts) || pts <= 0) {
+          // Reset on 0 points for Par 3
+          current = 0;
+          currentLen = 0;
+          segStartRoundNo = null;
+          segStartHoleNo = null;
+          continue;
+        }
+
+        // Start segment if needed
+        if (currentLen === 0) {
+          segStartRoundNo = rn;
+          segStartHoleNo = holeNo;
+        }
+
+        current += pts;
+        currentLen += 1;
+
+        // Update best peak
+        if (current > bestScore) {
+          bestScore = current;
+          bestLen = currentLen;
+
+          bestStartRoundNo = segStartRoundNo;
+          bestStartHoleNo = segStartHoleNo;
+          bestEndRoundNo = rn;
+          bestEndHoleNo = holeNo;
         }
       }
     }
 
+    const bestWhere = fmtWhere(bestStartRoundNo, bestStartHoleNo, bestEndRoundNo, bestEndHoleNo);
+
     out[leg.leg_no] = {
-      leg,
-      finalScore: cur,
-      bestScore: best,
+      finalScore: current,
+      bestScore,
       bestLen,
+      bestStartRoundNo,
+      bestStartHoleNo,
+      bestEndRoundNo,
+      bestEndHoleNo,
+      bestWhere,
     };
   }
 
