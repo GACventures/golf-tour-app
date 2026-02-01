@@ -22,19 +22,24 @@ export type H2ZTraceRow = {
   h2z_after: number; // running total after processing this hole
 };
 
+type CompetitionContextWithRounds = CompetitionContext & {
+  // TourCompetitionContextLocal has this; CompetitionContext base type doesn't.
+  rounds?: any[];
+};
+
 function safeNum(v: any, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
 
 /**
- * Core H2Z scoring rule (as currently implemented):
+ * H2Z scoring rule:
  * - Only Par 3 holes are counted
  * - Add net stableford points for each Par 3 hole
  * - Reset running total to 0 whenever stableford points on a Par 3 hole == 0
  */
 export function computeH2ZForPlayer(params: {
-  ctx: CompetitionContext;
+  ctx: CompetitionContextWithRounds;
   legs: H2ZLeg[];
   roundsInOrder: Array<{ roundId: string; round_no: number | null }>;
   isPlayingInRound: (roundId: string, playerId: string) => boolean;
@@ -64,10 +69,10 @@ export function computeH2ZForPlayer(params: {
       if (!roundCtx) continue;
 
       for (let holeIndex = 0; holeIndex < 18; holeIndex++) {
-        const par = safeNum((roundCtx as any).parForPlayerHole?.(playerId, holeIndex), 0);
+        const par = safeNum(roundCtx?.parForPlayerHole?.(playerId, holeIndex), 0);
         if (par !== 3) continue;
 
-        const pts = safeNum((roundCtx as any).netPointsForHole?.(playerId, holeIndex), 0);
+        const pts = safeNum(roundCtx?.netPointsForHole?.(playerId, holeIndex), 0);
 
         if (pts === 0) {
           running = 0;
@@ -100,7 +105,7 @@ export function computeH2ZForPlayer(params: {
  * round_no, hole_no, raw strokes, stableford points, and H2Z running total after that hole.
  */
 export function traceH2ZForPlayerLeg(params: {
-  ctx: CompetitionContext;
+  ctx: CompetitionContextWithRounds;
   leg: H2ZLeg;
   roundsInOrder: Array<{ roundId: string; round_no: number | null }>;
   isPlayingInRound: (roundId: string, playerId: string) => boolean;
@@ -127,11 +132,11 @@ export function traceH2ZForPlayerLeg(params: {
     for (let holeIndex = 0; holeIndex < 18; holeIndex++) {
       const holeNo = holeIndex + 1;
 
-      const par = safeNum((roundCtx as any).parForPlayerHole?.(playerId, holeIndex), 0);
+      const par = safeNum(roundCtx?.parForPlayerHole?.(playerId, holeIndex), 0);
       if (par !== 3) continue;
 
-      const raw = String((roundCtx as any).scores?.[playerId]?.[holeIndex] ?? "").trim().toUpperCase();
-      const pts = safeNum((roundCtx as any).netPointsForHole?.(playerId, holeIndex), 0);
+      const raw = String(roundCtx?.scores?.[playerId]?.[holeIndex] ?? "").trim().toUpperCase();
+      const pts = safeNum(roundCtx?.netPointsForHole?.(playerId, holeIndex), 0);
 
       if (pts === 0) {
         running = 0;
