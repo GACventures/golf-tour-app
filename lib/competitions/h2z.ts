@@ -148,11 +148,9 @@ function computeSingleLeg(
       const par = ctx.parForPlayerHole ? ctx.parForPlayerHole(playerId, holeIndex) : null;
       if (par !== 3) continue;
 
-      // strokes raw for diagnostics only
       const strokesRaw =
         ctx.scores?.[playerId]?.[holeIndex] != null ? String(ctx.scores[playerId][holeIndex]) : null;
 
-      // stableford points
       let pts = 0;
       if (ctx.netPointsForHole) {
         const rawPts = ctx.netPointsForHole(playerId, holeIndex);
@@ -226,17 +224,37 @@ function computeSingleLeg(
    PUBLIC API — supports BOTH call styles your app uses
    ========================================================================== */
 
-// Legacy object-style API (what page.tsx is using)
+// Legacy object-style API for compute (used by page.tsx)
 export type LegacyComputeArgs = {
   ctx: AnyCompetitionContext;
   playerId: string;
   legs: H2ZLeg[];
-  // page.tsx may pass extra fields like roundsInOrder; we ignore safely
   diagnostic?: boolean;
+  [k: string]: any; // ignore extra fields like roundsInOrder, roundsInOrder etc
+};
+
+// Legacy object-style API for diagnostic builder (used by page.tsx)
+export type LegacyBuildDiagnosticArgs = {
+  ctx: AnyCompetitionContext;
+  // page may provide these, we ignore safely:
+  roundsInOrder?: any;
+  isPlayingInRound?: any;
+
+  // critical fields we try to locate:
+  playerId?: string;
+  leg?: H2ZLeg;
+
+  // some pages pass selectedPlayerId / selectedLeg / legNo etc; accept and infer:
+  selectedPlayerId?: string;
+  selectedLeg?: H2ZLeg;
+  legNo?: number;
+  start_round_no?: number;
+  end_round_no?: number;
+
   [k: string]: any;
 };
 
-// Overloads (important for TypeScript inference in page.tsx)
+// Overloads for TypeScript inference in page.tsx
 export function computeH2ZForPlayer(args: LegacyComputeArgs): H2ZPerLegMap;
 export function computeH2ZForPlayer(
   ctx: AnyCompetitionContext,
@@ -246,22 +264,14 @@ export function computeH2ZForPlayer(
 ): { result: H2ZResult; diagnostic?: H2ZDiagnostic };
 
 // Implementation
-export function computeH2ZForPlayer(
-  arg1: any,
-  arg2?: any,
-  arg3?: any,
-  arg4?: any
-): any {
+export function computeH2ZForPlayer(arg1: any, arg2?: any, arg3?: any, arg4?: any): any {
   // Legacy object call: returns map keyed by leg_no
   if (typeof arg1 === "object" && arg1?.ctx && arg1?.playerId && Array.isArray(arg1?.legs)) {
     const args = arg1 as LegacyComputeArgs;
     const out: H2ZPerLegMap = {};
-
     for (const leg of args.legs) {
-      const computed = computeSingleLeg(args.ctx, args.playerId, leg, false);
-      out[leg.leg_no] = computed.result;
+      out[leg.leg_no] = computeSingleLeg(args.ctx, args.playerId, leg, false).result;
     }
-
     return out;
   }
 
@@ -270,11 +280,62 @@ export function computeH2ZForPlayer(
   const playerId = arg2 as string;
   const leg = arg3 as H2ZLeg;
   const diagnostic = !!arg4?.diagnostic;
-
   return computeSingleLeg(ctx, playerId, leg, diagnostic);
 }
 
-// Diagnostic builder used by UI
-export function buildH2ZDiagnostic(ctx: AnyCompetitionContext, playerId: string, leg: H2ZLeg): H2ZDiagnostic {
+// Overloads for diagnostic builder
+export function buildH2ZDiagnostic(args: LegacyBuildDiagnosticArgs): H2ZDiagnostic;
+export function buildH2ZDiagnostic(ctx: AnyCompetitionContext, playerId: string, leg: H2ZLeg): H2ZDiagnostic;
+
+// Implementation
+export function buildH2ZDiagnostic(arg1: any, arg2?: any, arg3?: any): H2ZDiagnostic {
+  // Legacy object call
+  if (typeof arg1 === "object" && arg1?.ctx) {
+    const args = arg1 as LegacyBuildDiagnosticArgs;
+
+    const ctx = args.ctx;
+
+    const playerId = (args.playerId ?? args.selectedPlayerId) as string | undefined;
+
+    // Try to find a leg object (preferred)
+    let leg: H2ZLeg | undefined = args.leg ?? args.selectedLeg;
+
+    // If leg not provided, attempt to construct from fields (best effort)
+    if (!leg) {
+      const legNo = safeInt(args.legNo);
+      const start = safeInt(args.start_round_no);
+      const end = safeInt(args.end_round_no);
+      if (legNo != null && start != null && end != null) {
+        leg = { leg_no: legNo, start_round_no: start, end_round_no: end };
+      }
+    }
+
+    // If still missing, return a diagnostic explaining what is missing (prevents silent failures)
+    if (!playerId || !leg) {
+      return {
+        player_id: playerId ?? "unknown",
+        leg: {
+          leg_no: leg?.leg_no ?? -1,
+          start_round_no: leg?.start_round_no ?? -1,
+          end_round_no: leg?.end_round_no ?? -1,
+        },
+        issues: [
+          "Legacy buildH2ZDiagnostic called without required playerId/leg.",
+          `playerId=${String(playerId)}`,
+          `leg=${leg ? JSON.stringify(leg) : "null"}`,
+        ],
+        rounds_included: [],
+        par3_events: [],
+        summary: { included_round_count: 0, par3_count_seen: 0 },
+      };
+    }
+
+    return computeSingleLeg(ctx, playerId, leg, true).diagnostic!;
+  }
+
+  // New positional call
+  const ctx = arg1 as AnyCompetitionContext;
+  const playerId = arg2 as string;
+  const leg = arg3 as H2ZLeg;
   return computeSingleLeg(ctx, playerId, leg, true).diagnostic!;
 }
