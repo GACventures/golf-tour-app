@@ -7,7 +7,7 @@
  * - Reset running total when points === 0
  * - Report finalScore, bestScore, bestLen
  *
- * IMPORTANT:
+ * CRITICAL:
  * - holeIndex MUST align with ctx.rounds order
  * - DO NOT reorder rounds for holeIndex
  */
@@ -31,29 +31,45 @@ export type H2ZPar3Event = {
   round_no_effective: number;
   hole_number: number;
   hole_index: number;
+
   par: number | null;
   strokes_raw: string | null;
   stableford_points: number;
+
   running_before: number;
   running_after: number;
   reset: boolean;
+
+  current_run_len_after: number;
+  current_run_score_after: number;
+  best_score_after: number;
+  best_len_after: number;
 };
 
 export type H2ZDiagnostic = {
   player_id: string;
   leg: Pick<H2ZLeg, "leg_no" | "start_round_no" | "end_round_no">;
   issues: string[];
+
   rounds_included: Array<{
     round_id: string;
     round_index: number;
     round_no_effective: number;
   }>;
+
   par3_events: H2ZPar3Event[];
+
+  summary: {
+    included_round_count: number;
+    par3_count_seen: number;
+  };
 };
+
+export type H2ZPerLegMap = Record<number, H2ZResult>;
 
 type AnyCompetitionContext = {
   rounds?: any[];
-  scores?: any;
+  scores?: Record<string, any[]>;
   netPointsForHole?: (playerId: string, holeIndex: number) => number;
   parForPlayerHole?: (playerId: string, holeIndex: number) => number | null;
 };
@@ -63,11 +79,15 @@ function safeInt(v: any): number | null {
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
+function isFiniteNumber(n: unknown): n is number {
+  return typeof n === "number" && Number.isFinite(n);
+}
+
 /* ============================================================================
-   INTERNAL CORE IMPLEMENTATION (new API)
+   INTERNAL CORE (single leg)
    ========================================================================== */
 
-function _computeH2ZCore(
+function computeSingleLeg(
   ctx: AnyCompetitionContext,
   playerId: string,
   leg: H2ZLeg,
@@ -77,70 +97,89 @@ function _computeH2ZCore(
 
   if (!Array.isArray(ctx.rounds)) {
     issues.push("ctx.rounds missing or not array");
+    const empty: H2ZResult = { finalScore: 0, bestScore: 0, bestLen: 0 };
     return {
-      result: { finalScore: 0, bestScore: 0, bestLen: 0 },
+      result: empty,
       diagnostic: diagnostic
         ? {
             player_id: playerId,
-            leg,
+            leg: { leg_no: leg.leg_no, start_round_no: leg.start_round_no, end_round_no: leg.end_round_no },
             issues,
             rounds_included: [],
             par3_events: [],
+            summary: { included_round_count: 0, par3_count_seen: 0 },
           }
         : undefined,
     };
   }
 
-  const rounds = ctx.rounds.map((r, idx) => ({
-    round_id: r.id,
-    round_index: idx,
-    round_no_effective: safeInt(r.round_no) ?? idx + 1,
-  }));
+  const roundsAll = ctx.rounds
+    .map((r: any, idx: number) => ({
+      round_id: r?.id as string,
+      round_index: idx,
+      round_no_effective: safeInt(r?.round_no) ?? idx + 1,
+    }))
+    .filter((r) => !!r.round_id);
 
   const lo = Math.min(leg.start_round_no, leg.end_round_no);
   const hi = Math.max(leg.start_round_no, leg.end_round_no);
 
-  const roundsIncluded = rounds.filter(
+  const roundsIncluded = roundsAll.filter(
     (r) => r.round_no_effective >= lo && r.round_no_effective <= hi
   );
 
   if (roundsIncluded.length === 0) {
-    issues.push(`No rounds included for leg ${leg.leg_no}`);
+    issues.push(`No rounds included for leg ${leg.leg_no} with bounds [${lo}..${hi}]`);
   }
 
   let running = 0;
   let bestScore = 0;
+
+  let currentRunScore = 0;
+  let currentRunLen = 0;
   let bestLen = 0;
-  let currentLen = 0;
 
   const events: H2ZPar3Event[] = [];
 
   for (const r of roundsIncluded) {
     for (let hole = 1; hole <= 18; hole++) {
       const holeIndex = r.round_index * 18 + (hole - 1);
-      const par = ctx.parForPlayerHole?.(playerId, holeIndex) ?? null;
 
+      const par = ctx.parForPlayerHole ? ctx.parForPlayerHole(playerId, holeIndex) : null;
       if (par !== 3) continue;
 
-      const pts = ctx.netPointsForHole?.(playerId, holeIndex) ?? 0;
+      // strokes raw for diagnostics only
       const strokesRaw =
-        ctx.scores?.[playerId]?.[holeIndex] != null
-          ? String(ctx.scores[playerId][holeIndex])
-          : null;
+        ctx.scores?.[playerId]?.[holeIndex] != null ? String(ctx.scores[playerId][holeIndex]) : null;
 
-      const before = running;
+      // stableford points
+      let pts = 0;
+      if (ctx.netPointsForHole) {
+        const rawPts = ctx.netPointsForHole(playerId, holeIndex);
+        pts = isFiniteNumber(rawPts) ? rawPts : 0;
+        if (!isFiniteNumber(rawPts)) {
+          issues.push(`Non-numeric points at holeIndex=${holeIndex}; treating as 0`);
+        }
+      } else {
+        issues.push("ctx.netPointsForHole missing; treating all points as 0");
+      }
+
+      const runningBefore = running;
+
       let reset = false;
-
       if (pts === 0) {
         running = 0;
-        currentLen = 0;
+        currentRunScore = 0;
+        currentRunLen = 0;
         reset = true;
       } else {
         running += pts;
-        currentLen += 1;
+        currentRunScore += pts;
+        currentRunLen += 1;
+
         if (running > bestScore) {
           bestScore = running;
-          bestLen = currentLen;
+          bestLen = currentRunLen;
         }
       }
 
@@ -154,15 +193,19 @@ function _computeH2ZCore(
           par,
           strokes_raw: strokesRaw,
           stableford_points: pts,
-          running_before: before,
+          running_before: runningBefore,
           running_after: running,
           reset,
+          current_run_len_after: currentRunLen,
+          current_run_score_after: currentRunScore,
+          best_score_after: bestScore,
+          best_len_after: bestLen,
         });
       }
     }
   }
 
-  const result = { finalScore: running, bestScore, bestLen };
+  const result: H2ZResult = { finalScore: running, bestScore, bestLen };
 
   if (!diagnostic) return { result };
 
@@ -170,46 +213,68 @@ function _computeH2ZCore(
     result,
     diagnostic: {
       player_id: playerId,
-      leg,
+      leg: { leg_no: leg.leg_no, start_round_no: leg.start_round_no, end_round_no: leg.end_round_no },
       issues,
       rounds_included: roundsIncluded,
       par3_events: events,
+      summary: { included_round_count: roundsIncluded.length, par3_count_seen: events.length },
     },
   };
 }
 
 /* ============================================================================
-   PUBLIC API — BACKWARD + FORWARD COMPATIBLE
+   PUBLIC API — supports BOTH call styles your app uses
    ========================================================================== */
 
-/**
- * NEW API:
- *   computeH2ZForPlayer(ctx, playerId, leg, { diagnostic })
- *
- * OLD API (used by page.tsx):
- *   computeH2ZForPlayer({ ctx, playerId, legs, diagnostic })
- */
+// Legacy object-style API (what page.tsx is using)
+export type LegacyComputeArgs = {
+  ctx: AnyCompetitionContext;
+  playerId: string;
+  legs: H2ZLeg[];
+  // page.tsx may pass extra fields like roundsInOrder; we ignore safely
+  diagnostic?: boolean;
+  [k: string]: any;
+};
+
+// Overloads (important for TypeScript inference in page.tsx)
+export function computeH2ZForPlayer(args: LegacyComputeArgs): H2ZPerLegMap;
+export function computeH2ZForPlayer(
+  ctx: AnyCompetitionContext,
+  playerId: string,
+  leg: H2ZLeg,
+  opts?: { diagnostic?: boolean }
+): { result: H2ZResult; diagnostic?: H2ZDiagnostic };
+
+// Implementation
 export function computeH2ZForPlayer(
   arg1: any,
   arg2?: any,
   arg3?: any,
   arg4?: any
-): { result: H2ZResult; diagnostic?: H2ZDiagnostic } {
-  // OLD OBJECT-STYLE API
-  if (typeof arg1 === "object" && arg1?.ctx && arg1?.playerId && arg1?.legs) {
-    const { ctx, playerId, legs, diagnostic } = arg1;
-    const leg = legs[0]; // page.tsx already loops legs
-    return _computeH2ZCore(ctx, playerId, leg, !!diagnostic);
+): any {
+  // Legacy object call: returns map keyed by leg_no
+  if (typeof arg1 === "object" && arg1?.ctx && arg1?.playerId && Array.isArray(arg1?.legs)) {
+    const args = arg1 as LegacyComputeArgs;
+    const out: H2ZPerLegMap = {};
+
+    for (const leg of args.legs) {
+      const computed = computeSingleLeg(args.ctx, args.playerId, leg, false);
+      out[leg.leg_no] = computed.result;
+    }
+
+    return out;
   }
 
-  // NEW POSITIONAL API
-  return _computeH2ZCore(arg1, arg2, arg3, !!arg4?.diagnostic);
+  // New positional call: returns { result, diagnostic? }
+  const ctx = arg1 as AnyCompetitionContext;
+  const playerId = arg2 as string;
+  const leg = arg3 as H2ZLeg;
+  const diagnostic = !!arg4?.diagnostic;
+
+  return computeSingleLeg(ctx, playerId, leg, diagnostic);
 }
 
-export function buildH2ZDiagnostic(
-  ctx: AnyCompetitionContext,
-  playerId: string,
-  leg: H2ZLeg
-): H2ZDiagnostic {
-  return _computeH2ZCore(ctx, playerId, leg, true).diagnostic!;
+// Diagnostic builder used by UI
+export function buildH2ZDiagnostic(ctx: AnyCompetitionContext, playerId: string, leg: H2ZLeg): H2ZDiagnostic {
+  return computeSingleLeg(ctx, playerId, leg, true).diagnostic!;
 }
