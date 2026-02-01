@@ -11,12 +11,12 @@ type SettingsRow = {
   // Teams (already existed)
   default_team_best_m: number | null;
 
-  // Individual (Step 1)
+  // Individual
   individual_mode: "ALL" | "BEST_N" | string;
   individual_best_n: number | null;
   individual_final_required: boolean;
 
-  // Pairs (Step 1)
+  // Pairs
   pair_mode: "ALL" | "BEST_Q" | string;
   pair_best_q: number | null;
   pair_final_required: boolean;
@@ -38,7 +38,7 @@ function clampInt(v: number | null, min: number, max: number) {
 
 export default function ManageEventsPage() {
   const params = useParams<{ id: string }>();
-  const tourId = params.id;
+  const tourId = String(params?.id ?? "");
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
@@ -57,7 +57,7 @@ export default function ManageEventsPage() {
 
   const [teamBestY, setTeamBestY] = useState<string>("1");
 
-  // A simple derived “summary” for confidence
+  // Preview (just to reassure it’s saving what you think)
   const preview = useMemo(() => {
     const n = asIntOrNull(individualBestN);
     const q = asIntOrNull(pairBestQ);
@@ -69,7 +69,9 @@ export default function ManageEventsPage() {
         : `Best ${n ?? "N"} rounds${individualFinalRequired ? " (Final required)" : ""}`;
 
     const pairs =
-      pairMode === "ALL" ? "All rounds" : `Best ${q ?? "Q"} rounds${pairFinalRequired ? " (Final required)" : ""}`;
+      pairMode === "ALL"
+        ? "All rounds"
+        : `Best ${q ?? "Q"} rounds${pairFinalRequired ? " (Final required)" : ""}`;
 
     const teams = `Best ${y} per hole, −1 per zero (all rounds)`;
 
@@ -95,7 +97,7 @@ export default function ManageEventsPage() {
 
         if (sErr) throw new Error(sErr.message);
 
-        // If missing row (shouldn’t happen after Step 1C, but handle anyway)
+        // If missing row, seed it
         if (!data) {
           const seed: SettingsRow = {
             tour_id: tourId,
@@ -125,7 +127,6 @@ export default function ManageEventsPage() {
         }
 
         const row = data as SettingsRow;
-
         if (!alive) return;
 
         const imode = String(row.individual_mode ?? "ALL").toUpperCase() === "BEST_N" ? "BEST_N" : "ALL";
@@ -149,7 +150,7 @@ export default function ManageEventsPage() {
       }
     }
 
-    void load();
+    if (tourId) void load();
 
     return () => {
       alive = false;
@@ -162,7 +163,6 @@ export default function ManageEventsPage() {
     setSavedMsg("");
 
     try {
-      // Parse + clamp inputs
       const nRaw = individualMode === "BEST_N" ? asIntOrNull(individualBestN) : null;
       const qRaw = pairMode === "BEST_Q" ? asIntOrNull(pairBestQ) : null;
       const yRaw = asIntOrNull(teamBestY) ?? 1;
@@ -189,7 +189,7 @@ export default function ManageEventsPage() {
       if (upErr) throw new Error(upErr.message);
 
       setSavedMsg("Saved ✅");
-      // Refresh the previous page if they go back
+      setTimeout(() => setSavedMsg(""), 1500);
     } catch (e: any) {
       setError(e?.message ?? "Save failed.");
     } finally {
@@ -197,9 +197,7 @@ export default function ManageEventsPage() {
     }
   }
 
-  if (loading) {
-    return <div style={{ padding: 16 }}>Loading event settings…</div>;
-  }
+  if (loading) return <div style={{ padding: 16 }}>Loading event settings…</div>;
 
   if (error) {
     return (
@@ -220,11 +218,8 @@ export default function ManageEventsPage() {
         <Link href={`/tours/${tourId}`}>← Back to Tour</Link>
       </div>
 
-      <p style={{ marginTop: 8, color: "#444" }}>
-        These settings are saved per tour and used by leaderboards (desktop + mobile).
-      </p>
+      <p style={{ marginTop: 8, color: "#444" }}>These settings are saved per tour and used by leaderboards (desktop + mobile).</p>
 
-      {/* Individual */}
       <section style={{ marginTop: 18, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Individual (Stableford)</div>
 
@@ -252,17 +247,12 @@ export default function ManageEventsPage() {
           </label>
 
           <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              type="checkbox"
-              checked={individualFinalRequired}
-              onChange={(e) => setIndividualFinalRequired(e.target.checked)}
-            />
+            <input type="checkbox" checked={individualFinalRequired} onChange={(e) => setIndividualFinalRequired(e.target.checked)} />
             Final required
           </label>
         </div>
       </section>
 
-      {/* Pairs */}
       <section style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Pairs (Better Ball)</div>
 
@@ -296,28 +286,19 @@ export default function ManageEventsPage() {
         </div>
       </section>
 
-      {/* Teams */}
       <section style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Teams</div>
 
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
           <label>
             Best Y per hole{" "}
-            <input
-              style={{ width: 80 }}
-              type="number"
-              min={1}
-              max={99}
-              value={teamBestY}
-              onChange={(e) => setTeamBestY(e.target.value)}
-            />
+            <input style={{ width: 80 }} type="number" min={1} max={99} value={teamBestY} onChange={(e) => setTeamBestY(e.target.value)} />
           </label>
 
           <div style={{ color: "#555" }}>Penalty: −1 for each zero among the considered scores</div>
         </div>
       </section>
 
-      {/* Preview */}
       <section style={{ marginTop: 12, padding: 12, border: "1px dashed #bbb", borderRadius: 10, background: "#fafafa" }}>
         <div style={{ fontWeight: 800, marginBottom: 6 }}>Preview (what Tour Overview will show)</div>
         <div style={{ color: "#333" }}>
