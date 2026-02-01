@@ -22,7 +22,7 @@ import {
   type ParLiteForTour,
 } from "@/lib/competitions/buildTourCompetitionContext";
 
-import { computeH2ZForPlayer, type H2ZLeg, buildH2ZDiagnostic } from "@/lib/competitions/h2z";
+import { computeH2ZForPlayer, type H2ZLeg } from "@/lib/competitions/h2z";
 
 type Tour = { id: string; name: string };
 
@@ -182,8 +182,6 @@ export default function MobileCompetitionsPage() {
     | null
   >(null);
 
-  const [diag, setDiag] = useState<{ playerId: string; legNo: number } | null>(null);
-
   const fixedComps: FixedCompMeta[] = useMemo(
     () => [
       { key: "napoleon", label: "Napoleon", competitionId: "tour_napoleon_par3_avg", format: (v) => fmt2(v) },
@@ -256,13 +254,11 @@ export default function MobileCompetitionsPage() {
       setErrorMsg("");
 
       try {
-        // Tour
         const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
         if (!alive) return;
         setTour(tData as Tour);
 
-        // Rounds
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,name,round_no,created_at,course_id")
@@ -274,7 +270,6 @@ export default function MobileCompetitionsPage() {
         if (!alive) return;
         setRounds(rr);
 
-        // Players (tour_players join)
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
@@ -297,7 +292,6 @@ export default function MobileCompetitionsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
-        // Round players
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
@@ -319,7 +313,7 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
-        // ✅ Scores (fetch one round at a time to avoid 1000-row cap)
+        // Scores: one round at a time (keep existing logic)
         if (roundIds.length > 0 && playerIds.length > 0) {
           const allScores: ScoreRow[] = [];
 
@@ -343,7 +337,6 @@ export default function MobileCompetitionsPage() {
           setScores([]);
         }
 
-        // Pars (M/F)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
@@ -369,7 +362,6 @@ export default function MobileCompetitionsPage() {
           setPars([]);
         }
 
-        // H2Z legs
         {
           const { data: lData, error: lErr } = await supabase
             .from("tour_h2z_legs")
@@ -566,30 +558,6 @@ export default function MobileCompetitionsPage() {
     return perPlayer;
   }, [players, sortedRounds, roundPlayers, ctx, h2zLegsNorm]);
 
-  const diagLines = useMemo(() => {
-    if (!diag) return null;
-
-    const playingSet = new Set<string>();
-    for (const rp of roundPlayers) {
-      if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
-    }
-    const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
-
-    const leg = h2zLegsNorm.find((l) => l.leg_no === diag.legNo);
-    if (!leg) return ["Diagnostic: leg not found"];
-
-    const roundsInOrder = sortedRounds.map((r) => ({ roundId: r.id, round_no: r.round_no }));
-
-    return buildH2ZDiagnostic({
-      ctx: ctx as any,
-      roundsInOrder,
-      isPlayingInRound,
-      playerId: diag.playerId,
-      start_round_no: leg.start_round_no,
-      end_round_no: leg.end_round_no,
-    });
-  }, [diag, roundPlayers, sortedRounds, h2zLegsNorm, ctx]);
-
   function toggleFixedDetail(playerId: string, key: FixedCompKey) {
     setOpenDetail((prev) => {
       if (prev?.kind === "fixed" && prev.playerId === playerId && prev.key === key) return null;
@@ -601,13 +569,6 @@ export default function MobileCompetitionsPage() {
     setOpenDetail((prev) => {
       if (prev?.kind === "h2z" && prev.playerId === playerId && prev.legNo === legNo) return null;
       return { kind: "h2z", playerId, legNo };
-    });
-  }
-
-  function toggleDiag(playerId: string, legNo: number) {
-    setDiag((prev) => {
-      if (prev?.playerId === playerId && prev?.legNo === legNo) return null;
-      return { playerId, legNo };
     });
   }
 
@@ -815,15 +776,6 @@ export default function MobileCompetitionsPage() {
                                       Peak: <span className="font-semibold">{best ?? 0}</span>{" "}
                                       <span className="text-gray-500">({bestLen ?? 0})</span>
                                     </div>
-                                    <button
-                                      type="button"
-                                      className="mt-1 text-[11px] underline text-gray-700"
-                                      onClick={() => toggleDiag(p.id, leg.leg_no)}
-                                    >
-                                      {diag?.playerId === p.id && diag?.legNo === leg.leg_no
-                                        ? "Hide diagnostic"
-                                        : "Show diagnostic"}
-                                    </button>
                                   </div>
                                 ) : null}
                               </div>
@@ -839,18 +791,9 @@ export default function MobileCompetitionsPage() {
               <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
                 Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as
                 better. Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown. Tap H2Z to see peak
-                score and (holes count). Use “Show diagnostic” to trace one player’s Par 3 H2Z.
+                score and (holes count).
               </div>
             </div>
-
-            {/* ✅ Diagnostic output (no heading) */}
-            {diagLines ? (
-              <div className="mt-3 rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <div className="px-4 py-3">
-                  <pre className="whitespace-pre-wrap text-[12px] leading-snug text-gray-800">{diagLines.join("\n")}</pre>
-                </div>
-              </div>
-            ) : null}
 
             <div className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="border-b bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-700">Definitions</div>
