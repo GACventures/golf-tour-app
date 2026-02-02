@@ -24,6 +24,10 @@ const DEFAULT_HERO = "/tours/tour-landing-hero-cartoon.webp";
 const JAPAN_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
 const JAPAN_HERO = "/tours/japan-poster_mobile_1080w.webp";
 
+// ✅ Portugal tour (mobile landing hero override)
+const PORTUGAL_TOUR_ID = "b5e5b90d-0ae5-4be5-a3cd-3ef1c73cb6b5";
+const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
+
 function parseDate(value: string | null): Date | null {
   if (!value) return null;
   const d = new Date(value);
@@ -66,18 +70,10 @@ export default function MobileTourLandingPage() {
       setErrorMsg("");
 
       try {
-        const [{ data: tData, error: tErr }, { data: rData, error: rErr }] =
-          await Promise.all([
-            supabase
-              .from("tours")
-              .select("id, name, start_date, end_date, image_url")
-              .eq("id", tourId)
-              .single(),
-            supabase
-              .from("rounds")
-              .select("id, tour_id, played_on")
-              .eq("tour_id", tourId),
-          ]);
+        const [{ data: tData, error: tErr }, { data: rData, error: rErr }] = await Promise.all([
+          supabase.from("tours").select("id, name, start_date, end_date, image_url").eq("id", tourId).single(),
+          supabase.from("rounds").select("id, tour_id, played_on").eq("tour_id", tourId),
+        ]);
 
         if (!alive) return;
 
@@ -111,9 +107,11 @@ export default function MobileTourLandingPage() {
   const title = tour?.name?.trim() || "Tour";
 
   // ✅ Hero selection:
+  // - Portugal tour: always use local hero override (public/)
   // - Japan tour: always use local hero override (public/)
   // - Otherwise: tour image_url if present, else default
   const heroImage = useMemo(() => {
+    if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
     if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
     const t = (tour?.image_url ?? "").trim();
     return t ? t : DEFAULT_HERO;
@@ -125,8 +123,7 @@ export default function MobileTourLandingPage() {
       .map((r) => (r.played_on ? String(r.played_on) : null))
       .filter(Boolean) as string[];
 
-    if (!played.length)
-      return { start: null as string | null, end: null as string | null };
+    if (!played.length) return { start: null as string | null, end: null as string | null };
 
     played.sort(); // ISO date strings sort correctly
     return { start: played[0] ?? null, end: played[played.length - 1] ?? null };
@@ -135,14 +132,8 @@ export default function MobileTourLandingPage() {
   const effectiveStartStr = (tour?.start_date ?? "").trim() || derived.start;
   const effectiveEndStr = (tour?.end_date ?? "").trim() || derived.end;
 
-  const start = useMemo(
-    () => parseDate(effectiveStartStr ?? null),
-    [effectiveStartStr]
-  );
-  const end = useMemo(
-    () => parseDate(effectiveEndStr ?? null),
-    [effectiveEndStr]
-  );
+  const start = useMemo(() => parseDate(effectiveStartStr ?? null), [effectiveStartStr]);
+  const end = useMemo(() => parseDate(effectiveEndStr ?? null), [effectiveEndStr]);
   const dateLabel = useMemo(() => formatTourDates(start, end), [start, end]);
 
   return (
@@ -159,12 +150,8 @@ export default function MobileTourLandingPage() {
             <div className="text-sm text-red-300">{errorMsg}</div>
           ) : (
             <>
-              <div className="text-2xl font-extrabold leading-tight">
-                {title}
-              </div>
-              <div className="mt-1 text-sm font-semibold text-white/80">
-                {dateLabel || "Dates TBD"}
-              </div>
+              <div className="text-2xl font-extrabold leading-tight">{title}</div>
+              <div className="mt-1 text-sm font-semibold text-white/80">{dateLabel || "Dates TBD"}</div>
             </>
           )}
         </div>
@@ -173,11 +160,7 @@ export default function MobileTourLandingPage() {
       {/* HERO IMAGE */}
       <div className="relative h-[72vh] w-full overflow-hidden bg-black">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={heroImage}
-          alt=""
-          className="h-full w-full object-contain bg-black"
-        />
+        <img src={heroImage} alt="" className="h-full w-full object-contain bg-black" />
       </div>
     </div>
   );
