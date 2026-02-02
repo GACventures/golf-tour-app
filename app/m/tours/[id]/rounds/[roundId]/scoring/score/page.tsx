@@ -270,7 +270,6 @@ export default function MobileScoreEntryPage() {
 
   // Whole-page slide style (entry tab only)
   const fxStyle: React.CSSProperties = useMemo(() => {
-    // Slightly slower and a bit smoother
     const base = `transform ${SWIPE_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)`;
     const off = "105%";
 
@@ -1086,7 +1085,6 @@ export default function MobileScoreEntryPage() {
 
             <div className="text-center">
               <div className="text-5xl font-black text-slate-900 leading-none">{grossDisplay}</div>
-              {/* (1) Remove 'strokes' label; (2) show points under stroke number */}
               <div className="text-sm font-semibold text-slate-600 mt-1">{holePtsLabel}</div>
             </div>
 
@@ -1101,7 +1099,6 @@ export default function MobileScoreEntryPage() {
             </button>
           </div>
 
-          {/* (3) Move P to the old points box; (4) make old P box = TOTAL (tap opens Summary) */}
           <div className="mt-3 grid grid-cols-4 gap-2 text-center">
             <div>
               <div className="text-[11px] font-bold tracking-wide text-slate-600">PAR</div>
@@ -1127,7 +1124,7 @@ export default function MobileScoreEntryPage() {
             </div>
 
             <div>
-              <div className="text-[11px] font-bold tracking-wide text-slate-600">P</div>
+              <div className="text-[11px] font-bold tracking-wide text-slate-600">PICK UP</div>
               <button
                 type="button"
                 className={`mt-1 w-full rounded-md border border-slate-300 text-2xl font-black py-2 ${
@@ -1137,7 +1134,7 @@ export default function MobileScoreEntryPage() {
                 disabled={isLocked}
                 aria-label="Toggle pickup"
               >
-                {pickup ? "P" : ""}
+                P
               </button>
             </div>
 
@@ -1145,9 +1142,8 @@ export default function MobileScoreEntryPage() {
               <div className="text-[11px] font-bold tracking-wide text-slate-600">TOTAL</div>
               <button
                 type="button"
-                className="mt-1 w-full rounded-md border border-slate-300 bg-white text-slate-900 text-2xl font-black py-2 active:scale-[0.99] disabled:opacity-50"
+                className="mt-1 w-full rounded-md border border-slate-300 bg-white text-slate-900 text-2xl font-black py-2 active:scale-[0.99]"
                 onClick={() => openInPageSummaryFor(pid)}
-                disabled={false}
                 aria-label="Open summary"
               >
                 {totalPts}
@@ -1155,7 +1151,6 @@ export default function MobileScoreEntryPage() {
             </div>
           </div>
 
-          {/* (5) Remove the small Total pts line; keep Clear hole */}
           <div className="mt-2 flex justify-start text-xs text-slate-600">
             <button type="button" className="underline" onClick={() => setRaw(pid, hole, "")} disabled={isLocked}>
               Clear hole
