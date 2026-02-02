@@ -1129,7 +1129,8 @@ export default function MobileLeaderboardsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
+      {/* ✅ FIX: make page header definitively above sticky table cells */}
+      <div className="sticky top-0 z-50 isolate border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="grid grid-cols-3 gap-2">
             <button
