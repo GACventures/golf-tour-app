@@ -653,20 +653,20 @@ export default function MobileScoreEntryPage() {
     return false;
   }
 
-  async function saveAll() {
+  async function saveAll(): Promise<boolean> {
     setSaveErr("");
     setSavedMsg("");
     setRehandicapMsg("");
     setRehDebug(null);
 
-    if (!roundId) return;
+    if (!roundId) return false;
     if (isLocked) {
       setSaveErr("Round is locked.");
-      return;
+      return false;
     }
     if (!meId) {
       setSaveErr("Missing meId. Go back and reselect Me.");
-      return;
+      return false;
     }
 
     const pid = meId; // SAVE ONLY ME
@@ -791,8 +791,11 @@ export default function MobileScoreEntryPage() {
       initialScoresRef.current = { [meId]: { ...(scores[meId] ?? {}) } };
       setSavedMsg("Saved ✓");
       window.setTimeout(() => setSavedMsg(""), 1200);
+
+      return true;
     } catch (e: any) {
       setSaveErr(e?.message ?? "Save failed.");
+      return false;
     } finally {
       setSaving(false);
     }
@@ -832,6 +835,22 @@ export default function MobileScoreEntryPage() {
     }, SWIPE_MS);
   }
 
+  // ✅ NEW: Auto-save Me on swipe (when dirty) before moving hole
+  async function handleSwipe(dir: "next" | "prev") {
+    if (tab !== "entry") return;
+    if (holeFx.stage !== "idle") return;
+
+    const nextHole = clamp(hole + (dir === "next" ? 1 : -1), 1, 18);
+    if (nextHole === hole) return;
+
+    // If we're already saving, don't queue another save—still allow navigation.
+    if (!isLocked && !saving && isDirty()) {
+      await saveAll();
+    }
+
+    animateHoleChange(dir);
+  }
+
   function onTouchStart(e: React.TouchEvent) {
     const t = e.touches[0];
     swipeRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
@@ -851,8 +870,8 @@ export default function MobileScoreEntryPage() {
     if (dt > 1200) return;
 
     const threshold = 70;
-    if (dx <= -threshold) animateHoleChange("next");
-    if (dx >= threshold) animateHoleChange("prev");
+    if (dx <= -threshold) void handleSwipe("next");
+    if (dx >= threshold) void handleSwipe("prev");
   }
 
   useEffect(() => {
@@ -1244,7 +1263,7 @@ export default function MobileScoreEntryPage() {
 
         <button
           type="button"
-          onClick={saveAll}
+          onClick={() => void saveAll()}
           disabled={saving || isLocked}
           className={`px-3 py-2 rounded-md text-sm font-bold text-white ${saving || isLocked ? "bg-slate-500" : "bg-sky-600"}`}
         >
