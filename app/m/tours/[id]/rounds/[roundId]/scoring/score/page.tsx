@@ -279,14 +279,11 @@ export default function MobileScoreEntryPage() {
     }
 
     if (holeFx.stage === "out") {
-      // next (hole++) => slide left
-      // prev (hole--) => slide right
       const x = holeFx.dir === "next" ? `-${off}` : off;
       return { transform: `translateX(${x})`, transition: base, willChange: "transform" };
     }
 
     if (holeFx.stage === "inSnap") {
-      // next comes from right; prev comes from left
       const x = holeFx.dir === "next" ? off : `-${off}`;
       return { transform: `translateX(${x})`, transition: "none", willChange: "transform" };
     }
@@ -341,7 +338,6 @@ export default function MobileScoreEntryPage() {
     setRoundPlayers(rpRows);
   }
 
-  // === NEW: pull a snapshot of future PH values so you can see before/after ===
   async function fetchFuturePHDebug(opts: {
     tourId: string;
     fromRoundId: string;
@@ -389,7 +385,6 @@ export default function MobileScoreEntryPage() {
 
     const rows = (rpAny ?? []) as any[];
 
-    // pick first N unique players
     const uniq: string[] = [];
     for (const row of rows) {
       const pid = String(row.player_id);
@@ -435,7 +430,6 @@ export default function MobileScoreEntryPage() {
       setRehDebug(null);
 
       try {
-        // Round
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,name,course_id,is_locked,courses(name)")
@@ -444,7 +438,6 @@ export default function MobileScoreEntryPage() {
         if (rErr) throw rErr;
         const r = rData as unknown as Round;
 
-        // Pars (both tees)
         const nextParsByTee: Record<Tee, ParRow[]> = { M: [], F: [] };
         if (r.course_id) {
           const { data, error } = await supabase
@@ -468,7 +461,6 @@ export default function MobileScoreEntryPage() {
           }
         }
 
-        // Round players (playing only)
         const { data: rpData, error: rpErr } = await supabase
           .from("round_players")
           .select("round_id,player_id,playing,playing_handicap,tee")
@@ -486,7 +478,6 @@ export default function MobileScoreEntryPage() {
 
         const ids = Array.from(new Set(rpRows.map((x) => x.player_id))).filter(Boolean);
 
-        // Players (GLOBAL gender)
         const pMap: Record<string, PlayerRow> = {};
         if (ids.length > 0) {
           const { data: pData, error: pErr } = await supabase.from("players").select("id,name,gender").in("id", ids);
@@ -501,7 +492,6 @@ export default function MobileScoreEntryPage() {
           }
         }
 
-        // Scores for all playing players (buddy can display), but save only me
         let scoreRows: ScoreRow[] = [];
         if (ids.length > 0) {
           const { data: sData, error: sErr } = await supabase
@@ -531,13 +521,9 @@ export default function MobileScoreEntryPage() {
         setPlayersById(pMap);
         setScores(nextScores);
 
-        // baseline for unsaved: me only
         initialScoresRef.current = { [meId]: nextScores[meId] ?? {} };
 
-        // default summary player
         setSummaryPid((prev) => prev || meId || buddyId || ids[0] || "");
-
-        // default tab back to entry when loading
         setTab("entry");
       } catch (e: any) {
         if (!alive) return;
@@ -555,12 +541,8 @@ export default function MobileScoreEntryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  // Derived
   const courseName = useMemo(() => asSingle(round?.courses)?.name ?? "(no course)", [round]);
   const playingIds = useMemo(() => roundPlayers.map((rp) => rp.player_id), [roundPlayers]);
-
-  const meOk = !!meId && playingIds.includes(meId);
-  const buddyOk = !buddyId || playingIds.includes(buddyId);
 
   const meName = playersById[meId]?.name ?? "Me";
   const buddyName = buddyId ? playersById[buddyId]?.name ?? "Buddy" : "";
@@ -574,6 +556,14 @@ export default function MobileScoreEntryPage() {
     return { M: makeMap(parsByTee.M), F: makeMap(parsByTee.F) };
   }, [parsByTee]);
 
+  function infoFor(pid: string, h: number) {
+    const tee = teeForPlayer(pid);
+    return holeInfoByNumberByTee[tee]?.[h] ?? { par: 0, si: 0 };
+  }
+
+  const holeInfoM = holeInfoByNumberByTee.M?.[hole] ?? { par: 0, si: 0 };
+  const holeInfoF = holeInfoByNumberByTee.F?.[hole] ?? { par: 0, si: 0 };
+
   const meTee = useMemo(() => teeForPlayer(meId), [meId, roundPlayers, playersById]);
   const buddyTee = useMemo(() => teeForPlayer(buddyId), [buddyId, roundPlayers, playersById]);
 
@@ -586,14 +576,6 @@ export default function MobileScoreEntryPage() {
     const rp = roundPlayers.find((x) => x.player_id === buddyId);
     return Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp?.playing_handicap) : 0;
   }, [roundPlayers, buddyId]);
-
-  function infoFor(pid: string, h: number) {
-    const tee = teeForPlayer(pid);
-    return holeInfoByNumberByTee[tee]?.[h] ?? { par: 0, si: 0 };
-  }
-
-  const holeInfoM = holeInfoByNumberByTee.M?.[hole] ?? { par: 0, si: 0 };
-  const holeInfoF = holeInfoByNumberByTee.F?.[hole] ?? { par: 0, si: 0 };
 
   function setRaw(pid: string, holeNumber: number, raw: string) {
     const norm = normalizeRawInput(raw);
@@ -716,13 +698,11 @@ export default function MobileScoreEntryPage() {
         if (error) throw error;
       }
 
-      // Trigger rehandicap recalculation for the tour (DEBUG banner + DEBUG panel)
       try {
         const tid = await fetchTourIdForRound(roundId);
         if (tid) {
           setRehandicapMsg("Rehandicapping running…");
 
-          // Read tour toggle
           const { data: tourRow, error: tErr } = await supabase
             .from("tours")
             .select("id,rehandicapping_enabled")
@@ -734,17 +714,14 @@ export default function MobileScoreEntryPage() {
           const toursRehandicappingEnabled =
             tourRow?.rehandicapping_enabled === true ? true : tourRow?.rehandicapping_enabled === false ? false : null;
 
-          // Snapshot BEFORE (future rounds)
           const before = await fetchFuturePHDebug({ tourId: tid, fromRoundId: roundId });
 
-          // Run recalc
           const res = await recalcAndSaveTourHandicaps({
             supabase,
             tourId: tid,
             fromRoundId: roundId,
           });
 
-          // Snapshot AFTER (future rounds)
           const after = await fetchFuturePHDebug({ tourId: tid, fromRoundId: roundId });
 
           const ts = new Date().toLocaleTimeString();
@@ -812,16 +789,12 @@ export default function MobileScoreEntryPage() {
     if (nextHole === hole) return;
 
     clearFxTimer();
-    // start slide out
     setHoleFx({ stage: "out", dir });
 
     fxTimerRef.current = window.setTimeout(() => {
-      // hole changes at midpoint of animation
       setHole(nextHole);
-      // hole pulse when the new hole appears
       triggerHolePulse();
 
-      // snap new content off-screen (consistent direction) then slide in
       setHoleFx({ stage: "inSnap", dir });
 
       requestAnimationFrame(() => {
@@ -835,7 +808,6 @@ export default function MobileScoreEntryPage() {
     }, SWIPE_MS);
   }
 
-  // ✅ NEW: Auto-save Me on swipe (when dirty) before moving hole
   async function handleSwipe(dir: "next" | "prev") {
     if (tab !== "entry") return;
     if (holeFx.stage !== "idle") return;
@@ -843,7 +815,6 @@ export default function MobileScoreEntryPage() {
     const nextHole = clamp(hole + (dir === "next" ? 1 : -1), 1, 18);
     if (nextHole === hole) return;
 
-    // If we're already saving, don't queue another save—still allow navigation.
     if (!isLocked && !saving && isDirty()) {
       await saveAll();
     }
@@ -882,18 +853,15 @@ export default function MobileScoreEntryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const dirty = isDirty();
-
   function goBackToSelect() {
     const href = `/m/tours/${tourId}/rounds/${roundId}/scoring?meId=${encodeURIComponent(meId)}${
       buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""
     }`;
-    if (!dirty || confirm("You have unsaved changes for Me. Leave without saving?")) {
+    if (!isDirty() || confirm("You have unsaved changes for Me. Leave without saving?")) {
       router.push(href);
     }
   }
 
-  // ✅ New behavior: tap Total pts => switch to in-page summary showing Par + SI
   function openInPageSummaryFor(pid: string) {
     if (!pid) return;
     setSummaryPid(pid);
@@ -1080,8 +1048,8 @@ export default function MobileScoreEntryPage() {
     const pickup = raw === "P";
 
     const pts = pointsFor(pid, hole);
+    const holePts = pickup ? 0 : pts;
 
-    // Show "P" in strokes display when picked up
     const grossDisplay = pickup ? "P" : raw && raw !== "P" ? raw : "0";
 
     const info = infoFor(pid, hole);
@@ -1095,6 +1063,8 @@ export default function MobileScoreEntryPage() {
 
     const isFemale = teeForPlayer(pid) === "F";
     const headerClass = isFemale ? headerPink : headerBlue;
+
+    const holePtsLabel = `${holePts} ${holePts === 1 ? "point" : "points"}`;
 
     return (
       <div className="rounded-lg overflow-hidden shadow-sm border-2 border-slate-400 bg-white">
@@ -1116,7 +1086,8 @@ export default function MobileScoreEntryPage() {
 
             <div className="text-center">
               <div className="text-5xl font-black text-slate-900 leading-none">{grossDisplay}</div>
-              <div className="text-sm font-semibold text-slate-600 mt-1">strokes</div>
+              {/* (1) Remove 'strokes' label; (2) show points under stroke number */}
+              <div className="text-sm font-semibold text-slate-600 mt-1">{holePtsLabel}</div>
             </div>
 
             <button
@@ -1130,6 +1101,7 @@ export default function MobileScoreEntryPage() {
             </button>
           </div>
 
+          {/* (3) Move P to the old points box; (4) make old P box = TOTAL (tap opens Summary) */}
           <div className="mt-3 grid grid-cols-4 gap-2 text-center">
             <div>
               <div className="text-[11px] font-bold tracking-wide text-slate-600">PAR</div>
@@ -1155,18 +1127,7 @@ export default function MobileScoreEntryPage() {
             </div>
 
             <div>
-              <div className="text-[11px] font-bold tracking-wide text-slate-600">POINTS</div>
-              <div
-                className={`mt-1 rounded-md border border-slate-300 text-2xl font-black py-2 ${
-                  pickup ? "bg-slate-100 text-slate-400" : "bg-white text-slate-900"
-                }`}
-              >
-                {pickup ? "0" : String(pts)}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-[11px] font-bold tracking-wide text-slate-600">PICK UP</div>
+              <div className="text-[11px] font-bold tracking-wide text-slate-600">P</div>
               <button
                 type="button"
                 className={`mt-1 w-full rounded-md border border-slate-300 text-2xl font-black py-2 ${
@@ -1174,25 +1135,30 @@ export default function MobileScoreEntryPage() {
                 }`}
                 onClick={() => togglePickup(pid, hole)}
                 disabled={isLocked}
+                aria-label="Toggle pickup"
               >
-                P
+                {pickup ? "P" : ""}
+              </button>
+            </div>
+
+            <div>
+              <div className="text-[11px] font-bold tracking-wide text-slate-600">TOTAL</div>
+              <button
+                type="button"
+                className="mt-1 w-full rounded-md border border-slate-300 bg-white text-slate-900 text-2xl font-black py-2 active:scale-[0.99] disabled:opacity-50"
+                onClick={() => openInPageSummaryFor(pid)}
+                disabled={false}
+                aria-label="Open summary"
+              >
+                {totalPts}
               </button>
             </div>
           </div>
 
-          {/* Tap Total pts => in-page Summary (Par+SI) for that player */}
-          <div className="mt-2 flex justify-between text-xs text-slate-600">
+          {/* (5) Remove the small Total pts line; keep Clear hole */}
+          <div className="mt-2 flex justify-start text-xs text-slate-600">
             <button type="button" className="underline" onClick={() => setRaw(pid, hole, "")} disabled={isLocked}>
               Clear hole
-            </button>
-
-            <button
-              type="button"
-              onClick={() => openInPageSummaryFor(pid)}
-              className="font-extrabold text-slate-900 underline underline-offset-2"
-              aria-label={`Open ${name} summary`}
-            >
-              Total pts: {totalPts}
             </button>
           </div>
         </div>
@@ -1246,10 +1212,8 @@ export default function MobileScoreEntryPage() {
 
   const dirtyNow = isDirty();
 
-  // Focus mode screen (layout hides global nav/header)
   return (
     <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden">
-      {/* Minimal top strip */}
       <div className="h-14 px-4 flex items-center justify-between border-b border-slate-200">
         <button
           type="button"
@@ -1271,10 +1235,8 @@ export default function MobileScoreEntryPage() {
         </button>
       </div>
 
-      {/* Hole box (Entry tab) OR Summary selector */}
       {tab === "entry" ? <HoleBoxEntryOnly /> : <SummaryPlayerToggleTop />}
 
-      {/* Tabs restored */}
       <div className="px-4">
         <div className="rounded-md border border-slate-300 overflow-hidden flex bg-white">
           <button
@@ -1294,7 +1256,6 @@ export default function MobileScoreEntryPage() {
         </div>
       </div>
 
-      {/* Content area */}
       <div
         className="px-4 py-3 space-y-3 overflow-y-auto"
         style={{
@@ -1320,7 +1281,6 @@ export default function MobileScoreEntryPage() {
               Note: Buddy scores are for viewing/entry only and are not saved.
             </div>
 
-            {/* === NEW: Rehandicap debug panel === */}
             {rehDebug ? (
               <div className="mt-3 rounded-lg border border-slate-300 bg-slate-50 p-3 text-[11px] text-slate-900">
                 <div className="flex items-center justify-between">
@@ -1393,7 +1353,6 @@ export default function MobileScoreEntryPage() {
           <>
             <SummaryTable />
 
-            {/* also show debug panel in Summary tab (so you can compare while viewing) */}
             {rehDebug ? (
               <div className="mt-3 rounded-lg border border-slate-300 bg-slate-50 p-3 text-[11px] text-slate-900">
                 <div className="flex items-center justify-between">
