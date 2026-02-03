@@ -97,6 +97,16 @@ type ScoreRow = {
   pickup?: boolean | null;
 };
 
+// Buddy-check score storage (separate from official scores)
+type BuddyScoreRow = {
+  round_id: string;
+  owner_player_id: string;
+  buddy_player_id: string;
+  hole_number: number;
+  strokes: number | null;
+  pickup?: boolean | null;
+};
+
 const headerBlue = "bg-sky-500";
 const headerPink = "bg-pink-400";
 const borderLight = "border-slate-300";
@@ -167,7 +177,6 @@ export default function MobileScoreEntryPage() {
   const router = useRouter();
 
   const tourId = String((params as any)?.id ?? "").trim();
-
   const roundId = (params as any)?.roundId ? String((params as any)?.roundId ?? "") : String((params as any)?.id ?? "");
 
   const meId = sp.get("meId") ?? "";
@@ -197,11 +206,7 @@ export default function MobileScoreEntryPage() {
   const [rehDebugOpen, setRehDebugOpen] = useState<boolean>(true);
 
   const [hole, setHole] = useState(1);
-
-  // Tabs restored (Entry + Summary)
   const [tab, setTab] = useState<TabKey>("entry");
-
-  // Summary player (Me or Buddy)
   const [summaryPid, setSummaryPid] = useState<string>("");
 
   const isLocked = round?.is_locked === true;
@@ -429,6 +434,7 @@ export default function MobileScoreEntryPage() {
       setRehDebug(null);
 
       try {
+        // Round
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,name,course_id,is_locked,courses(name)")
@@ -437,6 +443,7 @@ export default function MobileScoreEntryPage() {
         if (rErr) throw rErr;
         const r = rData as unknown as Round;
 
+        // Pars (both tees)
         const nextParsByTee: Record<Tee, ParRow[]> = { M: [], F: [] };
         if (r.course_id) {
           const { data, error } = await supabase
@@ -460,6 +467,7 @@ export default function MobileScoreEntryPage() {
           }
         }
 
+        // Round players (playing only)
         const { data: rpData, error: rpErr } = await supabase
           .from("round_players")
           .select("round_id,player_id,playing,playing_handicap,tee")
@@ -477,6 +485,7 @@ export default function MobileScoreEntryPage() {
 
         const ids = Array.from(new Set(rpRows.map((x) => x.player_id))).filter(Boolean);
 
+        // Players (GLOBAL gender)
         const pMap: Record<string, PlayerRow> = {};
         if (ids.length > 0) {
           const { data: pData, error: pErr } = await supabase.from("players").select("id,name,gender").in("id", ids);
@@ -491,25 +500,50 @@ export default function MobileScoreEntryPage() {
           }
         }
 
-        let scoreRows: ScoreRow[] = [];
-        if (ids.length > 0) {
+        // Official scores: ME ONLY (do not load buddy official scores into entry state)
+        let meScoreRows: ScoreRow[] = [];
+        if (meId) {
           const { data: sData, error: sErr } = await supabase
             .from("scores")
             .select("round_id,player_id,hole_number,strokes,pickup")
             .eq("round_id", roundId)
-            .in("player_id", ids);
+            .eq("player_id", meId);
           if (sErr) throw sErr;
-          scoreRows = (sData ?? []) as ScoreRow[];
+          meScoreRows = (sData ?? []) as ScoreRow[];
         }
 
+        // Buddy-check scores: loaded from buddy_scores for (round, owner=me, buddy=buddy)
+        let buddyCheckRows: BuddyScoreRow[] = [];
+        if (meId && buddyId) {
+          const { data: bData, error: bErr } = await supabase
+            .from("buddy_scores")
+            .select("round_id,owner_player_id,buddy_player_id,hole_number,strokes,pickup")
+            .eq("round_id", roundId)
+            .eq("owner_player_id", meId)
+            .eq("buddy_player_id", buddyId);
+          if (bErr) throw bErr;
+          buddyCheckRows = (bData ?? []) as BuddyScoreRow[];
+        }
+
+        // Build nextScores map for the players we display in this UI:
+        // - meId (official from scores)
+        // - buddyId (buddy-check from buddy_scores)
         const nextScores: Record<string, Record<number, string>> = {};
-        for (const pid of ids) nextScores[pid] = {};
-        for (const row of scoreRows) {
-          const pid = String(row.player_id);
+        if (meId) nextScores[meId] = {};
+        if (buddyId) nextScores[buddyId] = {};
+
+        for (const row of meScoreRows) {
           const h = Number(row.hole_number);
           const isPickup = (row as any).pickup === true;
           const raw = isPickup ? "P" : row.strokes === null || row.strokes === undefined ? "" : String(row.strokes);
-          nextScores[pid][h] = normalizeRawInput(raw);
+          if (meId) nextScores[meId][h] = normalizeRawInput(raw);
+        }
+
+        for (const row of buddyCheckRows) {
+          const h = Number(row.hole_number);
+          const isPickup = (row as any).pickup === true;
+          const raw = isPickup ? "P" : row.strokes === null || row.strokes === undefined ? "" : String(row.strokes);
+          if (buddyId) nextScores[buddyId][h] = normalizeRawInput(raw);
         }
 
         if (!alive) return;
@@ -520,9 +554,13 @@ export default function MobileScoreEntryPage() {
         setPlayersById(pMap);
         setScores(nextScores);
 
+        // baseline for unsaved: me only
         initialScoresRef.current = { [meId]: nextScores[meId] ?? {} };
 
-        setSummaryPid((prev) => prev || meId || buddyId || ids[0] || "");
+        // default summary player
+        setSummaryPid((prev) => prev || meId || buddyId || "");
+
+        // default tab back to entry when loading
         setTab("entry");
       } catch (e: any) {
         if (!alive) return;
@@ -540,8 +578,12 @@ export default function MobileScoreEntryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
+  // Derived
   const courseName = useMemo(() => asSingle(round?.courses)?.name ?? "(no course)", [round]);
   const playingIds = useMemo(() => roundPlayers.map((rp) => rp.player_id), [roundPlayers]);
+
+  const meOk = !!meId && playingIds.includes(meId);
+  const buddyOk = !buddyId || playingIds.includes(buddyId);
 
   const meName = playersById[meId]?.name ?? "Me";
   const buddyName = buddyId ? playersById[buddyId]?.name ?? "Buddy" : "";
@@ -555,14 +597,6 @@ export default function MobileScoreEntryPage() {
     return { M: makeMap(parsByTee.M), F: makeMap(parsByTee.F) };
   }, [parsByTee]);
 
-  function infoFor(pid: string, h: number) {
-    const tee = teeForPlayer(pid);
-    return holeInfoByNumberByTee[tee]?.[h] ?? { par: 0, si: 0 };
-  }
-
-  const holeInfoM = holeInfoByNumberByTee.M?.[hole] ?? { par: 0, si: 0 };
-  const holeInfoF = holeInfoByNumberByTee.F?.[hole] ?? { par: 0, si: 0 };
-
   const meTee = useMemo(() => teeForPlayer(meId), [meId, roundPlayers, playersById]);
   const buddyTee = useMemo(() => teeForPlayer(buddyId), [buddyId, roundPlayers, playersById]);
 
@@ -575,6 +609,14 @@ export default function MobileScoreEntryPage() {
     const rp = roundPlayers.find((x) => x.player_id === buddyId);
     return Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp?.playing_handicap) : 0;
   }, [roundPlayers, buddyId]);
+
+  function infoFor(pid: string, h: number) {
+    const tee = teeForPlayer(pid);
+    return holeInfoByNumberByTee[tee]?.[h] ?? { par: 0, si: 0 };
+  }
+
+  const holeInfoM = holeInfoByNumberByTee.M?.[hole] ?? { par: 0, si: 0 };
+  const holeInfoF = holeInfoByNumberByTee.F?.[hole] ?? { par: 0, si: 0 };
 
   function setRaw(pid: string, holeNumber: number, raw: string) {
     const norm = normalizeRawInput(raw);
@@ -634,6 +676,7 @@ export default function MobileScoreEntryPage() {
     return false;
   }
 
+  // Save official ME scores (scores table) - unchanged logic, returns true on success
   async function saveAll(): Promise<boolean> {
     setSaveErr("");
     setSavedMsg("");
@@ -697,11 +740,13 @@ export default function MobileScoreEntryPage() {
         if (error) throw error;
       }
 
+      // Trigger rehandicap recalculation for the tour (DEBUG banner + DEBUG panel)
       try {
         const tid = await fetchTourIdForRound(roundId);
         if (tid) {
           setRehandicapMsg("Rehandicapping running…");
 
+          // Read tour toggle
           const { data: tourRow, error: tErr } = await supabase
             .from("tours")
             .select("id,rehandicapping_enabled")
@@ -713,14 +758,17 @@ export default function MobileScoreEntryPage() {
           const toursRehandicappingEnabled =
             tourRow?.rehandicapping_enabled === true ? true : tourRow?.rehandicapping_enabled === false ? false : null;
 
+          // Snapshot BEFORE (future rounds)
           const before = await fetchFuturePHDebug({ tourId: tid, fromRoundId: roundId });
 
+          // Run recalc
           const res = await recalcAndSaveTourHandicaps({
             supabase,
             tourId: tid,
             fromRoundId: roundId,
           });
 
+          // Snapshot AFTER (future rounds)
           const after = await fetchFuturePHDebug({ tourId: tid, fromRoundId: roundId });
 
           const ts = new Date().toLocaleTimeString();
@@ -777,6 +825,52 @@ export default function MobileScoreEntryPage() {
     }
   }
 
+  // Save ONE buddy-check hole to buddy_scores (called on swipe)
+  async function saveBuddyCheckHole(holeNumber: number): Promise<void> {
+    if (!roundId) return;
+    if (!meId) return;
+    if (!buddyId) return;
+
+    const raw = normalizeRawInput(scores[buddyId]?.[holeNumber] ?? "");
+
+    // If empty -> delete any existing buddy-check row for this hole
+    if (!raw) {
+      const { error } = await supabase
+        .from("buddy_scores")
+        .delete()
+        .eq("round_id", roundId)
+        .eq("owner_player_id", meId)
+        .eq("buddy_player_id", buddyId)
+        .eq("hole_number", holeNumber);
+
+      if (error) {
+        // Don't block swipe; show banner
+        setSaveErr(error.message ?? "Buddy-check save failed.");
+      }
+      return;
+    }
+
+    const isPickup = raw === "P";
+    const strokes = isPickup ? null : Number(raw);
+
+    const row: BuddyScoreRow = {
+      round_id: roundId,
+      owner_player_id: meId,
+      buddy_player_id: buddyId,
+      hole_number: holeNumber,
+      strokes: Number.isFinite(strokes as any) ? (strokes as any) : null,
+      pickup: isPickup ? true : false,
+    };
+
+    const { error } = await supabase.from("buddy_scores").upsert(row as any, {
+      onConflict: "round_id,owner_player_id,buddy_player_id,hole_number",
+    });
+
+    if (error) {
+      setSaveErr(error.message ?? "Buddy-check save failed.");
+    }
+  }
+
   // Swipe handling: left = next, right = prev (Entry tab only)
   const swipeRef = useRef<{ x: number; y: number; t: number } | null>(null);
 
@@ -807,6 +901,9 @@ export default function MobileScoreEntryPage() {
     }, SWIPE_MS);
   }
 
+  // Save-on-swipe behavior:
+  // - save ME official (scores) if dirty
+  // - save buddy-check for the hole you are leaving (buddy_scores)
   async function handleSwipe(dir: "next" | "prev") {
     if (tab !== "entry") return;
     if (holeFx.stage !== "idle") return;
@@ -814,6 +911,12 @@ export default function MobileScoreEntryPage() {
     const nextHole = clamp(hole + (dir === "next" ? 1 : -1), 1, 18);
     if (nextHole === hole) return;
 
+    // buddy-check save (hole being left)
+    if (!isLocked && buddyId) {
+      await saveBuddyCheckHole(hole);
+    }
+
+    // official ME save
     if (!isLocked && !saving && isDirty()) {
       await saveAll();
     }
@@ -1050,7 +1153,6 @@ export default function MobileScoreEntryPage() {
     const holePts = pickup ? 0 : pts;
 
     const grossDisplay = pickup ? "P" : raw && raw !== "P" ? raw : "0";
-
     const info = infoFor(pid, hole);
 
     const totalPts = useMemo(() => {
@@ -1273,7 +1375,7 @@ export default function MobileScoreEntryPage() {
             </div>
 
             <div className="text-[11px] text-slate-500 text-center">
-              Note: Buddy scores are for viewing/entry only and are not saved.
+              Buddy scores here are your saved cross-check scores (stored separately) and do not overwrite buddy’s official scorecard.
             </div>
 
             {rehDebug ? (
