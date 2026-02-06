@@ -1,43 +1,29 @@
-// app/m/tours/[id]/rounds/page.tsx
+// app/m/tours/[id]/matches/format/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type RoundRow = {
   id: string;
   tour_id: string;
   course_id: string | null;
-
   round_no?: number | null;
 
   round_date?: string | null;
   played_on?: string | null;
   created_at: string | null;
 
-  name?: string | null;
   courses?: { name: string } | { name: string }[] | null;
 };
-
-type Mode = "tee-times" | "score" | "results";
-type MatchesMode = "none" | "format" | "results" | "leaderboard";
 
 function getCourseName(r: RoundRow) {
   const c: any = r.courses;
   if (!c) return "Course";
   if (Array.isArray(c)) return c?.[0]?.name ?? "Course";
   return c?.name ?? "Course";
-}
-
-function normalizeMode(raw: string | null): Mode {
-  if (raw === "tee-times" || raw === "score" || raw === "results") return raw;
-  return "score";
-}
-
-function normalizeMatchesMode(raw: string | null): MatchesMode {
-  if (raw === "format" || raw === "results" || raw === "leaderboard") return raw;
-  return "none";
 }
 
 function pickBestRoundDateISO(r: RoundRow): string | null {
@@ -73,15 +59,10 @@ function isMissingColumnError(msg: string, column: string) {
   return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `) || m.includes(`_${c}`));
 }
 
-export default function MobileRoundsHubPage() {
-  const params = useParams<{ id: string }>();
-  const tourId = params?.id ?? "";
+export default function MatchesFormatRoundsPage() {
+  const params = useParams<{ id?: string }>();
+  const tourId = String(params?.id ?? "").trim();
   const router = useRouter();
-  const sp = useSearchParams();
-
-  const mode = normalizeMode(sp.get("mode"));
-  const matchesMode = normalizeMatchesMode(sp.get("matches"));
-  const primaryRowLocked = matchesMode !== "none";
 
   const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,18 +84,15 @@ export default function MobileRoundsHubPage() {
       setLoading(true);
       setErrorMsg("");
 
-      const baseCols = "id,tour_id,course_id,created_at,name,round_no,courses(name)";
+      const baseCols = "id,tour_id,course_id,created_at,round_no,courses(name)";
       const cols1 = `${baseCols},round_date,played_on`;
       const cols2 = `${baseCols},played_on`;
-
-      let rows: RoundRow[] = [];
 
       const r1 = await fetchRounds(cols1);
       if (!alive) return;
 
       if (!r1.error) {
-        rows = (r1.data ?? []) as unknown as RoundRow[];
-        setRounds(rows);
+        setRounds((r1.data ?? []) as any);
         setLoading(false);
         return;
       }
@@ -124,8 +102,7 @@ export default function MobileRoundsHubPage() {
         if (!alive) return;
 
         if (!r2.error) {
-          rows = (r2.data ?? []) as unknown as RoundRow[];
-          setRounds(rows);
+          setRounds((r2.data ?? []) as any);
           setLoading(false);
           return;
         }
@@ -135,8 +112,7 @@ export default function MobileRoundsHubPage() {
           if (!alive) return;
 
           if (!r3.error) {
-            rows = (r3.data ?? []) as unknown as RoundRow[];
-            setRounds(rows);
+            setRounds((r3.data ?? []) as any);
             setLoading(false);
             return;
           }
@@ -153,7 +129,7 @@ export default function MobileRoundsHubPage() {
       setLoading(false);
     }
 
-    if (tourId) loadRounds();
+    if (tourId) void loadRounds();
     else {
       setErrorMsg("Missing tour id in route.");
       setLoading(false);
@@ -166,119 +142,40 @@ export default function MobileRoundsHubPage() {
 
   const sorted = useMemo(() => {
     const arr = [...rounds];
-
     arr.sort((a, b) => {
       const aNo = typeof a.round_no === "number" ? a.round_no : null;
       const bNo = typeof b.round_no === "number" ? b.round_no : null;
-
       if (aNo != null && bNo != null && aNo !== bNo) return aNo - bNo;
       if (aNo != null && bNo == null) return -1;
       if (aNo == null && bNo != null) return 1;
-
-      const da = parseDateForDisplay(a.created_at)?.getTime() ?? 0;
-      const db = parseDateForDisplay(b.created_at)?.getTime() ?? 0;
-      if (da !== db) return da - db;
-
       return a.id.localeCompare(b.id);
     });
-
     return arr;
   }, [rounds]);
 
-  function setMode(next: Mode) {
-    const usp = new URLSearchParams(sp.toString());
-    usp.set("mode", next);
-    usp.delete("matches");
-    router.replace(`/m/tours/${tourId}/rounds?${usp.toString()}`);
-  }
-
-  function setMatches(next: MatchesMode) {
-    if (next === "leaderboard") {
-      router.push(`/m/tours/${tourId}/matches/leaderboard`);
-      return;
-    }
-
-    // For Format/Results, go to dedicated pages that show rounds list.
-    if (next === "format") {
-      router.push(`/m/tours/${tourId}/matches/format`);
-      return;
-    }
-
-    if (next === "results") {
-      router.push(`/m/tours/${tourId}/matches/results`);
-      return;
-    }
-
-    const usp = new URLSearchParams(sp.toString());
-    usp.delete("matches");
-    router.replace(`/m/tours/${tourId}/rounds?${usp.toString()}`);
-  }
-
   function openRound(roundId: string) {
-    // Normal round navigation (score/tee-times/results)
-    const base = `/m/tours/${tourId}/rounds/${roundId}`;
-    const href =
-      mode === "tee-times"
-        ? `${base}/tee-times`
-        : mode === "results"
-        ? `${base}/results`
-        : `${base}/scoring`;
-
-    router.push(href);
+    router.push(`/m/tours/${tourId}/matches/format/${roundId}`);
   }
-
-  const pillBase = "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
-  const pillActive = "border-gray-900 bg-gray-900 text-white";
-  const pillIdle = "border-gray-200 bg-white text-gray-900";
 
   return (
-    <div className="min-h-dvh bg-white text-gray-900">
-      <div className="border-b bg-white">
-        <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="text-base font-semibold">Rounds</div>
+    <div className="min-h-dvh bg-white text-gray-900 pb-10">
+      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
+        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-base font-semibold">Matches – Format</div>
+            <div className="truncate text-sm text-gray-500">Choose a round</div>
+          </div>
+
+          <Link
+            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm active:bg-gray-50"
+            href={`/m/tours/${tourId}/rounds`}
+          >
+            Back
+          </Link>
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-md px-4 pt-4 space-y-3">
-        <div className="flex gap-2">
-          <button
-            className={`${pillBase} ${!primaryRowLocked && mode === "score" ? pillActive : pillIdle}`}
-            onClick={() => setMode("score")}
-          >
-            Score Entry
-          </button>
-
-          <button
-            className={`${pillBase} ${!primaryRowLocked && mode === "tee-times" ? pillActive : pillIdle}`}
-            onClick={() => setMode("tee-times")}
-          >
-            Tee times
-          </button>
-
-          <button
-            className={`${pillBase} ${!primaryRowLocked && mode === "results" ? pillActive : pillIdle}`}
-            onClick={() => setMode("results")}
-          >
-            Results
-          </button>
-        </div>
-
-        <div className="flex gap-2">
-          <button className={`${pillBase} ${pillIdle}`} onClick={() => setMatches("format")}>
-            Matches – Format
-          </button>
-
-          <button className={`${pillBase} ${pillIdle}`} onClick={() => setMatches("results")}>
-            Matches – Results
-          </button>
-
-          <button className={`${pillBase} ${pillIdle}`} onClick={() => setMatches("leaderboard")}>
-            Matches – Leaderboard
-          </button>
-        </div>
-      </div>
-
-      <div className="mx-auto w-full max-w-md px-4 pt-4 pb-28">
+      <main className="mx-auto w-full max-w-md px-4 py-4">
         {loading ? (
           <div className="space-y-3">
             <div className="h-12 rounded-2xl bg-gray-100" />
@@ -286,9 +183,9 @@ export default function MobileRoundsHubPage() {
             <div className="h-12 rounded-2xl bg-gray-100" />
           </div>
         ) : errorMsg ? (
-          <div className="text-sm text-red-700">{errorMsg}</div>
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{errorMsg}</div>
         ) : sorted.length === 0 ? (
-          <div className="text-sm text-gray-600">No rounds yet.</div>
+          <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">No rounds found.</div>
         ) : (
           <div className="space-y-2">
             {sorted.map((r, idx) => {
@@ -316,7 +213,7 @@ export default function MobileRoundsHubPage() {
         )}
 
         <div className="mt-3 text-[11px] text-gray-400">Dates shown in Australia/Melbourne.</div>
-      </div>
+      </main>
     </div>
   );
 }
