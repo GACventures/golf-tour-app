@@ -10,7 +10,6 @@ type RoundRow = {
   tour_id: string;
   course_id: string | null;
 
-  // ✅ preferred ordering key
   round_no?: number | null;
 
   round_date?: string | null;
@@ -82,6 +81,7 @@ export default function MobileRoundsHubPage() {
 
   const mode = normalizeMode(sp.get("mode"));
   const matchesMode = normalizeMatchesMode(sp.get("matches"));
+  const primaryRowLocked = matchesMode !== "none";
 
   const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -164,7 +164,6 @@ export default function MobileRoundsHubPage() {
     };
   }, [tourId]);
 
-  // ✅ Correct ordering: by round_no ascending (1..N). If null, fallback to created_at; final tie-breaker id.
   const sorted = useMemo(() => {
     const arr = [...rounds];
 
@@ -173,7 +172,7 @@ export default function MobileRoundsHubPage() {
       const bNo = typeof b.round_no === "number" ? b.round_no : null;
 
       if (aNo != null && bNo != null && aNo !== bNo) return aNo - bNo;
-      if (aNo != null && bNo == null) return -1;
+      if (aNo !=null && bNo == null) return -1;
       if (aNo == null && bNo != null) return 1;
 
       const da = parseDateForDisplay(a.created_at)?.getTime() ?? 0;
@@ -187,15 +186,16 @@ export default function MobileRoundsHubPage() {
   }, [rounds]);
 
   function setMode(next: Mode) {
+    // Selecting a primary mode clears Matches mode (so the UI doesn't show both as active)
     const usp = new URLSearchParams(sp.toString());
     usp.set("mode", next);
+    usp.delete("matches");
     router.replace(`/m/tours/${tourId}/rounds?${usp.toString()}`);
   }
 
   function setMatches(next: MatchesMode) {
     const usp = new URLSearchParams(sp.toString());
 
-    // Leaderboard is a dedicated screen (no round selection)
     if (next === "leaderboard") {
       router.push(`/m/tours/${tourId}/matches/leaderboard`);
       return;
@@ -208,8 +208,8 @@ export default function MobileRoundsHubPage() {
   }
 
   function openRound(roundId: string) {
-    // For now, round tap continues to do what it already does for the primary mode.
-    // Matches format/results wiring will be implemented next step.
+    // For now, round tap continues to follow the primary mode.
+    // Matches format/results round wiring comes next.
     const base = `/m/tours/${tourId}/rounds/${roundId}`;
     const href =
       mode === "tee-times"
@@ -234,31 +234,37 @@ export default function MobileRoundsHubPage() {
       </div>
 
       <div className="mx-auto w-full max-w-md px-4 pt-4 space-y-3">
-        {/* Existing primary mode buttons */}
+        {/* Primary mode buttons */}
         <div className="flex gap-2">
           <button
-            className={`${pillBase} ${mode === "score" ? pillActive : pillIdle}`}
+            className={`${pillBase} ${
+              !primaryRowLocked && mode === "score" ? pillActive : pillIdle
+            }`}
             onClick={() => setMode("score")}
           >
             Score Entry
           </button>
 
           <button
-            className={`${pillBase} ${mode === "tee-times" ? pillActive : pillIdle}`}
+            className={`${pillBase} ${
+              !primaryRowLocked && mode === "tee-times" ? pillActive : pillIdle
+            }`}
             onClick={() => setMode("tee-times")}
           >
             Tee times
           </button>
 
           <button
-            className={`${pillBase} ${mode === "results" ? pillActive : pillIdle}`}
+            className={`${pillBase} ${
+              !primaryRowLocked && mode === "results" ? pillActive : pillIdle
+            }`}
             onClick={() => setMode("results")}
           >
             Results
           </button>
         </div>
 
-        {/* New Matches buttons row */}
+        {/* Matches buttons row */}
         <div className="flex gap-2">
           <button
             className={`${pillBase} ${matchesMode === "format" ? pillActive : pillIdle}`}
