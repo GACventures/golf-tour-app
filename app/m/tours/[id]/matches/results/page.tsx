@@ -5,19 +5,35 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import MobileNav from "@/app/m/tours/[id]/_components/MobileNav";
 
 type RoundRow = {
   id: string;
   tour_id: string;
   course_id: string | null;
   round_no?: number | null;
-
-  round_date?: string | null;
-  played_on?: string | null;
+  round_date?: string | null; // may not exist
+  played_on?: string | null; // may not exist
   created_at: string | null;
-
+  name?: string | null;
   courses?: { name: string } | { name: string }[] | null;
 };
+
+type SettingsRow = {
+  round_id: string;
+  format: "INDIVIDUAL_MATCHPLAY" | "BETTERBALL_MATCHPLAY" | "INDIVIDUAL_STABLEFORD";
+  double_points: boolean;
+};
+
+function isLikelyUuid(v: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+}
+
+function isMissingColumnError(msg: string, column: string) {
+  const m = String(msg ?? "").toLowerCase();
+  const c = column.toLowerCase();
+  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
+}
 
 function getCourseName(r: RoundRow) {
   const c: any = r.courses;
@@ -27,7 +43,7 @@ function getCourseName(r: RoundRow) {
 }
 
 function pickBestRoundDateISO(r: RoundRow): string | null {
-  return r.round_date ?? r.played_on ?? r.created_at ?? null;
+  return (r as any).round_date ?? (r as any).played_on ?? r.created_at ?? null;
 }
 
 function parseDateForDisplay(s: string | null): Date | null {
@@ -53,10 +69,10 @@ function fmtAuMelbourneDate(d: Date | null): string {
   return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`.replace(/\s+/g, " ");
 }
 
-function isMissingColumnError(msg: string, column: string) {
-  const m = msg.toLowerCase();
-  const c = column.toLowerCase();
-  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `) || m.includes(`_${c}`));
+function formatLabel(f: SettingsRow["format"]) {
+  if (f === "INDIVIDUAL_MATCHPLAY") return "Ind Matchplay";
+  if (f === "BETTERBALL_MATCHPLAY") return "Better Ball";
+  return "Ind Stableford";
 }
 
 export default function MatchesResultsRoundsPage() {
@@ -64,11 +80,15 @@ export default function MatchesResultsRoundsPage() {
   const tourId = String(params?.id ?? "").trim();
   const router = useRouter();
 
-  const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
+  const [rounds, setRounds] = useState<RoundRow[]>([]);
+  const [settingsByRound, setSettingsByRound] = useState<Map<string, SettingsRow>>(new Map());
+
   useEffect(() => {
+    if (!tourId || !isLikelyUuid(tourId)) return;
+
     let alive = true;
 
     async function fetchRounds(selectCols: string) {
@@ -80,61 +100,64 @@ export default function MatchesResultsRoundsPage() {
         .order("created_at", { ascending: true });
     }
 
-    async function loadRounds() {
+    async function load() {
       setLoading(true);
       setErrorMsg("");
 
-      const baseCols = "id,tour_id,course_id,created_at,round_no,courses(name)";
-      const cols1 = `${baseCols},round_date,played_on`;
-      const cols2 = `${baseCols},played_on`;
+      try {
+        const baseCols = "id,tour_id,course_id,created_at,name,round_no,courses(name)";
+        const cols1 = `${baseCols},round_date,played_on`;
+        const cols2 = `${baseCols},played_on`;
 
-      const r1 = await fetchRounds(cols1);
-      if (!alive) return;
+        let rRows: RoundRow[] = [];
 
-      if (!r1.error) {
-        setRounds((r1.data ?? []) as any);
-        setLoading(false);
-        return;
-      }
-
-      if (isMissingColumnError(r1.error.message, "round_date")) {
-        const r2 = await fetchRounds(cols2);
-        if (!alive) return;
-
-        if (!r2.error) {
-          setRounds((r2.data ?? []) as any);
-          setLoading(false);
-          return;
-        }
-
-        if (isMissingColumnError(r2.error.message, "played_on")) {
-          const r3 = await fetchRounds(baseCols);
-          if (!alive) return;
-
-          if (!r3.error) {
-            setRounds((r3.data ?? []) as any);
-            setLoading(false);
-            return;
+        const r1 = await fetchRounds(cols1);
+        if (!r1.error) {
+          rRows = (r1.data ?? []) as any;
+        } else if (isMissingColumnError(r1.error.message, "round_date")) {
+          const r2 = await fetchRounds(cols2);
+          if (!r2.error) {
+            rRows = (r2.data ?? []) as any;
+          } else if (isMissingColumnError(r2.error.message, "played_on")) {
+            const r3 = await fetchRounds(baseCols);
+            if (r3.error) throw r3.error;
+            rRows = (r3.data ?? []) as any;
+          } else {
+            throw r2.error;
           }
-
-          setErrorMsg(r3.error.message);
         } else {
-          setErrorMsg(r2.error.message);
+          throw r1.error;
         }
-      } else {
-        setErrorMsg(r1.error.message);
+
+        // settings for rounds (optional)
+        const { data: sRows, error: sErr } = await supabase
+          .from("match_round_settings")
+          .select("round_id,format,double_points")
+          .eq("tour_id", tourId);
+
+        if (sErr) throw sErr;
+
+        const map = new Map<string, SettingsRow>();
+        (sRows ?? []).forEach((s: any) => {
+          map.set(String(s.round_id), {
+            round_id: String(s.round_id),
+            format: s.format,
+            double_points: s.double_points === true,
+          });
+        });
+
+        if (!alive) return;
+        setRounds(rRows);
+        setSettingsByRound(map);
+      } catch (e: any) {
+        if (!alive) return;
+        setErrorMsg(e?.message ?? "Failed to load rounds.");
+      } finally {
+        if (alive) setLoading(false);
       }
-
-      setRounds([]);
-      setLoading(false);
     }
 
-    if (tourId) void loadRounds();
-    else {
-      setErrorMsg("Missing tour id in route.");
-      setLoading(false);
-    }
-
+    void load();
     return () => {
       alive = false;
     };
@@ -145,9 +168,15 @@ export default function MatchesResultsRoundsPage() {
     arr.sort((a, b) => {
       const aNo = typeof a.round_no === "number" ? a.round_no : null;
       const bNo = typeof b.round_no === "number" ? b.round_no : null;
+
       if (aNo != null && bNo != null && aNo !== bNo) return aNo - bNo;
       if (aNo != null && bNo == null) return -1;
       if (aNo == null && bNo != null) return 1;
+
+      const da = parseDateForDisplay(a.created_at)?.getTime() ?? 0;
+      const db = parseDateForDisplay(b.created_at)?.getTime() ?? 0;
+      if (da !== db) return da - db;
+
       return a.id.localeCompare(b.id);
     });
     return arr;
@@ -157,18 +186,32 @@ export default function MatchesResultsRoundsPage() {
     router.push(`/m/tours/${tourId}/matches/results/${roundId}`);
   }
 
-  return (
-    <div className="min-h-dvh bg-white text-gray-900 pb-10">
-      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-base font-semibold">Matches – Results</div>
-            <div className="truncate text-sm text-gray-500">Choose a round</div>
+  if (!tourId || !isLikelyUuid(tourId)) {
+    return (
+      <div className="min-h-dvh bg-white text-gray-900 pb-24">
+        <div className="mx-auto max-w-md px-4 py-6">
+          <div className="rounded-2xl border p-4 text-sm">
+            Missing or invalid tour id.
+            <div className="mt-2">
+              <Link className="underline" href="/m">
+                Go to mobile home
+              </Link>
+            </div>
           </div>
+        </div>
+        <MobileNav />
+      </div>
+    );
+  }
 
+  return (
+    <div className="min-h-dvh bg-white text-gray-900 pb-24">
+      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
+        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between">
+          <div className="text-base font-semibold">Matches – Results</div>
           <Link
             className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm active:bg-gray-50"
-            href={`/m/tours/${tourId}/rounds`}
+            href={`/m/tours/${tourId}/rounds?mode=results`}
           >
             Back
           </Link>
@@ -185,7 +228,7 @@ export default function MatchesResultsRoundsPage() {
         ) : errorMsg ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{errorMsg}</div>
         ) : sorted.length === 0 ? (
-          <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">No rounds found.</div>
+          <div className="text-sm text-gray-600">No rounds yet.</div>
         ) : (
           <div className="space-y-2">
             {sorted.map((r, idx) => {
@@ -194,6 +237,8 @@ export default function MatchesResultsRoundsPage() {
               const best = pickBestRoundDateISO(r);
               const d = fmtAuMelbourneDate(parseDateForDisplay(best));
               const course = getCourseName(r);
+
+              const set = settingsByRound.get(r.id) ?? null;
 
               return (
                 <button
@@ -205,7 +250,19 @@ export default function MatchesResultsRoundsPage() {
                     <div className="text-sm font-extrabold text-gray-900">{label}</div>
                     <div className="text-xs font-semibold text-gray-600 whitespace-nowrap">{d || "—"}</div>
                   </div>
+
                   <div className="mt-1 text-sm font-semibold text-gray-900 truncate">{course}</div>
+
+                  <div className="mt-1 text-[11px] text-gray-600">
+                    {set ? (
+                      <>
+                        Format: <span className="font-semibold">{formatLabel(set.format)}</span>
+                        {set.double_points ? <span className="ml-2 font-semibold">· Double points</span> : null}
+                      </>
+                    ) : (
+                      <span className="text-gray-500">No match format set for this round</span>
+                    )}
+                  </div>
                 </button>
               );
             })}
@@ -214,6 +271,9 @@ export default function MatchesResultsRoundsPage() {
 
         <div className="mt-3 text-[11px] text-gray-400">Dates shown in Australia/Melbourne.</div>
       </main>
+
+      <MobileNav />
     </div>
   );
 }
+
