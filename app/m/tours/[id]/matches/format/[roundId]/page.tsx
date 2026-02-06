@@ -9,8 +9,8 @@ import { supabase } from "@/lib/supabaseClient";
 type RoundRow = {
   id: string;
   round_no: number | null;
-  round_date?: string | null;
-  played_on?: string | null;
+  round_date?: string | null; // may not exist
+  played_on?: string | null; // may not exist
   created_at: string | null;
   courses?: { name: string } | { name: string }[] | null;
 };
@@ -33,6 +33,12 @@ type SettingsRow = {
 
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+}
+
+function isMissingColumnError(msg: string, column: string) {
+  const m = String(msg ?? "").toLowerCase();
+  const c = column.toLowerCase();
+  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
 }
 
 function getCourseName(r: RoundRow | null) {
@@ -108,19 +114,44 @@ export default function MatchesFormatRoundDetailPage() {
 
     let alive = true;
 
+    async function fetchRound(selectCols: string) {
+      return supabase.from("rounds").select(selectCols).eq("id", roundId).single();
+    }
+
     async function load() {
       setLoading(true);
       setErrorMsg("");
       setSaveMsg("");
 
       try {
-        // 1) Round meta
-        const { data: rRow, error: rErr } = await supabase
-          .from("rounds")
-          .select("id,round_no,created_at,round_date,played_on,courses(name)")
-          .eq("id", roundId)
-          .single();
-        if (rErr) throw rErr;
+        // 1) Round meta with column-fallback (round_date may not exist)
+        const baseCols = "id,round_no,created_at,courses(name)";
+        const cols1 = `${baseCols},round_date,played_on`;
+        const cols2 = `${baseCols},played_on`;
+
+        let rRow: any = null;
+
+        const r1 = await fetchRound(cols1);
+        if (r1.error) {
+          if (isMissingColumnError(r1.error.message, "round_date")) {
+            const r2 = await fetchRound(cols2);
+            if (r2.error) {
+              if (isMissingColumnError(r2.error.message, "played_on")) {
+                const r3 = await fetchRound(baseCols);
+                if (r3.error) throw r3.error;
+                rRow = r3.data;
+              } else {
+                throw r2.error;
+              }
+            } else {
+              rRow = r2.data;
+            }
+          } else {
+            throw r1.error;
+          }
+        } else {
+          rRow = r1.data;
+        }
 
         // 2) Tour groups (teams/pairs) - fixed for tour => round_id is null
         const { data: gRows, error: gErr } = await supabase
@@ -153,7 +184,7 @@ export default function MatchesFormatRoundDetailPage() {
           setGroupBId(ex.group_b_id);
           setDoublePoints(ex.double_points === true);
         } else {
-          // sensible defaults: first two groups if present
+          // defaults: first two groups if present
           const arr = (gRows ?? []) as any[];
           const a = arr?.[0]?.id ? String(arr[0].id) : "";
           const b = arr?.[1]?.id ? String(arr[1].id) : "";
@@ -186,10 +217,7 @@ export default function MatchesFormatRoundDetailPage() {
   }, [round]);
 
   const dirty = useMemo(() => {
-    if (!existing) {
-      // if no existing row, anything non-empty counts as dirty
-      return Boolean(groupAId && groupBId);
-    }
+    if (!existing) return Boolean(groupAId && groupBId);
     return (
       existing.format !== format ||
       existing.group_a_id !== groupAId ||
@@ -232,7 +260,6 @@ export default function MatchesFormatRoundDetailPage() {
       setExisting(saved);
       setSaveMsg(`Saved: ${formatLabel(saved.format)}${saved.double_points ? " (double points)" : ""}.`);
     } catch (e: any) {
-      // common friendly cases
       const msg = String(e?.message ?? "Save failed.");
       if (msg.toLowerCase().includes("match_round_settings_groups_distinct")) {
         setErrorMsg("Team A and Team B must be different.");
@@ -405,9 +432,7 @@ export default function MatchesFormatRoundDetailPage() {
                       </div>
                     </div>
 
-                    {groupAId === groupBId ? (
-                      <div className="text-xs text-red-700">Team A and Team B must be different.</div>
-                    ) : null}
+                    {groupAId === groupBId ? <div className="text-xs text-red-700">Team A and Team B must be different.</div> : null}
 
                     <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
                       <div>
@@ -453,7 +478,6 @@ export default function MatchesFormatRoundDetailPage() {
 
             {saveMsg ? <div className="text-sm text-green-700">{saveMsg}</div> : null}
 
-            {/* Next-step hint (non-functional for now) */}
             {existing ? (
               <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
                 Next: we’ll add match setup (player assignments) for this round based on the selected format.
