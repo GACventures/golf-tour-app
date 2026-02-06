@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Tee = "M" | "F";
@@ -179,6 +179,8 @@ function computeMatchplayResultText(holeWinners: Array<"A" | "B" | "HALVED">) {
 
 export default function MatchesResultsRoundPage() {
   const params = useParams<{ id?: string; roundId?: string }>();
+  const router = useRouter();
+
   const tourId = String(params?.id ?? "").trim();
   const roundId = String(params?.roundId ?? "").trim();
 
@@ -272,10 +274,7 @@ export default function MatchesResultsRoundPage() {
         const gB = (gRows ?? []).find((g: any) => String(g.id) === set.group_b_id) ?? null;
 
         // N (players on tour) must come from tour_players
-        const { data: tpRows, error: tpErr } = await supabase
-          .from("tour_players")
-          .select("player_id")
-          .eq("tour_id", tourId);
+        const { data: tpRows, error: tpErr } = await supabase.from("tour_players").select("player_id").eq("tour_id", tourId);
         if (tpErr) throw tpErr;
 
         const tourPlayerIds = (tpRows ?? []).map((x: any) => String(x.player_id));
@@ -306,10 +305,7 @@ export default function MatchesResultsRoundPage() {
         }
 
         // Players info
-        const { data: pRows, error: pErr } = await supabase
-          .from("players")
-          .select("id,name,gender")
-          .in("id", playerIds);
+        const { data: pRows, error: pErr } = await supabase.from("players").select("id,name,gender").in("id", playerIds);
         if (pErr) throw pErr;
 
         const pMap = new Map<string, PlayerRow>();
@@ -360,7 +356,6 @@ export default function MatchesResultsRoundPage() {
             if (!rpMap.has(pid) && hasScore.has(pid)) {
               rpMap.set(pid, { player_id: pid, playing: true, playing_handicap: 0 });
             } else if (rpMap.has(pid) && rpMap.get(pid)!.playing !== true && hasScore.has(pid)) {
-              // keep handicap, flip playing for display purposes
               const cur = rpMap.get(pid)!;
               rpMap.set(pid, { ...cur, playing: true });
             }
@@ -461,12 +456,17 @@ export default function MatchesResultsRoundPage() {
     return playersById.get(id)?.name ?? "(player)";
   }
 
+  function openMatch(matchId: string) {
+    router.push(`/m/tours/${tourId}/matches/results/${roundId}/match/${matchId}`);
+  }
+
   // Compute match results (for matchplay formats)
   const matchResults = useMemo(() => {
     if (!settings) return [];
     if (settings.format === "INDIVIDUAL_STABLEFORD") return [];
 
     const out: Array<{
+      match_id: string;
       match_no: number;
       leftLabel: string;
       rightLabel: string;
@@ -512,6 +512,7 @@ export default function MatchesResultsRoundPage() {
           : `${rightLabel} def ${leftLabel} ${r.text}`;
 
       out.push({
+        match_id: String(mRow.id),
         match_no: Number(mRow.match_no),
         leftLabel,
         rightLabel,
@@ -637,7 +638,7 @@ export default function MatchesResultsRoundPage() {
               <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Match results</div>
-                  <div className="mt-1 text-xs text-gray-600">Traditional matchplay result format.</div>
+                  <div className="mt-1 text-xs text-gray-600">Tap a match to view hole-by-hole scoring.</div>
                 </div>
 
                 {matchResults.length === 0 ? (
@@ -645,10 +646,19 @@ export default function MatchesResultsRoundPage() {
                 ) : (
                   <div className="divide-y">
                     {matchResults.map((m) => (
-                      <div key={m.match_no} className="p-4">
-                        <div className="text-xs text-gray-500">Match {m.match_no}</div>
+                      <button
+                        key={m.match_id}
+                        type="button"
+                        onClick={() => openMatch(m.match_id)}
+                        className="w-full text-left p-4 active:bg-gray-50"
+                        aria-label={`Open match ${m.match_no}`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs text-gray-500">Match {m.match_no}</div>
+                          <div className="text-xs font-semibold text-gray-500">View</div>
+                        </div>
                         <div className="mt-1 text-sm font-semibold text-gray-900">{m.resultText}</div>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -677,9 +687,7 @@ export default function MatchesResultsRoundPage() {
                   <div>
                     <div className="text-xs font-semibold text-gray-700">Winners</div>
                     {stablefordWinners.winners.length === 0 ? (
-                      <div className="mt-1 text-sm text-gray-700">
-                        No winners yet (no stableford totals could be calculated for this round).
-                      </div>
+                      <div className="mt-1 text-sm text-gray-700">No winners yet (no stableford totals could be calculated for this round).</div>
                     ) : (
                       <div className="mt-2 space-y-1">
                         {stablefordWinners.winners.map((w) => (
