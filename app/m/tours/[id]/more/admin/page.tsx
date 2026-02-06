@@ -45,6 +45,20 @@ type HoleEditRow = {
   siF: string;
 };
 
+type RoundOption = {
+  id: string;
+  round_no: number;
+  played_on: string; // date
+  name: string | null;
+  course_name: string | null;
+};
+
+type RoundPlayerHCRow = {
+  player_id: string;
+  playing_handicap: number;
+  base_playing_handicap: number | null;
+};
+
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
@@ -90,6 +104,12 @@ function validateSiSet(values: number[]) {
   return { ok: true as const, error: "" };
 }
 
+function roundLabel(r: RoundOption) {
+  const course = (r.course_name ?? "").trim();
+  const baseName = course || (r.name ?? "").trim() || `Round ${r.round_no}`;
+  return `R${r.round_no} • ${baseName} • ${r.played_on}`;
+}
+
 export default function MobileTourAdminPage() {
   const params = useParams<{ id?: string }>();
   const router = useRouter();
@@ -133,6 +153,19 @@ export default function MobileTourAdminPage() {
   const [selectedCourseId, setSelectedCourseId] = useState<string>(""); // empty = not selected yet
   const [holeRows, setHoleRows] = useState<HoleEditRow[]>(makeEmptyHoles());
 
+  // One-off handicaps (only when rehandicapping is OFF)
+  const [ooRounds, setOoRounds] = useState<RoundOption[]>([]);
+  const [ooSelectedRoundId, setOoSelectedRoundId] = useState<string>("");
+  const [ooLoading, setOoLoading] = useState(false);
+  const [ooError, setOoError] = useState("");
+  const [ooSaving, setOoSaving] = useState(false);
+  const [ooMsg, setOoMsg] = useState("");
+
+  const [ooRoundPlayers, setOoRoundPlayers] = useState<Map<string, RoundPlayerHCRow>>(new Map());
+  const [ooInputs, setOoInputs] = useState<Record<string, string>>({}); // player_id -> text
+
+  const rehandicappingEnabled = tour?.rehandicapping_enabled === true;
+
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
@@ -150,6 +183,14 @@ export default function MobileTourAdminPage() {
       setCourseSaveMsg("");
       setCourseLoading(false);
       setCourseSaving(false);
+
+      // Reset one-off messages
+      setOoError("");
+      setOoMsg("");
+      setOoRounds([]);
+      setOoSelectedRoundId("");
+      setOoRoundPlayers(new Map());
+      setOoInputs({});
 
       try {
         const { data: tData, error: tErr } = await supabase
@@ -189,9 +230,7 @@ export default function MobileTourAdminPage() {
         const { data: roundData, error: roundErr } = await supabase.from("rounds").select("course_id").eq("tour_id", tourId);
         if (roundErr) throw roundErr;
 
-        const courseIds = Array.from(
-          new Set((roundData ?? []).map((r: any) => String(r.course_id ?? "").trim()).filter(Boolean))
-        );
+        const courseIds = Array.from(new Set((roundData ?? []).map((r: any) => String(r.course_id ?? "").trim()).filter(Boolean)));
 
         let courses: CourseOption[] = [];
         if (courseIds.length > 0) {
@@ -209,6 +248,29 @@ export default function MobileTourAdminPage() {
           }));
         }
 
+        // One-off handicaps: load rounds list (so the UI can pick a round)
+        // Only needed/used when rehandicapping is OFF, but cheap and safe.
+        const { data: rData, error: rErr } = await supabase
+          .from("rounds")
+          .select("id,round_no,played_on,name,courses(name)")
+          .eq("tour_id", tourId)
+          .order("round_no", { ascending: true });
+        if (rErr) throw rErr;
+
+        const ropts: RoundOption[] = (rData ?? [])
+          .map((r: any) => {
+            const courseJoin = Array.isArray(r.courses) ? r.courses[0] : r.courses;
+            const courseName = courseJoin?.name ? String(courseJoin.name) : null;
+            return {
+              id: String(r.id),
+              round_no: Number(r.round_no),
+              played_on: String(r.played_on),
+              name: r.name == null ? null : String(r.name),
+              course_name: courseName,
+            };
+          })
+          .filter((r: RoundOption) => !!r.id && Number.isFinite(r.round_no) && !!r.played_on);
+
         if (!alive) return;
 
         const t = tData as Tour;
@@ -221,6 +283,10 @@ export default function MobileTourAdminPage() {
         // Do NOT auto-select course
         setSelectedCourseId("");
         setHoleRows(makeEmptyHoles());
+
+        setOoRounds(ropts);
+        // Do NOT auto-select round (user picks)
+        setOoSelectedRoundId("");
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load Tour Admin page.");
@@ -394,10 +460,7 @@ export default function MobileTourAdminPage() {
     try {
       const nextEnabled = rhEnabledInput === true;
 
-      const { error } = await supabase
-        .from("tours")
-        .update({ rehandicapping_enabled: nextEnabled })
-        .eq("id", tour.id);
+      const { error } = await supabase.from("tours").update({ rehandicapping_enabled: nextEnabled }).eq("id", tour.id);
 
       if (error) throw error;
 
@@ -486,6 +549,133 @@ export default function MobileTourAdminPage() {
     } finally {
       setCourseSaving(false);
     }
+  }
+
+  async function loadOneOffRoundPlayers(roundId: string) {
+    if (!roundId || !isLikelyUuid(roundId)) {
+      setOoRoundPlayers(new Map());
+      setOoInputs({});
+      return;
+    }
+
+    setOoLoading(true);
+    setOoError("");
+    setOoMsg("");
+
+    try {
+      const { data, error } = await supabase
+        .from("round_players")
+        .select("player_id,playing_handicap,base_playing_handicap")
+        .eq("round_id", roundId);
+
+      if (error) throw error;
+
+      const map = new Map<string, RoundPlayerHCRow>();
+      const nextInputs: Record<string, string> = {};
+
+      (data ?? []).forEach((r: any) => {
+        const pid = String(r.player_id ?? "");
+        if (!pid) return;
+        const ph = Number(r.playing_handicap);
+        const base = r.base_playing_handicap == null ? null : Number(r.base_playing_handicap);
+
+        map.set(pid, {
+          player_id: pid,
+          playing_handicap: Number.isFinite(ph) ? Math.floor(ph) : 0,
+          base_playing_handicap: base != null && Number.isFinite(base) ? Math.floor(base) : null,
+        });
+
+        nextInputs[pid] = Number.isFinite(ph) ? String(Math.floor(ph)) : "";
+      });
+
+      setOoRoundPlayers(map);
+      setOoInputs(nextInputs);
+    } catch (e: any) {
+      setOoError(e?.message ?? "Failed to load one-off handicaps for this round.");
+      setOoRoundPlayers(new Map());
+      setOoInputs({});
+    } finally {
+      setOoLoading(false);
+    }
+  }
+
+  async function applyOneOff(playerId: string) {
+    if (!ooSelectedRoundId || !isLikelyUuid(ooSelectedRoundId)) return;
+
+    const raw = String(ooInputs[playerId] ?? "").trim();
+    if (!raw) return;
+
+    const nextPH = Number(raw);
+    if (!Number.isFinite(nextPH)) return;
+
+    const existing = ooRoundPlayers.get(playerId);
+    if (!existing) return;
+
+    setOoSaving(true);
+    setOoError("");
+    setOoMsg("");
+
+    try {
+      const payload: any = {
+        playing_handicap: Math.max(0, Math.floor(nextPH)),
+      };
+
+      // On first override only, preserve the original value
+      if (existing.base_playing_handicap == null) {
+        payload.base_playing_handicap = existing.playing_handicap;
+      }
+
+      const { error } = await supabase
+        .from("round_players")
+        .update(payload)
+        .eq("round_id", ooSelectedRoundId)
+        .eq("player_id", playerId);
+
+      if (error) throw error;
+
+      setOoMsg("Saved one-off handicap override.");
+      await loadOneOffRoundPlayers(ooSelectedRoundId);
+    } catch (e: any) {
+      setOoError(e?.message ?? "Failed to save one-off handicap.");
+    } finally {
+      setOoSaving(false);
+    }
+  }
+
+  async function resetOneOff(playerId: string) {
+    if (!ooSelectedRoundId || !isLikelyUuid(ooSelectedRoundId)) return;
+
+    const existing = ooRoundPlayers.get(playerId);
+    if (!existing) return;
+    if (existing.base_playing_handicap == null) return;
+
+    setOoSaving(true);
+    setOoError("");
+    setOoMsg("");
+
+    try {
+      const { error } = await supabase
+        .from("round_players")
+        .update({
+          playing_handicap: existing.base_playing_handicap,
+          base_playing_handicap: null,
+        })
+        .eq("round_id", ooSelectedRoundId)
+        .eq("player_id", playerId);
+
+      if (error) throw error;
+
+      setOoMsg("Reset to base playing handicap.");
+      await loadOneOffRoundPlayers(ooSelectedRoundId);
+    } catch (e: any) {
+      setOoError(e?.message ?? "Failed to reset one-off handicap.");
+    } finally {
+      setOoSaving(false);
+    }
+  }
+
+  function setOneOffInput(playerId: string, next: string) {
+    setOoInputs((prev) => ({ ...prev, [playerId]: next }));
   }
 
   function goBack() {
@@ -604,6 +794,161 @@ export default function MobileTourAdminPage() {
                 {rhMsg ? <div className="text-sm text-green-700">{rhMsg}</div> : null}
               </div>
             </section>
+
+            {/* One-off handicaps (only when rehandicapping is OFF) */}
+            {!rehandicappingEnabled ? (
+              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                <div className="p-4 border-b">
+                  <div className="text-sm font-semibold text-gray-900">One-off handicaps (per round)</div>
+                  <div className="mt-1 text-xs text-gray-600">
+                    Only applies when rehandicapping is <span className="font-medium">off</span>. Updates{" "}
+                    <span className="font-medium">round_players.playing_handicap</span> for the selected round. First override stores{" "}
+                    <span className="font-medium">base_playing_handicap</span> so you can reset.
+                  </div>
+                </div>
+
+                <div className="p-4 space-y-3">
+                  {ooRounds.length === 0 ? (
+                    <div className="text-sm text-gray-700">No rounds found for this tour.</div>
+                  ) : (
+                    <>
+                      <label className="block text-xs font-semibold text-gray-700" htmlFor="oneOffRoundSelect">
+                        Select round
+                      </label>
+                      <select
+                        id="oneOffRoundSelect"
+                        className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                        value={ooSelectedRoundId}
+                        onChange={async (e) => {
+                          const rid = e.target.value;
+                          setOoSelectedRoundId(rid);
+                          setOoError("");
+                          setOoMsg("");
+                          if (rid) {
+                            await loadOneOffRoundPlayers(rid);
+                          } else {
+                            setOoRoundPlayers(new Map());
+                            setOoInputs({});
+                          }
+                        }}
+                      >
+                        <option value="">Select a round…</option>
+                        {ooRounds.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {roundLabel(r)}
+                          </option>
+                        ))}
+                      </select>
+
+                      {!ooSelectedRoundId ? (
+                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                          Choose a round to set one-off playing handicaps.
+                        </div>
+                      ) : (
+                        <>
+                          {ooLoading ? (
+                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                              Loading round handicaps…
+                            </div>
+                          ) : null}
+
+                          {ooError ? (
+                            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{ooError}</div>
+                          ) : null}
+
+                          {ooMsg ? <div className="text-sm text-green-700">{ooMsg}</div> : null}
+
+                          <div className="rounded-2xl border border-gray-200 overflow-hidden">
+                            <div className="grid grid-cols-12 gap-0 border-b bg-gray-50">
+                              <div className="col-span-6 px-2 py-2 text-[11px] font-semibold text-gray-700">Player</div>
+                              <div className="col-span-3 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">PH</div>
+                              <div className="col-span-3 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">Base</div>
+                            </div>
+
+                            <div className="divide-y">
+                              {rows.map((p) => {
+                                const rp = ooRoundPlayers.get(p.player_id);
+                                const ph = rp?.playing_handicap;
+                                const base = rp?.base_playing_handicap;
+
+                                const canReset = base != null;
+
+                                return (
+                                  <div key={p.player_id} className="p-3">
+                                    <div className="grid grid-cols-12 items-center gap-2">
+                                      <div className="col-span-6 min-w-0">
+                                        <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
+                                      </div>
+
+                                      <div className="col-span-3 text-right">
+                                        <div className="text-xs text-gray-600">{Number.isFinite(ph as any) ? ph : "—"}</div>
+                                      </div>
+
+                                      <div className="col-span-3 text-right">
+                                        <div className="text-xs text-gray-600">{base != null ? base : "—"}</div>
+                                      </div>
+                                    </div>
+
+                                    <div className="mt-2 flex items-center gap-2">
+                                      <input
+                                        inputMode="numeric"
+                                        pattern="[0-9]*"
+                                        className="w-24 rounded-xl border border-gray-200 bg-white px-3 py-2 text-right text-sm font-semibold text-gray-900 shadow-sm"
+                                        value={ooInputs[p.player_id] ?? ""}
+                                        onChange={(e) => setOneOffInput(p.player_id, e.target.value)}
+                                        placeholder="PH"
+                                        aria-label={`One-off playing handicap for ${p.name}`}
+                                        disabled={ooSaving || ooLoading || !rp}
+                                      />
+
+                                      <button
+                                        type="button"
+                                        onClick={() => applyOneOff(p.player_id)}
+                                        disabled={ooSaving || ooLoading || !rp}
+                                        className={`h-10 flex-1 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                                          ooSaving || ooLoading || !rp
+                                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                            : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                                        }`}
+                                      >
+                                        {ooSaving ? "Saving…" : "Apply"}
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => resetOneOff(p.player_id)}
+                                        disabled={ooSaving || ooLoading || !rp || !canReset}
+                                        className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                                          ooSaving || ooLoading || !rp || !canReset
+                                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                            : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                        }`}
+                                      >
+                                        Reset
+                                      </button>
+                                    </div>
+
+                                    {!rp ? (
+                                      <div className="mt-1 text-[11px] text-amber-700">
+                                        No round_players row found for this player in this round.
+                                      </div>
+                                    ) : (
+                                      <div className="mt-1 text-[11px] text-gray-500">
+                                        Enter the full playing handicap you want for this round.
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+              </section>
+            ) : null}
 
             {/* Starting handicaps (existing) */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
