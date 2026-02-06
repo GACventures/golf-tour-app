@@ -6,8 +6,6 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-type Tee = "M" | "F";
-
 type Tour = {
   id: string;
   name: string | null;
@@ -92,6 +90,22 @@ function formatLabel(f: MatchFormat) {
   }
 }
 
+function isMissingColumnError(msg: string, column: string) {
+  const m = String(msg ?? "").toLowerCase();
+  const c = String(column ?? "").toLowerCase();
+
+  // PostgREST can rewrite nested selects into aliases like rounds_1_<col>
+  // e.g. "column rounds_1_date does not exist"
+  const aliasVariants = [
+    `.${c}`, // rounds.round_date
+    `"${c}"`,
+    ` ${c} `,
+    `_${c}`, // rounds_1_date style
+  ];
+
+  return m.includes("does not exist") && aliasVariants.some((v) => m.includes(v));
+}
+
 export default function MobileMatchesLeaderboardPage() {
   const params = useParams<{ id?: string }>();
   const router = useRouter();
@@ -102,53 +116,87 @@ export default function MobileMatchesLeaderboardPage() {
 
   const [tour, setTour] = useState<Tour | null>(null);
   const [settings, setSettings] = useState<SettingsRow[]>([]);
-  const [matchCounts, setMatchCounts] = useState<Map<string, number>>(new Map()); // settings_id -> count
+  const [matchCounts, setMatchCounts] = useState<Map<string, number>>(new Map());
 
   useEffect(() => {
     let alive = true;
+
+    async function loadSettingsWithFallback() {
+      // Prefer round_no + round_date + played_on, but fall back if columns don't exist.
+      const roundsBase = "id,round_no,created_at,courses(name)";
+
+      const selectWithRoundDate = `
+        id,tour_id,round_id,group_a_id,group_b_id,format,double_points,
+        rounds(${roundsBase},round_date,played_on),
+        group_a:tour_groups!match_round_settings_group_a_id_fkey(id,name),
+        group_b:tour_groups!match_round_settings_group_b_id_fkey(id,name)
+      `;
+
+      const selectWithPlayedOn = `
+        id,tour_id,round_id,group_a_id,group_b_id,format,double_points,
+        rounds(${roundsBase},played_on),
+        group_a:tour_groups!match_round_settings_group_a_id_fkey(id,name),
+        group_b:tour_groups!match_round_settings_group_b_id_fkey(id,name)
+      `;
+
+      const selectBaseOnly = `
+        id,tour_id,round_id,group_a_id,group_b_id,format,double_points,
+        rounds(${roundsBase}),
+        group_a:tour_groups!match_round_settings_group_a_id_fkey(id,name),
+        group_b:tour_groups!match_round_settings_group_b_id_fkey(id,name)
+      `;
+
+      const r1 = await supabase.from("match_round_settings").select(selectWithRoundDate).eq("tour_id", tourId);
+      if (!alive) return { data: null as any, error: r1.error };
+
+      if (!r1.error) return { data: r1.data as any, error: null as any };
+
+      if (isMissingColumnError(r1.error.message, "round_date") || isMissingColumnError(r1.error.message, "date")) {
+        const r2 = await supabase.from("match_round_settings").select(selectWithPlayedOn).eq("tour_id", tourId);
+        if (!alive) return { data: null as any, error: r2.error };
+
+        if (!r2.error) return { data: r2.data as any, error: null as any };
+
+        if (isMissingColumnError(r2.error.message, "played_on")) {
+          const r3 = await supabase.from("match_round_settings").select(selectBaseOnly).eq("tour_id", tourId);
+          if (!alive) return { data: null as any, error: r3.error };
+
+          if (!r3.error) return { data: r3.data as any, error: null as any };
+
+          return { data: null as any, error: r3.error };
+        }
+
+        return { data: null as any, error: r2.error };
+      }
+
+      return { data: null as any, error: r1.error };
+    }
 
     async function load() {
       setLoading(true);
       setErrorMsg("");
 
       try {
-        const { data: tRow, error: tErr } = await supabase
-          .from("tours")
-          .select("id,name")
-          .eq("id", tourId)
-          .single();
+        const { data: tRow, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
 
-        // Load per-round settings with round + group names (read-only scaffold)
-        const { data: sRows, error: sErr } = await supabase
-          .from("match_round_settings")
-          .select(
-            `
-            id,tour_id,round_id,group_a_id,group_b_id,format,double_points,
-            rounds(id,round_no,round_date,played_on,created_at,courses(name)),
-            group_a:tour_groups!match_round_settings_group_a_id_fkey(id,name),
-            group_b:tour_groups!match_round_settings_group_b_id_fkey(id,name)
-          `
-          )
-          .eq("tour_id", tourId);
+        const settingsRes = await loadSettingsWithFallback();
+        if (settingsRes.error) throw settingsRes.error;
 
-        if (sErr) throw sErr;
+        const sList = ((settingsRes.data ?? []) as unknown as SettingsRow[]) ?? [];
 
-        const sList = (sRows ?? []) as unknown as SettingsRow[];
-
-        // Count matches per setting (so user can see if match assignments are done)
+        // Count matches per setting
         const counts = new Map<string, number>();
         if (sList.length > 0) {
           const settingIds = sList.map((s) => s.id);
 
           const { data: mRows, error: mErr } = await supabase
             .from("match_round_matches")
-            .select("settings_id", { count: "exact" })
+            .select("settings_id")
             .in("settings_id", settingIds);
 
           if (mErr) throw mErr;
 
-          // Supabase doesn't group-count in one call; we compute counts client-side.
           (mRows ?? []).forEach((r: any) => {
             const sid = String(r.settings_id);
             counts.set(sid, (counts.get(sid) ?? 0) + 1);
@@ -202,7 +250,6 @@ export default function MobileMatchesLeaderboardPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
-      {/* Header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
           <div className="min-w-0">
@@ -224,7 +271,14 @@ export default function MobileMatchesLeaderboardPage() {
         {loading ? (
           <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm">Loading…</div>
         ) : errorMsg ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{errorMsg}</div>
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            {errorMsg}
+            <div className="mt-3">
+              <Link className="underline text-sm" href={`/m/tours/${tourId}/rounds`}>
+                Back to Rounds
+              </Link>
+            </div>
+          </div>
         ) : sorted.length === 0 ? (
           <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
             No match formats have been configured yet.
@@ -235,8 +289,7 @@ export default function MobileMatchesLeaderboardPage() {
         ) : (
           <div className="space-y-3">
             <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3 text-xs text-gray-700">
-              This page is the Matches hub. Next step will be to calculate and display the actual leaderboard points.
-              For now it shows which rounds are configured, which teams are playing, and whether match assignments exist.
+              Next step will calculate and display actual points. For now this shows which rounds are configured and which teams are playing.
             </div>
 
             {sorted.map((s) => {
