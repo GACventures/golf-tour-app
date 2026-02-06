@@ -10,63 +10,40 @@ import { supabase } from "@/lib/supabaseClient";
 
 type Tee = "M" | "F";
 
-type TourRow = { id: string; name: string | null };
+type Tour = {
+  id: string;
+  name: string | null;
+};
 
 type RoundRow = {
   id: string;
   tour_id: string;
-  course_id: string | null;
-  round_no?: number | null;
-  round_date?: string | null; // may not exist
-  played_on?: string | null; // may not exist
+  round_no: number | null;
   created_at: string | null;
+  played_on?: string | null;
+  round_date?: string | null;
+  name?: string | null;
 };
 
-type SettingsRow = {
+type PlayerRow = {
   id: string;
-  tour_id: string;
-  round_id: string;
-  group_a_id: string;
-  group_b_id: string;
-  format: "INDIVIDUAL_MATCHPLAY" | "BETTERBALL_MATCHPLAY" | "INDIVIDUAL_STABLEFORD";
-  double_points: boolean;
-};
-
-type GroupRow = { id: string; name: string | null };
-
-type PlayerRow = { id: string; name: string | null; gender?: string | null };
-
-type GroupMemberRow = {
-  group_id: string;
-  player_id: string;
-  position: number | null;
-  players: PlayerRow | PlayerRow[] | null;
-};
-
-type MatchRow = {
-  id: string;
-  settings_id: string;
-  match_no: number;
-};
-
-type MatchPlayerRow = {
-  match_id: string;
-  side: "A" | "B";
-  slot: number; // 1 or 2
-  player_id: string;
+  name: string | null;
+  gender: string | null;
 };
 
 type RoundPlayerRow = {
+  round_id: string;
   player_id: string;
   playing: boolean;
   playing_handicap: number;
 };
 
 type ScoreRow = {
+  round_id: string;
   player_id: string;
   hole_number: number;
   strokes: number | null;
-  pickup: boolean | null;
+  pickup: boolean;
 };
 
 type ParRow = {
@@ -77,34 +54,69 @@ type ParRow = {
   stroke_index: number;
 };
 
+type CourseRow = {
+  id: string;
+  name: string | null;
+};
+
+type GroupRow = {
+  id: string;
+  name: string | null;
+};
+
+type GroupMemberRow = {
+  group_id: string;
+  player_id: string;
+  position: number | null;
+  players: PlayerRow | PlayerRow[] | null;
+};
+
+type MatchFormat = "INDIVIDUAL_MATCHPLAY" | "BETTERBALL_MATCHPLAY" | "INDIVIDUAL_STABLEFORD";
+
+type MatchRoundSettingsRow = {
+  id: string;
+  round_id: string;
+  tour_id: string;
+  group_a_id: string;
+  group_b_id: string;
+  format: MatchFormat;
+  double_points: boolean;
+};
+
+type MatchRoundMatchRow = {
+  id: string;
+  settings_id: string;
+  match_no: number;
+  match_round_match_players: Array<{
+    side: "A" | "B";
+    slot: 1 | 2;
+    player_id: string;
+  }>;
+};
+
 /* ---------------- Helpers ---------------- */
 
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
-function isMissingColumnError(msg: string, column: string) {
-  const m = String(msg ?? "").toLowerCase();
-  const c = column.toLowerCase();
-  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
-}
-
-function safeText(v: any, fallback: string) {
+function safeName(v: any, fallback: string) {
   const s = String(v ?? "").trim();
   return s ? s : fallback;
 }
 
+/** Align with existing patterns: treat W/FEMALE as F */
 function normalizeTee(v: any): Tee {
   const s = String(v ?? "").trim().toUpperCase();
   const isF = s === "F" || s === "FEMALE" || s === "W" || s === "WOMEN" || s === "WOMAN";
   return isF ? "F" : "M";
 }
 
-function normalizePlayerJoin(val: any): PlayerRow | null {
-  if (!val) return null;
-  const p = Array.isArray(val) ? val[0] : val;
-  if (!p?.id) return null;
-  return { id: String(p.id), name: String(p.name ?? "").trim() || "(unnamed)", gender: p.gender ?? null };
+function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
+  if (pickup) return "P";
+  if (strokes === null || strokes === undefined) return "";
+  const n = Number(strokes);
+  return Number.isFinite(n) ? String(n) : "";
 }
 
 function pickBestRoundDateISO(r: RoundRow): string | null {
@@ -120,28 +132,26 @@ function parseDateForDisplay(s: string | null): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function fmtAuMelbourneDate(d: Date | null): string {
+// Use NZ locale without forcing timezone (mobile-first, consistent)
+function fmtDate(d: Date | null): string {
   if (!d) return "";
-  const parts = new Intl.DateTimeFormat("en-AU", {
-    timeZone: "Australia/Melbourne",
+  const parts = new Intl.DateTimeFormat("en-NZ", {
     weekday: "short",
     day: "2-digit",
     month: "short",
-    year: "numeric",
   }).formatToParts(d);
 
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`.replace(/\s+/g, " ");
+  return `${get("weekday")} ${get("day")} ${get("month")}`.replace(/\s+/g, " ");
 }
 
-function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
-  if (pickup) return "P";
-  if (strokes === null || strokes === undefined) return "";
-  const n = Number(strokes);
-  return Number.isFinite(n) ? String(n) : "";
+function isMissingColumnError(msg: string, column: string) {
+  const m = msg.toLowerCase();
+  const c = column.toLowerCase();
+  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
 }
 
-// Stableford (net) per hole
+/** Stableford (net) per hole — consistent with existing pages */
 function netStablefordPointsForHole(params: {
   rawScore: string; // "" | "P" | "number"
   par: number;
@@ -168,33 +178,11 @@ function netStablefordPointsForHole(params: {
   return Math.max(0, Math.min(pts, 10));
 }
 
-function matchplayWinnerFromHoleWinners(holeWinners: Array<"A" | "B" | "HALVED">): "A" | "B" | "TIE" {
-  let aUp = 0;
-  let bUp = 0;
-
-  for (let i = 0; i < 18; i++) {
-    const h = holeWinners[i] ?? "HALVED";
-    if (h === "A") aUp++;
-    if (h === "B") bUp++;
-
-    const diff = aUp - bUp;
-    const holesPlayed = i + 1;
-    const holesRemaining = 18 - holesPlayed;
-
-    if (Math.abs(diff) > holesRemaining) {
-      return diff > 0 ? "A" : "B";
-    }
-  }
-
-  const diff = aUp - bUp;
-  if (diff === 0) return "TIE";
-  return diff > 0 ? "A" : "B";
-}
-
-function formatShortLabel(f: SettingsRow["format"]) {
-  if (f === "INDIVIDUAL_MATCHPLAY") return "Ind MP";
-  if (f === "BETTERBALL_MATCHPLAY") return "BB MP";
-  return "Stableford";
+function formatLabelShort(fmt: MatchFormat | null): string {
+  if (!fmt) return "—";
+  if (fmt === "INDIVIDUAL_MATCHPLAY") return "Ind. M/P";
+  if (fmt === "BETTERBALL_MATCHPLAY") return "BB M/P";
+  return "Ind. Stblfd";
 }
 
 /* ---------------- Page ---------------- */
@@ -204,195 +192,217 @@ export default function MatchesLeaderboardPage() {
   const tourId = String(params?.id ?? "").trim();
 
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState("");
+  const [error, setError] = useState("");
 
-  const [tour, setTour] = useState<TourRow | null>(null);
-
+  const [tour, setTour] = useState<Tour | null>(null);
   const [rounds, setRounds] = useState<RoundRow[]>([]);
-  const [settingsByRoundId, setSettingsByRoundId] = useState<Map<string, SettingsRow>>(new Map());
+  const [settingsByRound, setSettingsByRound] = useState<Map<string, MatchRoundSettingsRow>>(new Map());
 
-  // “teams are fixed for tour”; we use the first settings row’s group_a/group_b as the canonical teams
-  const [teamIds, setTeamIds] = useState<string[]>([]);
-  const [teams, setTeams] = useState<
-    Array<{
-      id: string;
-      name: string;
-      members: Array<{ player_id: string; name: string; gender: Tee | null; orderIndex: number }>;
-    }>
-  >([]);
+  const [groupA, setGroupA] = useState<GroupRow | null>(null);
+  const [groupB, setGroupB] = useState<GroupRow | null>(null);
 
-  const [tourPlayerIds, setTourPlayerIds] = useState<string[]>([]);
-  const [warning, setWarning] = useState<string>("");
+  const [membersA, setMembersA] = useState<Array<{ playerId: string; name: string; gender: Tee | null; order: number }>>([]);
+  const [membersB, setMembersB] = useState<Array<{ playerId: string; name: string; gender: Tee | null; order: number }>>([]);
 
-  // Computed: points[playerId][roundId] and totals
-  const [pointsByRoundPlayer, setPointsByRoundPlayer] = useState<Map<string, Map<string, number>>>(new Map()); // roundId -> (playerId -> pts)
-  const [teamRoundTotals, setTeamRoundTotals] = useState<Map<string, Map<string, number>>>(new Map()); // roundId -> (teamId -> pts)
+  const [roundPlayersByRound, setRoundPlayersByRound] = useState<Map<string, Map<string, RoundPlayerRow>>>(new Map());
+  const [scoresByRound, setScoresByRound] = useState<Map<string, ScoreRow[]>>(new Map());
+
+  const [courseByRound, setCourseByRound] = useState<Map<string, { course_id: string | null; name: string }>>(new Map());
+  const [parsByCourseTeeHole, setParsByCourseTeeHole] = useState<Map<string, Map<Tee, Map<number, { par: number; si: number }>>>>(
+    new Map()
+  );
+
+  const [matchesBySettings, setMatchesBySettings] = useState<Map<string, MatchRoundMatchRow[]>>(new Map());
 
   useEffect(() => {
-    if (!tourId || !isLikelyUuid(tourId)) return;
-
     let alive = true;
 
-    async function fetchRounds(selectCols: string) {
-      return supabase
-        .from("rounds")
-        .select(selectCols)
-        .eq("tour_id", tourId)
-        .order("round_no", { ascending: true })
-        .order("created_at", { ascending: true });
+    async function loadRoundsWithFallback() {
+      // We only need ordering + ids; but we also want a display date.
+      const baseCols = "id,tour_id,round_no,created_at";
+      const cols1 = `${baseCols},round_date,played_on`;
+      const cols2 = `${baseCols},played_on`;
+
+      const q = (selectCols: string) =>
+        supabase
+          .from("rounds")
+          .select(selectCols)
+          .eq("tour_id", tourId)
+          .order("round_no", { ascending: true })
+          .order("created_at", { ascending: true });
+
+      const r1 = await q(cols1);
+      if (r1.error) {
+        if (isMissingColumnError(r1.error.message, "round_date")) {
+          const r2 = await q(cols2);
+          if (r2.error) {
+            if (isMissingColumnError(r2.error.message, "played_on")) {
+              const r3 = await q(baseCols);
+              if (r3.error) throw r3.error;
+              return (r3.data ?? []) as any as RoundRow[];
+            }
+            throw r2.error;
+          }
+          return (r2.data ?? []) as any as RoundRow[];
+        }
+        throw r1.error;
+      }
+      return (r1.data ?? []) as any as RoundRow[];
     }
 
     async function load() {
       setLoading(true);
-      setErrorMsg("");
-      setWarning("");
+      setError("");
 
       try {
+        if (!tourId || !isLikelyUuid(tourId)) throw new Error("Missing or invalid tour id.");
+
         // Tour meta
         const { data: tRow, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
 
-        // Rounds with fallback columns
-        const baseCols = "id,tour_id,course_id,round_no,created_at";
-        const cols1 = `${baseCols},round_date,played_on`;
-        const cols2 = `${baseCols},played_on`;
+        // Rounds
+        const rds = await loadRoundsWithFallback();
 
-        let rRows: any[] = [];
-        const r1 = await fetchRounds(cols1);
-        if (r1.error) {
-          if (isMissingColumnError(r1.error.message, "round_date")) {
-            const r2 = await fetchRounds(cols2);
-            if (r2.error) {
-              if (isMissingColumnError(r2.error.message, "played_on")) {
-                const r3 = await fetchRounds(baseCols);
-                if (r3.error) throw r3.error;
-                rRows = r3.data ?? [];
-              } else {
-                throw r2.error;
-              }
-            } else {
-              rRows = r2.data ?? [];
-            }
-          } else {
-            throw r1.error;
-          }
-        } else {
-          rRows = r1.data ?? [];
-        }
-
-        const roundList = (rRows ?? []) as RoundRow[];
-
-        // Match settings for this tour
-        const { data: setRows, error: setErr } = await supabase
+        // Settings for any rounds (format + teams + double points)
+        const { data: sRows, error: sErr } = await supabase
           .from("match_round_settings")
-          .select("id,tour_id,round_id,group_a_id,group_b_id,format,double_points")
+          .select("id,tour_id,round_id,group_a_id,group_b_id,format,double_points,created_at,updated_at")
           .eq("tour_id", tourId);
-        if (setErr) throw setErr;
+        if (sErr) throw sErr;
 
-        const sMap = new Map<string, SettingsRow>();
-        (setRows ?? []).forEach((s: any) => sMap.set(String(s.round_id), s as SettingsRow));
+        const sMap = new Map<string, MatchRoundSettingsRow>();
+        (sRows ?? []).forEach((r: any) => {
+          if (r?.round_id) sMap.set(String(r.round_id), r as MatchRoundSettingsRow);
+        });
 
-        // Determine canonical teams from the first configured round (if any)
-        const firstSetting = (setRows ?? [])[0] as any as SettingsRow | undefined;
-        const ids: string[] =
-          firstSetting && firstSetting.group_a_id && firstSetting.group_b_id
-            ? [String(firstSetting.group_a_id), String(firstSetting.group_b_id)]
-            : [];
+        // Determine teams (group_a/group_b) from *any* settings row (assumed consistent across rounds)
+        const anySettings = (sRows ?? [])[0] as any;
+        const groupAId = anySettings?.group_a_id ? String(anySettings.group_a_id) : "";
+        const groupBId = anySettings?.group_b_id ? String(anySettings.group_b_id) : "";
 
-        // Warn if settings vary groups across rounds (still works; but you said teams fixed)
-        if (ids.length === 2) {
-          const mismatched = (setRows ?? []).some(
-            (s: any) =>
-              String(s.group_a_id) !== ids[0] ||
-              String(s.group_b_id) !== ids[1]
-          );
-          if (mismatched) {
-            setWarning(
-              "Note: Some rounds have different team group selections than the first configured round. The leaderboard will still score each round using its configured teams."
-            );
-          }
-        }
+        let gA: GroupRow | null = null;
+        let gB: GroupRow | null = null;
 
-        // Tour players (N for stableford)
-        const { data: tpRows, error: tpErr } = await supabase.from("tour_players").select("player_id").eq("tour_id", tourId);
-        if (tpErr) throw tpErr;
-
-        const tpIds = (tpRows ?? []).map((x: any) => String(x.player_id));
-
-        // Load group names + members (canonical teams only)
-        let teamData: Array<{ id: string; name: string; members: any[] }> = [];
-        if (ids.length === 2) {
-          const { data: gRows, error: gErr } = await supabase.from("tour_groups").select("id,name").in("id", ids);
+        if (groupAId && groupBId) {
+          const { data: gRows, error: gErr } = await supabase
+            .from("tour_groups")
+            .select("id,name")
+            .in("id", [groupAId, groupBId]);
           if (gErr) throw gErr;
 
-          const gById = new Map<string, GroupRow>();
-          (gRows ?? []).forEach((g: any) => gById.set(String(g.id), { id: String(g.id), name: g.name ?? null }));
+          const byId = new Map<string, GroupRow>();
+          (gRows ?? []).forEach((g: any) => byId.set(String(g.id), { id: String(g.id), name: g.name ?? null }));
 
-          const { data: memRows, error: memErr } = await supabase
+          gA = byId.get(groupAId) ?? { id: groupAId, name: "Team A" };
+          gB = byId.get(groupBId) ?? { id: groupBId, name: "Team B" };
+        }
+
+        // Members (ordered)
+        async function loadMembers(groupId: string) {
+          const { data: mem, error: memErr } = await supabase
             .from("tour_group_members")
             .select("group_id,player_id,position,players(id,name,gender)")
-            .in("group_id", ids)
+            .eq("group_id", groupId)
             .order("position", { ascending: true, nullsFirst: true });
           if (memErr) throw memErr;
 
-          const memByGroup = new Map<string, GroupMemberRow[]>();
-          (memRows ?? []).forEach((m: any) => {
-            const gid = String(m.group_id);
-            if (!memByGroup.has(gid)) memByGroup.set(gid, []);
-            memByGroup.get(gid)!.push(m as GroupMemberRow);
-          });
-
-          teamData = ids.map((gid) => {
-            const members = (memByGroup.get(gid) ?? []).map((m: any, idx: number) => {
-              const p = normalizePlayerJoin(m.players);
+          const list = (mem ?? [])
+            .map((m: any, idx: number) => {
+              const p = Array.isArray(m.players) ? m.players[0] : m.players;
+              if (!p?.id) return null;
               return {
-                player_id: String(m.player_id ?? p?.id ?? ""),
-                name: safeText(p?.name, "(player)"),
-                gender: p?.gender ? normalizeTee(p.gender) : null,
-                orderIndex: idx,
+                playerId: String(p.id),
+                name: safeName(p.name, "(unnamed)"),
+                gender: p.gender ? normalizeTee(p.gender) : null,
+                order: Number.isFinite(Number(m.position)) ? Number(m.position) : idx + 1,
               };
-            }).filter((x: any) => !!x.player_id);
+            })
+            .filter(Boolean) as Array<{ playerId: string; name: string; gender: Tee | null; order: number }>;
 
-            return {
-              id: gid,
-              name: safeText(gById.get(gid)?.name, "Team"),
-              members,
-            };
+          // stable sort by order then name
+          list.sort((a, b) => (a.order !== b.order ? a.order - b.order : a.name.localeCompare(b.name)));
+          return list;
+        }
+
+        let memA: Array<{ playerId: string; name: string; gender: Tee | null; order: number }> = [];
+        let memB: Array<{ playerId: string; name: string; gender: Tee | null; order: number }> = [];
+
+        if (gA?.id && gB?.id) {
+          memA = await loadMembers(gA.id);
+          memB = await loadMembers(gB.id);
+        }
+
+        // Round players, scores, courses+pars for all rounds we might need
+        const roundIds = rds.map((r) => String(r.id));
+        const allPlayerIds = Array.from(new Set([...memA.map((x) => x.playerId), ...memB.map((x) => x.playerId)]));
+
+        // course_id per round + course names (for pars lookup)
+        const { data: rCourseRows, error: rCourseErr } = await supabase
+          .from("rounds")
+          .select("id,course_id,courses(name)")
+          .eq("tour_id", tourId);
+        if (rCourseErr) throw rCourseErr;
+
+        const rb = new Map<string, { course_id: string | null; name: string }>();
+        (rCourseRows ?? []).forEach((r: any) => {
+          const cid = r.course_id ? String(r.course_id) : null;
+          const c = r.courses;
+          const nm = Array.isArray(c) ? c?.[0]?.name : c?.name;
+          rb.set(String(r.id), { course_id: cid, name: safeName(nm, "Course") });
+        });
+
+        // round_players for all rounds & only our team players (fast + consistent)
+        const rpByRound = new Map<string, Map<string, RoundPlayerRow>>();
+        if (roundIds.length > 0 && allPlayerIds.length > 0) {
+          const { data: rpRows, error: rpErr } = await supabase
+            .from("round_players")
+            .select("round_id,player_id,playing,playing_handicap")
+            .in("round_id", roundIds)
+            .in("player_id", allPlayerIds);
+          if (rpErr) throw rpErr;
+
+          (rpRows ?? []).forEach((x: any) => {
+            const rid = String(x.round_id);
+            if (!rpByRound.has(rid)) rpByRound.set(rid, new Map());
+            rpByRound.get(rid)!.set(String(x.player_id), {
+              round_id: rid,
+              player_id: String(x.player_id),
+              playing: x.playing === true,
+              playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : 0,
+            });
           });
         }
 
-        if (!alive) return;
+        // scores per round (avoid pagination by fetching per round)
+        const scByRound = new Map<string, ScoreRow[]>();
+        if (roundIds.length > 0 && allPlayerIds.length > 0) {
+          for (const rid of roundIds) {
+            const { data: sRows2, error: sErr2 } = await supabase
+              .from("scores")
+              .select("round_id,player_id,hole_number,strokes,pickup")
+              .eq("round_id", rid)
+              .in("player_id", allPlayerIds);
 
-        setTour(tRow as TourRow);
-        setRounds(roundList);
-        setSettingsByRoundId(sMap);
-        setTeamIds(ids);
-        setTeams(teamData as any);
-        setTourPlayerIds(tpIds);
+            if (sErr2) throw sErr2;
 
-        // If no settings at all, stop here (UI will show empty state)
-        if ((setRows ?? []).length === 0) {
-          setPointsByRoundPlayer(new Map());
-          setTeamRoundTotals(new Map());
-          setLoading(false);
-          return;
+            const list: ScoreRow[] =
+              (sRows2 ?? []).map((s: any) => ({
+                round_id: String(s.round_id),
+                player_id: String(s.player_id),
+                hole_number: Number(s.hole_number),
+                strokes: s.strokes === null || s.strokes === undefined ? null : Number(s.strokes),
+                pickup: s.pickup === true,
+              })) ?? [];
+
+            scByRound.set(rid, list);
+          }
         }
 
-        // ---- Compute points for each configured round ----
-        // Preload pars for all relevant courses
-        const configuredRoundIds = Array.from(sMap.keys());
-        const roundsById = new Map<string, RoundRow>();
-        roundList.forEach((r) => roundsById.set(r.id, r));
+        // pars for all courses used by those rounds
+        const courseIds = Array.from(new Set(Array.from(rb.values()).map((x) => x.course_id).filter(Boolean))) as string[];
+        const parsBy = new Map<string, Map<Tee, Map<number, { par: number; si: number }>>>();
 
-        const courseIds = Array.from(
-          new Set(
-            configuredRoundIds
-              .map((rid) => roundsById.get(rid)?.course_id ?? null)
-              .filter(Boolean) as string[]
-          )
-        );
-
-        const parsByCourse = new Map<string, Map<Tee, Map<number, { par: number; si: number }>>>();
         if (courseIds.length > 0) {
           const { data: pRows, error: pErr } = await supabase
             .from("pars")
@@ -405,362 +415,86 @@ export default function MatchesLeaderboardPage() {
           (pRows ?? []).forEach((p: any) => {
             const cid = String(p.course_id);
             const tee: Tee = normalizeTee(p.tee);
-            const hole = Number(p.hole_number);
-            if (!(hole >= 1 && hole <= 18)) return;
-
-            if (!parsByCourse.has(cid)) parsByCourse.set(cid, new Map());
-            const byTee = parsByCourse.get(cid)!;
-            if (!byTee.has(tee)) byTee.set(tee, new Map());
-            byTee.get(tee)!.set(hole, { par: Number(p.par), si: Number(p.stroke_index) });
+            if (!parsBy.has(cid)) parsBy.set(cid, new Map());
+            if (!parsBy.get(cid)!.has(tee)) parsBy.get(cid)!.set(tee, new Map());
+            parsBy.get(cid)!.get(tee)!.set(Number(p.hole_number), { par: Number(p.par), si: Number(p.stroke_index) });
           });
         }
 
-        // Load matches + match players for all settings (for matchplay formats)
-        const settingIds = (setRows ?? []).map((s: any) => String(s.id));
-        const { data: matchRows, error: mErr } = await supabase
-          .from("match_round_matches")
-          .select("id,settings_id,match_no")
-          .in("settings_id", settingIds)
-          .order("match_no", { ascending: true });
-        if (mErr) throw mErr;
+        // matches per settings (only needed for matchplay formats)
+        const matchesMap = new Map<string, MatchRoundMatchRow[]>();
+        const settingIds = Array.from(new Set((sRows ?? []).map((x: any) => String(x.id)).filter(Boolean)));
 
-        const matchesBySettings = new Map<string, MatchRow[]>();
-        (matchRows ?? []).forEach((m: any) => {
-          const sid = String(m.settings_id);
-          if (!matchesBySettings.has(sid)) matchesBySettings.set(sid, []);
-          matchesBySettings.get(sid)!.push({ id: String(m.id), settings_id: sid, match_no: Number(m.match_no) });
-        });
+        if (settingIds.length > 0) {
+          // Load all matches for these settings
+          const { data: mRows, error: mErr } = await supabase
+            .from("match_round_matches")
+            .select("id,settings_id,match_no,match_round_match_players(side,slot,player_id)")
+            .in("settings_id", settingIds)
+            .order("match_no", { ascending: true });
+          if (mErr) throw mErr;
 
-        const allMatchIds = (matchRows ?? []).map((m: any) => String(m.id));
-        const matchPlayersByMatch = new Map<string, MatchPlayerRow[]>();
-        if (allMatchIds.length > 0) {
-          const { data: mpRows, error: mpErr } = await supabase
-            .from("match_round_match_players")
-            .select("match_id,side,slot,player_id")
-            .in("match_id", allMatchIds);
-          if (mpErr) throw mpErr;
-
-          (mpRows ?? []).forEach((x: any) => {
-            const mid = String(x.match_id);
-            if (!matchPlayersByMatch.has(mid)) matchPlayersByMatch.set(mid, []);
-            matchPlayersByMatch.get(mid)!.push({
-              match_id: mid,
-              side: String(x.side) as "A" | "B",
-              slot: Number(x.slot),
-              player_id: String(x.player_id),
+          (mRows ?? []).forEach((m: any) => {
+            const sid = String(m.settings_id);
+            if (!matchesMap.has(sid)) matchesMap.set(sid, []);
+            matchesMap.get(sid)!.push({
+              id: String(m.id),
+              settings_id: sid,
+              match_no: Number(m.match_no),
+              match_round_match_players: (m.match_round_match_players ?? []).map((mp: any) => ({
+                side: String(mp.side) as "A" | "B",
+                slot: Number(mp.slot) as 1 | 2,
+                player_id: String(mp.player_id),
+              })),
             });
           });
-        }
 
-        // Players info needed: all team members + all tour players (stableford)
-        const teamMemberIds = new Set<string>();
-        teamData.forEach((t) => t.members.forEach((m: any) => teamMemberIds.add(String(m.player_id))));
-        const allNeededPlayerIds = new Set<string>(tpIds);
-        teamMemberIds.forEach((id) => allNeededPlayerIds.add(id));
-
-        // Fetch player meta (gender for tee)
-        const allPlayers = Array.from(allNeededPlayerIds);
-        const playersById = new Map<string, { id: string; name: string; gender: Tee | null }>();
-        if (allPlayers.length > 0) {
-          const { data: plRows, error: plErr } = await supabase
-            .from("players")
-            .select("id,name,gender")
-            .in("id", allPlayers);
-          if (plErr) throw plErr;
-
-          (plRows ?? []).forEach((p: any) => {
-            playersById.set(String(p.id), {
-              id: String(p.id),
-              name: safeText(p.name, "(player)"),
-              gender: p.gender ? normalizeTee(p.gender) : null,
-            });
-          });
-        }
-
-        // Compute per-round points
-        const roundToPlayerPts = new Map<string, Map<string, number>>();
-        const roundToTeamPts = new Map<string, Map<string, number>>();
-
-        // helper: assign team memberships
-        const teamByPlayer = new Map<string, string>(); // playerId -> teamId
-        teamData.forEach((t) => t.members.forEach((m: any) => teamByPlayer.set(String(m.player_id), String(t.id))));
-
-        // score/handicap fetch per round (avoid pagination patterns)
-        for (const rid of configuredRoundIds) {
-          const set = sMap.get(rid);
-          if (!set) continue;
-
-          const rr = roundsById.get(rid);
-          const courseId = rr?.course_id ?? null;
-          const coursePars = courseId ? parsByCourse.get(courseId) ?? null : null;
-
-          const mult = set.double_points ? 2 : 1;
-
-          // Determine which players are involved for this round’s scoring
-          // Matchplay formats: only players assigned into matches
-          // Stableford: all tour players (N is all tour players)
-          let involvedPlayerIds: string[] = [];
-          if (set.format === "INDIVIDUAL_STABLEFORD") {
-            involvedPlayerIds = tpIds.slice();
-          } else {
-            const ms = matchesBySettings.get(set.id) ?? [];
-            const pidSet = new Set<string>();
-            for (const m of ms) {
-              (matchPlayersByMatch.get(m.id) ?? []).forEach((x) => pidSet.add(String(x.player_id)));
-            }
-            involvedPlayerIds = Array.from(pidSet);
+          // Keep each settings group sorted
+          for (const [sid, list] of matchesMap.entries()) {
+            list.sort((a, b) => a.match_no - b.match_no);
+            matchesMap.set(sid, list);
           }
-
-          // Round players (handicap + playing)
-          const rpMap = new Map<string, RoundPlayerRow>();
-          if (involvedPlayerIds.length > 0) {
-            const { data: rpRows, error: rpErr } = await supabase
-              .from("round_players")
-              .select("player_id,playing,playing_handicap")
-              .eq("round_id", rid)
-              .in("player_id", involvedPlayerIds);
-            if (rpErr) throw rpErr;
-
-            (rpRows ?? []).forEach((rp: any) => {
-              rpMap.set(String(rp.player_id), {
-                player_id: String(rp.player_id),
-                playing: rp.playing === true,
-                playing_handicap: Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0,
-              });
-            });
-          }
-
-          // Scores
-          const scoreMap = new Map<string, ScoreRow>(); // key player|hole
-          const hasScore = new Set<string>();
-          if (involvedPlayerIds.length > 0) {
-            const { data: sRows, error: sErr } = await supabase
-              .from("scores")
-              .select("player_id,hole_number,strokes,pickup")
-              .eq("round_id", rid)
-              .in("player_id", involvedPlayerIds);
-            if (sErr) throw sErr;
-
-            (sRows ?? []).forEach((s: any) => {
-              const pid = String(s.player_id);
-              const hole = Number(s.hole_number);
-              hasScore.add(pid);
-              scoreMap.set(`${pid}|${hole}`, {
-                player_id: pid,
-                hole_number: hole,
-                strokes: s.strokes === null || s.strokes === undefined ? null : Number(s.strokes),
-                pickup: s.pickup === true ? true : s.pickup === false ? false : (s.pickup ?? null),
-              });
-            });
-          }
-
-          // Stableford: treat “playing” as true if any score exists (so leaderboard works even if playing flag wasn’t set)
-          if (set.format === "INDIVIDUAL_STABLEFORD") {
-            for (const pid of involvedPlayerIds) {
-              const cur = rpMap.get(pid);
-              if (!cur && hasScore.has(pid)) {
-                rpMap.set(pid, { player_id: pid, playing: true, playing_handicap: 0 });
-              } else if (cur && cur.playing !== true && hasScore.has(pid)) {
-                rpMap.set(pid, { ...cur, playing: true });
-              }
-            }
-          }
-
-          // Compute per-player per-hole stableford pts (net)
-          const ptsByPlayerHole = new Map<string, number>();
-          if (coursePars) {
-            for (const pid of involvedPlayerIds) {
-              const rp = rpMap.get(pid);
-              if (!rp?.playing) continue;
-
-              const p = playersById.get(pid);
-              const tee: Tee = p?.gender ? p.gender : "M";
-
-              const pars =
-                coursePars.get(tee) || coursePars.get("M") || coursePars.get("F") || null;
-              if (!pars) continue;
-
-              const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
-
-              for (let h = 1; h <= 18; h++) {
-                const pr = pars.get(h);
-                if (!pr) continue;
-
-                const sc = scoreMap.get(`${pid}|${h}`);
-                if (!sc) continue;
-
-                const raw = normalizeRawScore(sc.strokes, sc.pickup);
-                const pts = netStablefordPointsForHole({
-                  rawScore: raw,
-                  par: pr.par,
-                  strokeIndex: pr.si,
-                  playingHandicap: hcp,
-                });
-
-                ptsByPlayerHole.set(`${pid}|${h}`, pts);
-              }
-            }
-          }
-
-          // Initialize per-player points for this round (only for team members; others can exist but we’ll keep them too)
-          const playerPts = new Map<string, number>();
-
-          // Matchplay formats
-          if (set.format === "INDIVIDUAL_MATCHPLAY" || set.format === "BETTERBALL_MATCHPLAY") {
-            const ms = matchesBySettings.get(set.id) ?? [];
-            for (const m of ms) {
-              const assigns = matchPlayersByMatch.get(m.id) ?? [];
-
-              const A1 = assigns.find((x) => x.side === "A" && x.slot === 1)?.player_id ?? "";
-              const A2 = assigns.find((x) => x.side === "A" && x.slot === 2)?.player_id ?? "";
-              const B1 = assigns.find((x) => x.side === "B" && x.slot === 1)?.player_id ?? "";
-              const B2 = assigns.find((x) => x.side === "B" && x.slot === 2)?.player_id ?? "";
-
-              const isBetterBall = set.format === "BETTERBALL_MATCHPLAY";
-
-              const holeWinners: Array<"A" | "B" | "HALVED"> = [];
-
-              for (let h = 1; h <= 18; h++) {
-                const aPts = isBetterBall
-                  ? Math.max(ptsByPlayerHole.get(`${A1}|${h}`) ?? 0, ptsByPlayerHole.get(`${A2}|${h}`) ?? 0)
-                  : ptsByPlayerHole.get(`${A1}|${h}`) ?? 0;
-
-                const bPts = isBetterBall
-                  ? Math.max(ptsByPlayerHole.get(`${B1}|${h}`) ?? 0, ptsByPlayerHole.get(`${B2}|${h}`) ?? 0)
-                  : ptsByPlayerHole.get(`${B1}|${h}`) ?? 0;
-
-                if (aPts > bPts) holeWinners.push("A");
-                else if (bPts > aPts) holeWinners.push("B");
-                else holeWinners.push("HALVED");
-              }
-
-              const winner = matchplayWinnerFromHoleWinners(holeWinners);
-              const winPts = 1 * mult;
-              const tiePts = 0.5 * mult;
-
-              if (!isBetterBall) {
-                if (A1) playerPts.set(A1, (playerPts.get(A1) ?? 0) + (winner === "A" ? winPts : winner === "TIE" ? tiePts : 0));
-                if (B1) playerPts.set(B1, (playerPts.get(B1) ?? 0) + (winner === "B" ? winPts : winner === "TIE" ? tiePts : 0));
-              } else {
-                const aAward = winner === "A" ? winPts : winner === "TIE" ? tiePts : 0;
-                const bAward = winner === "B" ? winPts : winner === "TIE" ? tiePts : 0;
-
-                if (A1) playerPts.set(A1, (playerPts.get(A1) ?? 0) + aAward);
-                if (A2) playerPts.set(A2, (playerPts.get(A2) ?? 0) + aAward);
-                if (B1) playerPts.set(B1, (playerPts.get(B1) ?? 0) + bAward);
-                if (B2) playerPts.set(B2, (playerPts.get(B2) ?? 0) + bAward);
-              }
-            }
-          }
-
-          // Stableford format
-          if (set.format === "INDIVIDUAL_STABLEFORD") {
-            const N = tpIds.length;
-            const target = Math.floor(N / 2);
-
-            // totals for all tour players who are “playing” (or have scores)
-            const totals: Array<{ player_id: string; total: number }> = [];
-            for (const pid of tpIds) {
-              const rp = rpMap.get(pid);
-              if (!rp?.playing) continue;
-
-              let sum = 0;
-              for (let h = 1; h <= 18; h++) sum += ptsByPlayerHole.get(`${pid}|${h}`) ?? 0;
-              totals.push({ player_id: pid, total: sum });
-            }
-
-            totals.sort((a, b) => b.total - a.total || a.player_id.localeCompare(b.player_id));
-
-            if (target > 0 && totals.length > 0) {
-              const idx = Math.min(target - 1, totals.length - 1);
-              const cutoff = totals[idx]?.total ?? null;
-
-              if (cutoff !== null) {
-                const above = totals.filter((x) => x.total > cutoff);
-                const at = totals.filter((x) => x.total === cutoff);
-
-                const countAbove = above.length;
-                const remaining = target - countAbove;
-
-                // award 1 to all above
-                for (const x of above) {
-                  playerPts.set(x.player_id, (playerPts.get(x.player_id) ?? 0) + 1 * mult);
-                }
-
-                if (remaining > 0 && at.length > 0) {
-                  const frac = remaining / at.length;
-                  for (const x of at) {
-                    playerPts.set(x.player_id, (playerPts.get(x.player_id) ?? 0) + frac * mult);
-                  }
-                }
-              }
-            }
-          }
-
-          // Team totals for this round (canonical teams only)
-          const tPts = new Map<string, number>();
-          for (const t of teamData) tPts.set(t.id, 0);
-
-          for (const [pid, pts] of playerPts.entries()) {
-            const tid = teamByPlayer.get(pid);
-            if (tid) tPts.set(tid, (tPts.get(tid) ?? 0) + pts);
-          }
-
-          roundToPlayerPts.set(rid, playerPts);
-          roundToTeamPts.set(rid, tPts);
         }
 
         if (!alive) return;
 
-        setPointsByRoundPlayer(roundToPlayerPts);
-        setTeamRoundTotals(roundToTeamPts);
+        setTour(tRow as Tour);
+        setRounds(rds);
+        setSettingsByRound(sMap);
 
-        // Warn if pars are missing for any configured round course
-        const missingParsRounds = configuredRoundIds.filter((rid) => {
-          const rr = roundsById.get(rid);
-          const cid = rr?.course_id ?? null;
-          if (!cid) return true;
-          const byTee = parsByCourse.get(cid);
-          // require at least one tee map with 18 holes to be considered “present”
-          const m = byTee?.get("M");
-          const f = byTee?.get("F");
-          const mOk = m && m.size >= 18;
-          const fOk = f && f.size >= 18;
-          return !(mOk || fOk);
-        });
+        setGroupA(gA);
+        setGroupB(gB);
 
-        if (missingParsRounds.length > 0) {
-          setWarning((prev) =>
-            [
-              prev,
-              prev ? "" : "",
-              `Warning: Some configured rounds may not score correctly because pars are missing (rounds: ${missingParsRounds
-                .map((r) => {
-                  const rr = roundsById.get(r);
-                  return rr?.round_no != null ? `R${rr.round_no}` : r.slice(0, 6);
-                })
-                .join(", ")}).`,
-            ]
-              .filter(Boolean)
-              .join(" ")
-              .trim()
-          );
-        }
+        setMembersA(memA);
+        setMembersB(memB);
+
+        setRoundPlayersByRound(rpByRound);
+        setScoresByRound(scByRound);
+
+        setCourseByRound(rb);
+        setParsByCourseTeeHole(parsBy);
+
+        setMatchesBySettings(matchesMap);
       } catch (e: any) {
         if (!alive) return;
-        setErrorMsg(e?.message ?? "Failed to load matches leaderboard.");
+        setError(e?.message ?? "Failed to load matches leaderboard.");
       } finally {
-        if (alive) setLoading(false);
+        if (!alive) return;
+        setLoading(false);
       }
     }
 
-    void load();
+    if (tourId) void load();
+    else {
+      setError("Missing tour id in route.");
+      setLoading(false);
+    }
+
     return () => {
       alive = false;
     };
   }, [tourId]);
 
-  // Sorted rounds for columns (all rounds, but we show “—” if not configured)
   const sortedRounds = useMemo(() => {
     const arr = [...rounds];
     arr.sort((a, b) => {
@@ -774,70 +508,350 @@ export default function MatchesLeaderboardPage() {
       const db = parseDateForDisplay(b.created_at)?.getTime() ?? 0;
       if (da !== db) return da - db;
 
-      return a.id.localeCompare(b.id);
+      return String(a.id).localeCompare(String(b.id));
     });
     return arr;
   }, [rounds]);
 
-  const configuredRoundIds = useMemo(() => new Set(Array.from(settingsByRoundId.keys())), [settingsByRoundId]);
+  // Quick lookup maps
+  const playerMeta = useMemo(() => {
+    const m = new Map<string, { name: string; gender: Tee | null; team: "A" | "B" }>();
+    for (const p of membersA) m.set(p.playerId, { name: p.name, gender: p.gender, team: "A" });
+    for (const p of membersB) m.set(p.playerId, { name: p.name, gender: p.gender, team: "B" });
+    return m;
+  }, [membersA, membersB]);
 
-  // Totals by player/team
-  const totals = useMemo(() => {
-    const playerTotal = new Map<string, number>();
-    const teamTotal = new Map<string, number>();
-    teams.forEach((t) => teamTotal.set(t.id, 0));
+  const scoreByRoundPlayerHole = useMemo(() => {
+    const outer = new Map<string, Map<string, ScoreRow>>(); // round_id -> (player|hole -> score)
+    for (const [rid, list] of scoresByRound.entries()) {
+      const inner = new Map<string, ScoreRow>();
+      for (const s of list) inner.set(`${s.player_id}|${s.hole_number}`, s);
+      outer.set(rid, inner);
+    }
+    return outer;
+  }, [scoresByRound]);
 
-    for (const [rid, pMap] of pointsByRoundPlayer.entries()) {
-      for (const [pid, pts] of pMap.entries()) {
-        playerTotal.set(pid, (playerTotal.get(pid) ?? 0) + pts);
+  function getParSi(courseId: string | null, tee: Tee, hole: number) {
+    if (!courseId) return null;
+    const byCourse = parsByCourseTeeHole.get(courseId);
+    if (!byCourse) return null;
+    const byTee = byCourse.get(tee) || byCourse.get("M") || byCourse.get("F") || null;
+    if (!byTee) return null;
+    return byTee.get(hole) ?? null;
+  }
+
+  function stablefordTotalForRoundPlayer(roundId: string, playerId: string): number {
+    const rpMap = roundPlayersByRound.get(roundId);
+    const rp = rpMap?.get(playerId);
+    if (!rp?.playing) return 0;
+
+    const courseId = courseByRound.get(roundId)?.course_id ?? null;
+    const tee = playerMeta.get(playerId)?.gender ?? "M";
+    const scoreMap = scoreByRoundPlayerHole.get(roundId);
+    if (!scoreMap || !courseId) return 0;
+
+    let sum = 0;
+    for (let h = 1; h <= 18; h++) {
+      const pr = getParSi(courseId, tee, h);
+      if (!pr) continue;
+
+      const sc = scoreMap.get(`${playerId}|${h}`);
+      if (!sc) continue;
+
+      const raw = normalizeRawScore(sc.strokes, sc.pickup);
+      const pts = netStablefordPointsForHole({
+        rawScore: raw,
+        par: pr.par,
+        strokeIndex: pr.si,
+        playingHandicap: rp.playing_handicap || 0,
+      });
+
+      sum += pts;
+    }
+    return sum;
+  }
+
+  // Matchplay hole win based on stableford points (P=0; 0/0 halves)
+  function matchplayPointsForRound(roundId: string, settings: MatchRoundSettingsRow, matches: MatchRoundMatchRow[]) {
+    const pointsByPlayer = new Map<string, number>();
+
+    // defaults
+    for (const p of membersA) pointsByPlayer.set(p.playerId, 0);
+    for (const p of membersB) pointsByPlayer.set(p.playerId, 0);
+
+    const mult = settings.double_points ? 2 : 1;
+
+    for (const match of matches) {
+      const mp = match.match_round_match_players ?? [];
+      const a1 = mp.find((x) => x.side === "A" && x.slot === 1)?.player_id ?? null;
+      const a2 = mp.find((x) => x.side === "A" && x.slot === 2)?.player_id ?? null;
+      const b1 = mp.find((x) => x.side === "B" && x.slot === 1)?.player_id ?? null;
+      const b2 = mp.find((x) => x.side === "B" && x.slot === 2)?.player_id ?? null;
+
+      // INDIVIDUAL_MATCHPLAY expects a1 and b1
+      // BETTERBALL_MATCHPLAY expects a1,a2,b1,b2
+      if (settings.format === "INDIVIDUAL_MATCHPLAY") {
+        if (!a1 || !b1) continue;
+
+        const res = computeMatchplayResult(roundId, [{ side: "A", playerIds: [a1] }, { side: "B", playerIds: [b1] }]);
+        // win=1 lose=0 tie=0.5
+        applyMatchResultPoints(pointsByPlayer, res, mult);
+      } else if (settings.format === "BETTERBALL_MATCHPLAY") {
+        if (!a1 || !a2 || !b1 || !b2) continue;
+
+        const res = computeMatchplayResult(roundId, [
+          { side: "A", playerIds: [a1, a2] },
+          { side: "B", playerIds: [b1, b2] },
+        ]);
+        applyMatchResultPoints(pointsByPlayer, res, mult);
       }
     }
 
-    for (const t of teams) {
-      let sum = 0;
-      for (const m of t.members) sum += playerTotal.get(m.player_id) ?? 0;
-      teamTotal.set(t.id, sum);
+    return pointsByPlayer;
+  }
+
+  function computeMatchplayResult(
+    roundId: string,
+    sides: Array<{ side: "A" | "B"; playerIds: string[] }>
+  ): { sideAPlayers: string[]; sideBPlayers: string[]; winner: "A" | "B" | "TIE" } {
+    const courseId = courseByRound.get(roundId)?.course_id ?? null;
+    const scoreMap = scoreByRoundPlayerHole.get(roundId);
+    if (!courseId || !scoreMap) {
+      return { sideAPlayers: sides[0].playerIds, sideBPlayers: sides[1].playerIds, winner: "TIE" };
     }
 
-    return { playerTotal, teamTotal };
-  }, [pointsByRoundPlayer, teams]);
+    const rpMap = roundPlayersByRound.get(roundId) ?? new Map<string, RoundPlayerRow>();
 
-  const sortedTeams = useMemo(() => {
-    const arr = [...teams];
-    arr.sort((a, b) => {
-      const ta = totals.teamTotal.get(a.id) ?? 0;
-      const tb = totals.teamTotal.get(b.id) ?? 0;
-      if (tb !== ta) return tb - ta;
-      return a.name.localeCompare(b.name);
-    });
-    return arr;
-  }, [teams, totals.teamTotal]);
+    // Compute hole-by-hole best stableford for each side (individual = that player)
+    let aUp = 0;
+    for (let h = 1; h <= 18; h++) {
+      const aPts = bestSideStablefordForHole(roundId, courseId, scoreMap, rpMap, sides[0].playerIds, h);
+      const bPts = bestSideStablefordForHole(roundId, courseId, scoreMap, rpMap, sides[1].playerIds, h);
 
-  function roundLabel(r: RoundRow) {
-    const rn = r.round_no ?? null;
-    const base = rn != null ? `R${rn}` : "R";
-    const set = settingsByRoundId.get(r.id);
-    return set ? `${base} (${formatShortLabel(set.format)})` : base;
+      if (aPts > bPts) aUp += 1;
+      else if (bPts > aPts) aUp -= 1;
+      // else halved
+    }
+
+    const winner: "A" | "B" | "TIE" = aUp > 0 ? "A" : aUp < 0 ? "B" : "TIE";
+    return { sideAPlayers: sides[0].playerIds, sideBPlayers: sides[1].playerIds, winner };
   }
 
-  function formatPts(n: number) {
-    // show halves and thirds cleanly
-    const rounded = Math.round(n * 1000) / 1000;
-    if (Number.isInteger(rounded)) return String(rounded);
-    // common fractions
-    const twice = Math.round(rounded * 2);
-    if (Math.abs(rounded - twice / 2) < 1e-9) return (twice / 2).toFixed(1);
-    return String(rounded);
+  function bestSideStablefordForHole(
+    roundId: string,
+    courseId: string,
+    scoreMap: Map<string, ScoreRow>,
+    rpMap: Map<string, RoundPlayerRow>,
+    playerIds: string[],
+    hole: number
+  ) {
+    let best = 0;
+
+    for (const pid of playerIds) {
+      const rp = rpMap.get(pid);
+      if (!rp?.playing) continue;
+
+      const tee = playerMeta.get(pid)?.gender ?? "M";
+      const pr = getParSi(courseId, tee, hole);
+      if (!pr) continue;
+
+      const sc = scoreMap.get(`${pid}|${hole}`);
+      if (!sc) continue;
+
+      const raw = normalizeRawScore(sc.strokes, sc.pickup);
+      const pts = netStablefordPointsForHole({
+        rawScore: raw,
+        par: pr.par,
+        strokeIndex: pr.si,
+        playingHandicap: rp.playing_handicap || 0,
+      });
+
+      if (pts > best) best = pts;
+    }
+
+    return best;
   }
+
+  function applyMatchResultPoints(pointsByPlayer: Map<string, number>, res: { sideAPlayers: string[]; sideBPlayers: string[]; winner: "A" | "B" | "TIE" }, mult: number) {
+    if (res.winner === "TIE") {
+      for (const pid of res.sideAPlayers) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + 0.5 * mult);
+      for (const pid of res.sideBPlayers) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + 0.5 * mult);
+      return;
+    }
+
+    const winSide = res.winner;
+    const loseSide = winSide === "A" ? "B" : "A";
+
+    const winners = winSide === "A" ? res.sideAPlayers : res.sideBPlayers;
+    const losers = loseSide === "A" ? res.sideAPlayers : res.sideBPlayers;
+
+    for (const pid of winners) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + 1 * mult);
+    for (const pid of losers) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + 0 * mult);
+  }
+
+  function stablefordWinnersPointsForRound(roundId: string, settings: MatchRoundSettingsRow) {
+    const mult = settings.double_points ? 2 : 1;
+
+    const allTourPlayerIds = Array.from(playerMeta.keys());
+    const rpMap = roundPlayersByRound.get(roundId) ?? new Map<string, RoundPlayerRow>();
+
+    // Only players marked playing contribute
+    const playingIds = allTourPlayerIds.filter((pid) => rpMap.get(pid)?.playing);
+
+    // No players playing: nobody scores
+    const pointsByPlayer = new Map<string, number>();
+    for (const pid of allTourPlayerIds) pointsByPlayer.set(pid, 0);
+    if (playingIds.length === 0) return pointsByPlayer;
+
+    const totals = playingIds.map((pid) => ({
+      playerId: pid,
+      total: stablefordTotalForRoundPlayer(roundId, pid),
+    }));
+
+    // winners target = N/2 where N = all players on tour (your rule)
+    const N = allTourPlayerIds.length;
+    const target = Math.floor(N / 2);
+
+    // Sort descending by total
+    totals.sort((a, b) => b.total - a.total);
+
+    if (target <= 0) return pointsByPlayer;
+
+    // Determine cutoff at position target (1-indexed)
+    const above = totals.filter((x) => x.total > (totals[target - 1]?.total ?? -Infinity));
+    const cutoffScore = totals[target - 1]?.total ?? null;
+    const atCutoff = cutoffScore === null ? [] : totals.filter((x) => x.total === cutoffScore);
+
+    // Points:
+    // - Above cutoff: 1
+    // - At cutoff: 1 if above+atCutoff <= target else fractional so total awarded = target
+    const aboveCount = above.length;
+    const remaining = target - aboveCount;
+
+    let cutoffPtsEach = 0;
+    if (cutoffScore !== null && atCutoff.length > 0) {
+      if (aboveCount + atCutoff.length <= target) cutoffPtsEach = 1;
+      else cutoffPtsEach = remaining > 0 ? remaining / atCutoff.length : 0;
+    }
+
+    for (const pid of allTourPlayerIds) pointsByPlayer.set(pid, 0);
+
+    for (const x of above) pointsByPlayer.set(x.playerId, 1 * mult);
+    for (const x of atCutoff) pointsByPlayer.set(x.playerId, cutoffPtsEach * mult);
+
+    return pointsByPlayer;
+  }
+
+  const computed = useMemo(() => {
+    // Points per player per round; totals per player + per team
+    const roundCols = sortedRounds.map((r, idx) => ({
+      roundId: r.id,
+      label: `R${r.round_no ?? idx + 1}`,
+      dateLabel: fmtDate(parseDateForDisplay(pickBestRoundDateISO(r))),
+      format: settingsByRound.get(r.id)?.format ?? null,
+      formatShort: formatLabelShort(settingsByRound.get(r.id)?.format ?? null),
+      hasSettings: settingsByRound.has(r.id),
+    }));
+
+    const playerIdsA = membersA.map((m) => m.playerId);
+    const playerIdsB = membersB.map((m) => m.playerId);
+
+    const allPlayerIds = [...playerIdsA, ...playerIdsB];
+
+    // Initialize structures
+    const ptsByPlayerRound = new Map<string, Map<string, number>>(); // player -> (roundId -> pts)
+    const totalByPlayer = new Map<string, number>();
+    const totalByTeam = new Map<"A" | "B", number>([
+      ["A", 0],
+      ["B", 0],
+    ]);
+    const teamByRound = new Map<string, { A: number; B: number }>();
+
+    for (const pid of allPlayerIds) {
+      ptsByPlayerRound.set(pid, new Map());
+      totalByPlayer.set(pid, 0);
+    }
+
+    for (const col of roundCols) {
+      const rid = col.roundId;
+      const settings = settingsByRound.get(rid) ?? null;
+
+      const perPlayerPoints = new Map<string, number>();
+      for (const pid of allPlayerIds) perPlayerPoints.set(pid, 0);
+
+      if (settings) {
+        if (settings.format === "INDIVIDUAL_STABLEFORD") {
+          const m = stablefordWinnersPointsForRound(rid, settings);
+          for (const [pid, v] of m.entries()) perPlayerPoints.set(pid, v);
+        } else {
+          // matchplay formats
+          const matches = matchesBySettings.get(settings.id) ?? [];
+          const m = matchplayPointsForRound(rid, settings, matches);
+          for (const [pid, v] of m.entries()) perPlayerPoints.set(pid, v);
+        }
+      }
+
+      // Fill by player, compute team sums
+      let sumA = 0;
+      let sumB = 0;
+
+      for (const pid of allPlayerIds) {
+        const v = perPlayerPoints.get(pid) ?? 0;
+        ptsByPlayerRound.get(pid)!.set(rid, v);
+        totalByPlayer.set(pid, (totalByPlayer.get(pid) || 0) + v);
+
+        const tm = playerMeta.get(pid)?.team ?? null;
+        if (tm === "A") sumA += v;
+        else if (tm === "B") sumB += v;
+      }
+
+      teamByRound.set(rid, { A: sumA, B: sumB });
+      totalByTeam.set("A", (totalByTeam.get("A") || 0) + sumA);
+      totalByTeam.set("B", (totalByTeam.get("B") || 0) + sumB);
+    }
+
+    return {
+      roundCols,
+      ptsByPlayerRound,
+      totalByPlayer,
+      totalByTeam,
+      teamByRound,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortedRounds, settingsByRound, membersA, membersB, playerMeta, matchesBySettings, roundPlayersByRound, scoresByRound, courseByRound, parsByCourseTeeHole]);
+
+  const hasTeams = groupA?.id && groupB?.id && membersA.length > 0 && membersB.length > 0;
+
+  /* ---------------- UI ---------------- */
 
   if (!tourId || !isLikelyUuid(tourId)) {
     return (
-      <div className="min-h-dvh bg-white text-gray-900 pb-10">
+      <div className="min-h-dvh bg-white text-gray-900">
         <div className="mx-auto w-full max-w-md px-4 py-6">
           <div className="rounded-2xl border p-4 text-sm">Missing or invalid tour id.</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-dvh bg-white text-gray-900">
+        <div className="mx-auto w-full max-w-md px-4 py-6">
+          <div className="rounded-2xl border p-4 text-sm">Loading…</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-dvh bg-white text-gray-900">
+        <div className="mx-auto w-full max-w-md px-4 py-6">
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{error}</div>
           <div className="mt-4">
-            <Link className="underline text-sm" href="/m">
-              Go to mobile home
+            <Link className="underline text-sm" href={`/m/tours/${tourId}/rounds?mode=matches-leaderboard`}>
+              Back to Rounds
             </Link>
           </div>
         </div>
@@ -845,153 +859,199 @@ export default function MatchesLeaderboardPage() {
     );
   }
 
-  return (
-    <div className="min-h-dvh bg-white text-gray-900 pb-10">
-      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-base font-semibold">Matches – Leaderboard</div>
-            <div className="truncate text-sm text-gray-500">{safeText(tour?.name, "")}</div>
+  if (!hasTeams) {
+    return (
+      <div className="min-h-dvh bg-white text-gray-900">
+        <div className="mx-auto w-full max-w-md px-4 py-6">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-lg font-extrabold leading-tight">Matches · Leaderboard</div>
+              <div className="mt-1 text-xs text-gray-600">{safeName(tour?.name, "Tour")}</div>
+            </div>
+            <Link
+              className="shrink-0 rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-gray-50"
+              href={`/m/tours/${tourId}/rounds?mode=matches-format`}
+            >
+              Format
+            </Link>
           </div>
 
-          <Link
-            className="shrink-0 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm active:bg-gray-50"
-            href={`/m/tours/${tourId}/rounds?mode=score`}
-          >
-            Rounds
-          </Link>
+          <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
+            Teams are not configured for this tour yet.
+          </div>
         </div>
       </div>
+    );
+  }
 
-      <main className="mx-auto w-full max-w-md px-4 py-4 space-y-3">
-        {loading ? (
-          <div className="rounded-2xl border p-4 text-sm">Loading…</div>
-        ) : errorMsg ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{errorMsg}</div>
-        ) : settingsByRoundId.size === 0 ? (
-          <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
-            No match formats have been configured yet.
+  const teamAName = safeName(groupA?.name, "Team A");
+  const teamBName = safeName(groupB?.name, "Team B");
+
+  const headerCellBase = "border-b border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 bg-gray-50";
+  const bodyCellBase = "px-3 py-2 text-sm text-gray-900";
+  const stickyNameCell = "sticky left-0 z-10 bg-white";
+
+  return (
+    <div className="min-h-dvh bg-white text-gray-900 pb-10">
+      <div className="mx-auto w-full max-w-md px-4 py-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-lg font-extrabold leading-tight">Matches · Leaderboard</div>
+            <div className="mt-1 text-xs text-gray-600">{safeName(tour?.name, "Tour")}</div>
           </div>
-        ) : (
-          <>
-            <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
-              <div className="text-xs text-gray-600">
-                Only rounds with a configured match format contribute points. Double points rounds are applied.
-              </div>
-              <div className="mt-2 text-xs text-gray-600">
-                N (tour players) = <span className="font-semibold">{tourPlayerIds.length}</span> · Stableford winners target ={" "}
-                <span className="font-semibold">{Math.floor(tourPlayerIds.length / 2)}</span>
-              </div>
-              {warning ? <div className="mt-2 text-xs text-amber-800">{warning}</div> : null}
-            </div>
 
-            <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <table className="min-w-max border-collapse">
-                <thead>
-                  <tr className="bg-gray-50">
-                    <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
-                      Name
-                    </th>
+          <div className="flex gap-2">
+            <Link
+              className="shrink-0 rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-gray-50"
+              href={`/m/tours/${tourId}/rounds?mode=matches-results`}
+            >
+              Results
+            </Link>
+            <Link
+              className="shrink-0 rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-gray-50"
+              href={`/m/tours/${tourId}/rounds?mode=matches-format`}
+            >
+              Format
+            </Link>
+          </div>
+        </div>
 
-                    <th className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700">
-                      Total
-                    </th>
+        <div className="mt-4 overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
+          <table className="min-w-max border-collapse">
+            <thead>
+              {/* Row 1: blank, Total, R1..Rn */}
+              <tr className="bg-gray-50">
+                <th className={`${headerCellBase} ${stickyNameCell} text-left`}></th>
 
-                    {sortedRounds.map((r) => {
-                      const configured = configuredRoundIds.has(r.id);
+                <th className={`${headerCellBase} text-center`}>Total</th>
+
+                {computed.roundCols.map((c) => (
+                  <th key={c.roundId} className={`${headerCellBase} text-center`}>
+                    {c.label}
+                  </th>
+                ))}
+              </tr>
+
+              {/* Row 2: blank, blank, format under each round */}
+              <tr className="bg-gray-50">
+                <th className={`${headerCellBase} ${stickyNameCell} text-left`}></th>
+
+                <th className={`${headerCellBase} text-center`}></th>
+
+                {computed.roundCols.map((c) => (
+                  <th key={c.roundId} className={`${headerCellBase} text-center text-[11px] font-semibold text-gray-600`}>
+                    {c.formatShort}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+
+            <tbody>
+              {/* TEAM A header row */}
+              <tr className="bg-gray-50">
+                <td className={`${bodyCellBase} ${stickyNameCell} font-extrabold text-gray-900 whitespace-nowrap`}>
+                  {teamAName}
+                </td>
+
+                <td className={`${bodyCellBase} text-center font-extrabold`}>
+                  {Number(computed.totalByTeam.get("A") || 0).toFixed(2).replace(/\.00$/, "")}
+                </td>
+
+                {computed.roundCols.map((c) => {
+                  const v = computed.teamByRound.get(c.roundId)?.A ?? 0;
+                  return (
+                    <td key={c.roundId} className={`${bodyCellBase} text-center font-semibold text-gray-900`}>
+                      {Number(v).toFixed(2).replace(/\.00$/, "")}
+                    </td>
+                  );
+                })}
+              </tr>
+
+              {/* TEAM A player rows (NO horizontal separators between players) */}
+              {membersA.map((p) => {
+                const total = computed.totalByPlayer.get(p.playerId) ?? 0;
+
+                return (
+                  <tr key={`A:${p.playerId}`}>
+                    <td className={`${bodyCellBase} ${stickyNameCell} font-semibold text-gray-900 whitespace-nowrap`}>
+                      {p.name}
+                    </td>
+
+                    <td className={`${bodyCellBase} text-center font-semibold`}>
+                      {Number(total).toFixed(2).replace(/\.00$/, "")}
+                    </td>
+
+                    {computed.roundCols.map((c) => {
+                      const v = computed.ptsByPlayerRound.get(p.playerId)?.get(c.roundId) ?? 0;
                       return (
-                        <th
-                          key={r.id}
-                          className={`border-b border-gray-200 px-3 py-2 text-center text-[11px] font-semibold ${
-                            configured ? "text-gray-700" : "text-gray-400"
-                          }`}
-                          title={fmtAuMelbourneDate(parseDateForDisplay(pickBestRoundDateISO(r)))}
-                        >
-                          {roundLabel(r)}
-                        </th>
+                        <td key={`${p.playerId}:${c.roundId}`} className={`${bodyCellBase} text-center`}>
+                          {Number(v).toFixed(2).replace(/\.00$/, "")}
+                        </td>
                       );
                     })}
                   </tr>
-                </thead>
+                );
+              })}
 
-                <tbody>
-                  {sortedTeams.map((t) => {
-                    const teamTotal = totals.teamTotal.get(t.id) ?? 0;
+              {/* Single divider line after final player in Team A */}
+              <tr>
+                <td colSpan={2 + computed.roundCols.length} className="h-px bg-gray-200" />
+              </tr>
 
-                    const playersSorted = [...t.members].sort((a, b) => {
-                      const pa = totals.playerTotal.get(a.player_id) ?? 0;
-                      const pb = totals.playerTotal.get(b.player_id) ?? 0;
-                      if (pb !== pa) return pb - pa;
-                      return a.name.localeCompare(b.name);
-                    });
+              {/* TEAM B header row */}
+              <tr className="bg-gray-50">
+                <td className={`${bodyCellBase} ${stickyNameCell} font-extrabold text-gray-900 whitespace-nowrap`}>
+                  {teamBName}
+                </td>
 
-                    return (
-                      <tbody key={t.id}>
-                        {/* Team row */}
-                        <tr className="bg-gray-50">
-                          <td className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-sm font-extrabold text-gray-900 whitespace-nowrap">
-                            {t.name}
-                          </td>
+                <td className={`${bodyCellBase} text-center font-extrabold`}>
+                  {Number(computed.totalByTeam.get("B") || 0).toFixed(2).replace(/\.00$/, "")}
+                </td>
 
-                          <td className="border-b border-gray-200 px-3 py-2 text-center text-sm font-extrabold text-gray-900">
-                            <span className="inline-flex min-w-[44px] justify-center rounded-md bg-yellow-100 px-2 py-1">
-                              {formatPts(teamTotal)}
-                            </span>
-                          </td>
+                {computed.roundCols.map((c) => {
+                  const v = computed.teamByRound.get(c.roundId)?.B ?? 0;
+                  return (
+                    <td key={c.roundId} className={`${bodyCellBase} text-center font-semibold text-gray-900`}>
+                      {Number(v).toFixed(2).replace(/\.00$/, "")}
+                    </td>
+                  );
+                })}
+              </tr>
 
-                          {sortedRounds.map((r) => {
-                            const configured = configuredRoundIds.has(r.id);
-                            const v = configured ? (teamRoundTotals.get(r.id)?.get(t.id) ?? 0) : null;
-                            return (
-                              <td key={r.id} className="border-b border-gray-200 px-3 py-2 text-center text-sm font-semibold text-gray-900">
-                                {configured ? formatPts(v ?? 0) : <span className="text-gray-300">—</span>}
-                              </td>
-                            );
-                          })}
-                        </tr>
+              {/* TEAM B player rows */}
+              {membersB.map((p) => {
+                const total = computed.totalByPlayer.get(p.playerId) ?? 0;
 
-                        {/* Player rows */}
-                        {playersSorted.map((p) => {
-                          const pTotal = totals.playerTotal.get(p.player_id) ?? 0;
+                return (
+                  <tr key={`B:${p.playerId}`}>
+                    <td className={`${bodyCellBase} ${stickyNameCell} font-semibold text-gray-900 whitespace-nowrap`}>
+                      {p.name}
+                    </td>
 
-                          return (
-                            <tr key={p.player_id} className="border-b last:border-b-0">
-                              <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                                {p.name}
-                              </td>
+                    <td className={`${bodyCellBase} text-center font-semibold`}>
+                      {Number(total).toFixed(2).replace(/\.00$/, "")}
+                    </td>
 
-                              <td className="px-3 py-2 text-center text-sm font-semibold text-gray-900">
-                                <span className="inline-flex min-w-[44px] justify-center rounded-md bg-gray-100 px-2 py-1">
-                                  {formatPts(pTotal)}
-                                </span>
-                              </td>
+                    {computed.roundCols.map((c) => {
+                      const v = computed.ptsByPlayerRound.get(p.playerId)?.get(c.roundId) ?? 0;
+                      return (
+                        <td key={`${p.playerId}:${c.roundId}`} className={`${bodyCellBase} text-center`}>
+                          {Number(v).toFixed(2).replace(/\.00$/, "")}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
 
-                              {sortedRounds.map((r) => {
-                                const configured = configuredRoundIds.has(r.id);
-                                const v = configured ? (pointsByRoundPlayer.get(r.id)?.get(p.player_id) ?? 0) : null;
-
-                                return (
-                                  <td key={r.id} className="px-3 py-2 text-center text-sm text-gray-900">
-                                    {configured ? formatPts(v ?? 0) : <span className="text-gray-300">—</span>}
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="text-[11px] text-gray-400">
-              Dates shown in Australia/Melbourne. Rounds without a configured match format do not score (shown as —).
-            </div>
-          </>
-        )}
-      </main>
+        {/* Small, useful hint only (no extra callouts you asked to remove) */}
+        <div className="mt-3 text-[11px] text-gray-500">
+          Tip: swipe the table sideways to view later rounds. Tap <span className="font-semibold">Format</span> to configure rounds.
+        </div>
+      </div>
     </div>
   );
 }
