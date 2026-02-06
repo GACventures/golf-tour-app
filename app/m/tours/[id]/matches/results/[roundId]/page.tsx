@@ -39,13 +39,6 @@ type RoundPlayerRow = {
   playing_handicap: number;
 };
 
-type ParRow = {
-  hole_number: number;
-  par: number;
-  stroke_index: number;
-  tee: string;
-};
-
 type ScoreRow = {
   player_id: string;
   hole_number: number;
@@ -278,14 +271,17 @@ export default function MatchesResultsRoundPage() {
         const gA = (gRows ?? []).find((g: any) => String(g.id) === set.group_a_id) ?? null;
         const gB = (gRows ?? []).find((g: any) => String(g.id) === set.group_b_id) ?? null;
 
-        // For stableford format, N = all players on tour (tour_players)
-        const { count: tpCount, error: tpErr } = await supabase
+        // N (players on tour) must come from tour_players
+        const { data: tpRows, error: tpErr } = await supabase
           .from("tour_players")
-          .select("player_id", { count: "exact", head: true })
+          .select("player_id")
           .eq("tour_id", tourId);
         if (tpErr) throw tpErr;
 
-        // Matches + players involved
+        const tourPlayerIds = (tpRows ?? []).map((x: any) => String(x.player_id));
+        const N = tourPlayerIds.length;
+
+        // Load matches + determine involved playerIds
         let matchRows: MatchRow[] = [];
         let playerIds: string[] = [];
 
@@ -305,13 +301,8 @@ export default function MatchesResultsRoundPage() {
           }
           playerIds = Array.from(pidSet);
         } else {
-          // stableford: include all tour players (use players table where players.tour_id = tour)
-          const { data: pAll, error: pAllErr } = await supabase
-            .from("players")
-            .select("id")
-            .eq("tour_id", tourId);
-          if (pAllErr) throw pAllErr;
-          playerIds = (pAll ?? []).map((p: any) => String(p.id));
+          // Stableford = ALL tour players
+          playerIds = tourPlayerIds;
         }
 
         // Players info
@@ -361,6 +352,21 @@ export default function MatchesResultsRoundPage() {
           }));
         }
 
+        // If stableford and round_players.playing is not set, but scores exist, treat as playing
+        if (set.format === "INDIVIDUAL_STABLEFORD") {
+          const hasScore = new Set<string>();
+          sRows.forEach((s) => hasScore.add(s.player_id));
+          for (const pid of playerIds) {
+            if (!rpMap.has(pid) && hasScore.has(pid)) {
+              rpMap.set(pid, { player_id: pid, playing: true, playing_handicap: 0 });
+            } else if (rpMap.has(pid) && rpMap.get(pid)!.playing !== true && hasScore.has(pid)) {
+              // keep handicap, flip playing for display purposes
+              const cur = rpMap.get(pid)!;
+              rpMap.set(pid, { ...cur, playing: true });
+            }
+          }
+        }
+
         // Pars
         const courseId = (rRow as any)?.course_id ?? null;
         let parsMap = new Map<Tee, Map<number, { par: number; si: number }>>();
@@ -387,7 +393,7 @@ export default function MatchesResultsRoundPage() {
         setSettings(set);
         setGroupA(gA ? { id: String(gA.id), name: gA.name ?? null } : null);
         setGroupB(gB ? { id: String(gB.id), name: gB.name ?? null } : null);
-        setTourPlayerCount(Number(tpCount ?? 0));
+        setTourPlayerCount(N);
 
         setMatches(matchRows);
         setPlayersById(pMap);
@@ -465,7 +471,6 @@ export default function MatchesResultsRoundPage() {
       leftLabel: string;
       rightLabel: string;
       resultText: string;
-      winnerSide: "A" | "B" | "HALVED";
     }> = [];
 
     for (const mRow of matches) {
@@ -478,28 +483,18 @@ export default function MatchesResultsRoundPage() {
 
       const isBetterBall = settings.format === "BETTERBALL_MATCHPLAY";
 
-      const leftLabel = isBetterBall
-        ? `${playerName(A1)} / ${playerName(A2)}`
-        : `${playerName(A1)}`;
-      const rightLabel = isBetterBall
-        ? `${playerName(B1)} / ${playerName(B2)}`
-        : `${playerName(B1)}`;
+      const leftLabel = isBetterBall ? `${playerName(A1)} / ${playerName(A2)}` : `${playerName(A1)}`;
+      const rightLabel = isBetterBall ? `${playerName(B1)} / ${playerName(B2)}` : `${playerName(B1)}`;
 
       const holeWinners: Array<"A" | "B" | "HALVED"> = [];
 
       for (let h = 1; h <= 18; h++) {
         const aPts = isBetterBall
-          ? Math.max(
-              ptsByPlayerHole.get(`${A1}|${h}`) ?? 0,
-              ptsByPlayerHole.get(`${A2}|${h}`) ?? 0
-            )
+          ? Math.max(ptsByPlayerHole.get(`${A1}|${h}`) ?? 0, ptsByPlayerHole.get(`${A2}|${h}`) ?? 0)
           : ptsByPlayerHole.get(`${A1}|${h}`) ?? 0;
 
         const bPts = isBetterBall
-          ? Math.max(
-              ptsByPlayerHole.get(`${B1}|${h}`) ?? 0,
-              ptsByPlayerHole.get(`${B2}|${h}`) ?? 0
-            )
+          ? Math.max(ptsByPlayerHole.get(`${B1}|${h}`) ?? 0, ptsByPlayerHole.get(`${B2}|${h}`) ?? 0)
           : ptsByPlayerHole.get(`${B1}|${h}`) ?? 0;
 
         if (aPts > bPts) holeWinners.push("A");
@@ -521,7 +516,6 @@ export default function MatchesResultsRoundPage() {
         leftLabel,
         rightLabel,
         resultText,
-        winnerSide: r.winner as any,
       });
     }
 
@@ -529,7 +523,7 @@ export default function MatchesResultsRoundPage() {
     return out;
   }, [settings, matches, ptsByPlayerHole, playersById]);
 
-  // Stableford totals (for INDIVIDUAL_STABLEFORD)
+  // Stableford totals
   const stablefordTotals = useMemo(() => {
     if (!settings) return [];
     if (settings.format !== "INDIVIDUAL_STABLEFORD") return [];
@@ -560,15 +554,12 @@ export default function MatchesResultsRoundPage() {
     const target = Math.floor(N / 2);
 
     if (target <= 0) return { winners: [], cutoff: null, target };
-
     if (stablefordTotals.length === 0) return { winners: [], cutoff: null, target };
 
-    // Determine cutoff score at rank target (1-indexed)
-    const sorted = stablefordTotals;
-    const cutoffIndex = Math.min(target - 1, sorted.length - 1);
-    const cutoff = sorted[cutoffIndex]?.total ?? null;
+    const cutoffIndex = Math.min(target - 1, stablefordTotals.length - 1);
+    const cutoff = stablefordTotals[cutoffIndex]?.total ?? null;
 
-    const winners = sorted.filter((r) => cutoff !== null && r.total >= cutoff);
+    const winners = cutoff == null ? [] : stablefordTotals.filter((r) => r.total >= cutoff);
 
     return { winners, cutoff, target };
   }, [settings, stablefordTotals, tourPlayerCount]);
@@ -667,13 +658,13 @@ export default function MatchesResultsRoundPage() {
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Stableford results</div>
                   <div className="mt-1 text-xs text-gray-600">
-                    Winners are top N/2 by round Stableford total (ties at cutoff included).
+                    Winners are top <span className="font-semibold">{stablefordWinners.target}</span> by round Stableford total (ties at cutoff included).
                   </div>
                 </div>
 
                 <div className="p-4 space-y-3">
                   <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-xs text-gray-700">
-                    N (players on tour): <span className="font-semibold">{tourPlayerCount}</span> · Target winners points:{" "}
+                    Players on tour: <span className="font-semibold">{tourPlayerCount}</span> · Winners target:{" "}
                     <span className="font-semibold">{stablefordWinners.target}</span>
                     {stablefordWinners.cutoff != null ? (
                       <>
@@ -686,7 +677,9 @@ export default function MatchesResultsRoundPage() {
                   <div>
                     <div className="text-xs font-semibold text-gray-700">Winners</div>
                     {stablefordWinners.winners.length === 0 ? (
-                      <div className="mt-1 text-sm text-gray-700">No winners yet (no scores / no players marked playing).</div>
+                      <div className="mt-1 text-sm text-gray-700">
+                        No winners yet (no stableford totals could be calculated for this round).
+                      </div>
                     ) : (
                       <div className="mt-2 space-y-1">
                         {stablefordWinners.winners.map((w) => (
