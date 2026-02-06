@@ -22,6 +22,7 @@ type RoundRow = {
 };
 
 type Mode = "tee-times" | "score" | "results";
+type MatchesMode = "none" | "format" | "results" | "leaderboard";
 
 function getCourseName(r: RoundRow) {
   const c: any = r.courses;
@@ -33,6 +34,11 @@ function getCourseName(r: RoundRow) {
 function normalizeMode(raw: string | null): Mode {
   if (raw === "tee-times" || raw === "score" || raw === "results") return raw;
   return "score";
+}
+
+function normalizeMatchesMode(raw: string | null): MatchesMode {
+  if (raw === "format" || raw === "results" || raw === "leaderboard") return raw;
+  return "none";
 }
 
 function pickBestRoundDateISO(r: RoundRow): string | null {
@@ -75,6 +81,7 @@ export default function MobileRoundsHubPage() {
   const sp = useSearchParams();
 
   const mode = normalizeMode(sp.get("mode"));
+  const matchesMode = normalizeMatchesMode(sp.get("matches"));
 
   const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,8 +91,6 @@ export default function MobileRoundsHubPage() {
     let alive = true;
 
     async function fetchRounds(selectCols: string) {
-      // Prefer server-side ordering by round_no, but also keep created_at as a stable tie-breaker.
-      // If round_no is null for some rows, client-side sorting will handle it.
       return supabase
         .from("rounds")
         .select(selectCols)
@@ -168,7 +173,7 @@ export default function MobileRoundsHubPage() {
       const bNo = typeof b.round_no === "number" ? b.round_no : null;
 
       if (aNo != null && bNo != null && aNo !== bNo) return aNo - bNo;
-      if (aNo != null && bNo == null) return -1; // round_no rows first
+      if (aNo != null && bNo == null) return -1;
       if (aNo == null && bNo != null) return 1;
 
       const da = parseDateForDisplay(a.created_at)?.getTime() ?? 0;
@@ -187,7 +192,24 @@ export default function MobileRoundsHubPage() {
     router.replace(`/m/tours/${tourId}/rounds?${usp.toString()}`);
   }
 
+  function setMatches(next: MatchesMode) {
+    const usp = new URLSearchParams(sp.toString());
+
+    // Leaderboard is a dedicated screen (no round selection)
+    if (next === "leaderboard") {
+      router.push(`/m/tours/${tourId}/matches/leaderboard`);
+      return;
+    }
+
+    if (next === "none") usp.delete("matches");
+    else usp.set("matches", next);
+
+    router.replace(`/m/tours/${tourId}/rounds?${usp.toString()}`);
+  }
+
   function openRound(roundId: string) {
+    // For now, round tap continues to do what it already does for the primary mode.
+    // Matches format/results wiring will be implemented next step.
     const base = `/m/tours/${tourId}/rounds/${roundId}`;
     const href =
       mode === "tee-times"
@@ -211,7 +233,8 @@ export default function MobileRoundsHubPage() {
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-md px-4 pt-4">
+      <div className="mx-auto w-full max-w-md px-4 pt-4 space-y-3">
+        {/* Existing primary mode buttons */}
         <div className="flex gap-2">
           <button
             className={`${pillBase} ${mode === "score" ? pillActive : pillIdle}`}
@@ -232,6 +255,27 @@ export default function MobileRoundsHubPage() {
             onClick={() => setMode("results")}
           >
             Results
+          </button>
+        </div>
+
+        {/* New Matches buttons row */}
+        <div className="flex gap-2">
+          <button
+            className={`${pillBase} ${matchesMode === "format" ? pillActive : pillIdle}`}
+            onClick={() => setMatches("format")}
+          >
+            Matches – Format
+          </button>
+
+          <button
+            className={`${pillBase} ${matchesMode === "results" ? pillActive : pillIdle}`}
+            onClick={() => setMatches("results")}
+          >
+            Matches – Results
+          </button>
+
+          <button className={`${pillBase} ${pillIdle}`} onClick={() => setMatches("leaderboard")}>
+            Matches – Leaderboard
           </button>
         </div>
       </div>
