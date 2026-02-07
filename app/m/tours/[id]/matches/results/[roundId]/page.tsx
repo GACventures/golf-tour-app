@@ -150,13 +150,13 @@ function formatLabel(f: SettingsRow["format"]) {
 }
 
 type MatchplaySummary = {
-  thru: number; // last hole number with computable points on both sides
+  thru: number;
   diff: number; // A positive => A leading; negative => B leading
-  decidedAt: number | null; // clinch hole if decided early
-  isFinal: boolean; // final if decidedAt != null OR thru==18
+  decidedAt: number | null;
+  isFinal: boolean;
 };
 
-// ✅ key change: only count holes where BOTH sides are computable
+// Only count holes where BOTH sides are computable
 function computeMatchplaySummary(holeWinners: Array<"A" | "B" | "HALVED" | "NO_DATA">): MatchplaySummary {
   let diff = 0;
   let thru = 0;
@@ -165,22 +165,16 @@ function computeMatchplaySummary(holeWinners: Array<"A" | "B" | "HALVED" | "NO_D
   for (let h = 1; h <= 18; h++) {
     const w = holeWinners[h - 1] ?? "NO_DATA";
 
-    if (w === "NO_DATA") {
-      continue;
-    }
+    if (w === "NO_DATA") continue;
 
-    // hole is computable => update thru to this hole number
     thru = h;
 
     if (w === "A") diff += 1;
     else if (w === "B") diff -= 1;
 
     const holesRemaining = 18 - h;
-
-    // clinch if lead > holes remaining
     if (decidedAt === null && Math.abs(diff) > holesRemaining) {
       decidedAt = h;
-      // We can stop here for "final", but we still keep thru = clinch hole
       break;
     }
   }
@@ -210,14 +204,11 @@ function renderFinalText(args: { diff: number; decidedAt: number | null; leftLab
 
   const up = Math.abs(diff);
 
-  // decided early => X & Y
   if (decidedAt != null && decidedAt >= 1 && decidedAt <= 18) {
     const remaining = 18 - decidedAt;
     if (remaining > 0) return `${winnerLabel} def ${loserLabel} ${up} & ${remaining}`;
-    // decided on 18 (rare via clinch rule), fall through to "up"
   }
 
-  // decided on 18 => "n up"
   return `${winnerLabel} def ${loserLabel} ${up} up`;
 }
 
@@ -257,7 +248,6 @@ export default function MatchesResultsRoundPage() {
       setErrorMsg("");
 
       try {
-        // Round meta (column fallback)
         const baseCols = "id,tour_id,course_id,round_no,created_at,courses(name)";
         const cols1 = `${baseCols},round_date,played_on`;
         const cols2 = `${baseCols},played_on`;
@@ -273,20 +263,13 @@ export default function MatchesResultsRoundPage() {
                 const r3 = await fetchRound(baseCols);
                 if (r3.error) throw r3.error;
                 rRow = r3.data;
-              } else {
-                throw r2.error;
-              }
-            } else {
-              rRow = r2.data;
-            }
-          } else {
-            throw r1.error;
-          }
+              } else throw r2.error;
+            } else rRow = r2.data;
+          } else throw r1.error;
         } else {
           rRow = r1.data;
         }
 
-        // Settings for this round
         const { data: sRow, error: sErr } = await supabase
           .from("match_round_settings")
           .select("id,tour_id,round_id,group_a_id,group_b_id,format,double_points")
@@ -296,7 +279,6 @@ export default function MatchesResultsRoundPage() {
 
         const set = (sRow ?? null) as any as SettingsRow | null;
 
-        // If no settings, still show page
         if (!set) {
           if (!alive) return;
           setRound(rRow as any);
@@ -305,7 +287,6 @@ export default function MatchesResultsRoundPage() {
           return;
         }
 
-        // Group names
         const { data: gRows, error: gErr } = await supabase
           .from("tour_groups")
           .select("id,name")
@@ -315,14 +296,12 @@ export default function MatchesResultsRoundPage() {
         const gA = (gRows ?? []).find((g: any) => String(g.id) === set.group_a_id) ?? null;
         const gB = (gRows ?? []).find((g: any) => String(g.id) === set.group_b_id) ?? null;
 
-        // N (players on tour) must come from tour_players
         const { data: tpRows, error: tpErr } = await supabase.from("tour_players").select("player_id").eq("tour_id", tourId);
         if (tpErr) throw tpErr;
 
         const tourPlayerIds = (tpRows ?? []).map((x: any) => String(x.player_id));
         const N = tourPlayerIds.length;
 
-        // Load matches + determine involved playerIds
         let matchRows: MatchRow[] = [];
         let playerIds: string[] = [];
 
@@ -342,11 +321,9 @@ export default function MatchesResultsRoundPage() {
           }
           playerIds = Array.from(pidSet);
         } else {
-          // Stableford = ALL tour players
           playerIds = tourPlayerIds;
         }
 
-        // Players info
         const { data: pRows, error: pErr } = await supabase.from("players").select("id,name,gender").in("id", playerIds);
         if (pErr) throw pErr;
 
@@ -355,7 +332,6 @@ export default function MatchesResultsRoundPage() {
           pMap.set(String(p.id), { id: String(p.id), name: safeText(p.name, "(unnamed)"), gender: p.gender ?? null });
         });
 
-        // Round players (handicap + playing)
         const { data: rpRows, error: rpErr } = await supabase
           .from("round_players")
           .select("player_id,playing,playing_handicap")
@@ -372,7 +348,6 @@ export default function MatchesResultsRoundPage() {
           });
         });
 
-        // Scores (for these players)
         let sRows: ScoreRow[] = [];
         if (playerIds.length > 0) {
           const { data: scRows, error: scErr } = await supabase
@@ -390,7 +365,6 @@ export default function MatchesResultsRoundPage() {
           }));
         }
 
-        // If stableford and round_players.playing is not set, but scores exist, treat as playing
         if (set.format === "INDIVIDUAL_STABLEFORD") {
           const hasScore = new Set<string>();
           sRows.forEach((s) => hasScore.add(s.player_id));
@@ -404,7 +378,6 @@ export default function MatchesResultsRoundPage() {
           }
         }
 
-        // Pars
         const courseId = (rRow as any)?.course_id ?? null;
         let parsMap = new Map<Tee, Map<number, { par: number; si: number }>>();
         if (courseId) {
@@ -457,7 +430,6 @@ export default function MatchesResultsRoundPage() {
     return m;
   }, [scores]);
 
-  // Per-player per-hole stableford points
   const ptsByPlayerHole = useMemo(() => {
     const m = new Map<string, number>();
     if (!round?.course_id) return m;
@@ -498,7 +470,6 @@ export default function MatchesResultsRoundPage() {
     return playersById.get(id)?.name ?? "(player)";
   }
 
-  // ✅ Match results (matchplay formats) — now supports LIVE wording
   const matchResults = useMemo(() => {
     if (!settings) return [];
     if (settings.format === "INDIVIDUAL_STABLEFORD") return [];
@@ -506,8 +477,6 @@ export default function MatchesResultsRoundPage() {
     const out: Array<{
       match_id: string;
       match_no: number;
-      leftLabel: string;
-      rightLabel: string;
       resultText: string;
       isFinal: boolean;
     }> = [];
@@ -528,16 +497,6 @@ export default function MatchesResultsRoundPage() {
       const holeWinners: Array<"A" | "B" | "HALVED" | "NO_DATA"> = [];
 
       for (let h = 1; h <= 18; h++) {
-        const aPts = isBetterBall
-          ? Math.max(ptsByPlayerHole.get(`${A1}|${h}`) ?? 0, ptsByPlayerHole.get(`${A2}|${h}`) ?? 0)
-          : ptsByPlayerHole.get(`${A1}|${h}`) ?? 0;
-
-        const bPts = isBetterBall
-          ? Math.max(ptsByPlayerHole.get(`${B1}|${h}`) ?? 0, ptsByPlayerHole.get(`${B2}|${h}`) ?? 0)
-          : ptsByPlayerHole.get(`${B1}|${h}`) ?? 0;
-
-        // If we cannot compute either side (missing player id or missing pts row), treat as NO_DATA.
-        // We detect "computable" by checking the underlying per-player hole points existence.
         const aHas = isBetterBall
           ? ptsByPlayerHole.has(`${A1}|${h}`) || ptsByPlayerHole.has(`${A2}|${h}`)
           : ptsByPlayerHole.has(`${A1}|${h}`);
@@ -549,6 +508,14 @@ export default function MatchesResultsRoundPage() {
           holeWinners.push("NO_DATA");
           continue;
         }
+
+        const aPts = isBetterBall
+          ? Math.max(ptsByPlayerHole.get(`${A1}|${h}`) ?? 0, ptsByPlayerHole.get(`${A2}|${h}`) ?? 0)
+          : ptsByPlayerHole.get(`${A1}|${h}`) ?? 0;
+
+        const bPts = isBetterBall
+          ? Math.max(ptsByPlayerHole.get(`${B1}|${h}`) ?? 0, ptsByPlayerHole.get(`${B2}|${h}`) ?? 0)
+          : ptsByPlayerHole.get(`${B1}|${h}`) ?? 0;
 
         if (aPts > bPts) holeWinners.push("A");
         else if (bPts > aPts) holeWinners.push("B");
@@ -562,10 +529,8 @@ export default function MatchesResultsRoundPage() {
         : renderLiveText({ diff: summary.diff, thru: summary.thru, leftLabel, rightLabel });
 
       out.push({
-        match_id: mRow.id,
+        match_id: String(mRow.id),
         match_no: Number(mRow.match_no),
-        leftLabel,
-        rightLabel,
         resultText,
         isFinal: summary.isFinal,
       });
@@ -575,7 +540,6 @@ export default function MatchesResultsRoundPage() {
     return out;
   }, [settings, matches, ptsByPlayerHole, playersById]);
 
-  // Stableford totals
   const stablefordTotals = useMemo(() => {
     if (!settings) return [];
     if (settings.format !== "INDIVIDUAL_STABLEFORD") return [];
@@ -587,9 +551,7 @@ export default function MatchesResultsRoundPage() {
       if (!rp?.playing) continue;
 
       let sum = 0;
-      for (let h = 1; h <= 18; h++) {
-        sum += ptsByPlayerHole.get(`${playerId}|${h}`) ?? 0;
-      }
+      for (let h = 1; h <= 18; h++) sum += ptsByPlayerHole.get(`${playerId}|${h}`) ?? 0;
 
       rows.push({ player_id: playerId, name: p.name, total: sum });
     }
@@ -681,8 +643,7 @@ export default function MatchesResultsRoundPage() {
               </div>
 
               <div className="p-4 text-xs text-gray-600">
-                Matchplay holes are decided using <span className="font-semibold">net Stableford points</span> per hole
-                (pickup = 0).
+                Matchplay holes are decided using <span className="font-semibold">net Stableford points</span> per hole (pickup = 0).
               </div>
             </section>
 
@@ -690,7 +651,7 @@ export default function MatchesResultsRoundPage() {
               <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Match results</div>
-                  <div className="mt-1 text-xs text-gray-600">Live matches show “n up (after m holes)”.</div>
+                  <div className="mt-1 text-xs text-gray-600">Tap a match to see hole-by-hole.</div>
                 </div>
 
                 {matchResults.length === 0 ? (
@@ -698,10 +659,19 @@ export default function MatchesResultsRoundPage() {
                 ) : (
                   <div className="divide-y">
                     {matchResults.map((m) => (
-                      <div key={m.match_no} className="p-4">
-                        <div className="text-xs text-gray-500">Match {m.match_no}</div>
-                        <div className="mt-1 text-sm font-semibold text-gray-900">{m.resultText}</div>
-                      </div>
+                      <Link
+                        key={m.match_id}
+                        href={`/m/tours/${tourId}/matches/results/${roundId}/match/${m.match_id}`}
+                        className="block p-4 cursor-pointer active:bg-gray-50"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-xs text-gray-500">Match {m.match_no}</div>
+                            <div className="mt-1 text-sm font-semibold text-gray-900">{m.resultText}</div>
+                          </div>
+                          <div className="shrink-0 text-xs font-semibold text-gray-500">View</div>
+                        </div>
+                      </Link>
                     ))}
                   </div>
                 )}
@@ -719,7 +689,9 @@ export default function MatchesResultsRoundPage() {
                   <div>
                     <div className="text-xs font-semibold text-gray-700">Winners</div>
                     {stablefordWinners.winners.length === 0 ? (
-                      <div className="mt-1 text-sm text-gray-700">No winners yet (no stableford totals could be calculated for this round).</div>
+                      <div className="mt-1 text-sm text-gray-700">
+                        No winners yet (no stableford totals could be calculated for this round).
+                      </div>
                     ) : (
                       <div className="mt-2 space-y-1">
                         {stablefordWinners.winners.map((w) => (
