@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Tee = "M" | "F";
@@ -129,7 +129,7 @@ function netStablefordPointsForHole(params: {
   if (!raw) return 0;
   if (raw === "P") return 0;
 
-  const strokes = Number(raw);
+  const strokes = Number(rawScore);
   if (!Number.isFinite(strokes)) return 0;
 
   const hcp = Math.max(0, Math.floor(Number(playingHandicap) || 0));
@@ -149,38 +149,80 @@ function formatLabel(f: SettingsRow["format"]) {
   return "Individual stableford";
 }
 
-// Matchplay result formatting
-function computeMatchplayResultText(holeWinners: Array<"A" | "B" | "HALVED">) {
-  let aUp = 0;
-  let bUp = 0;
+type MatchplaySummary = {
+  thru: number; // last hole number with computable points on both sides
+  diff: number; // A positive => A leading; negative => B leading
+  decidedAt: number | null; // clinch hole if decided early
+  isFinal: boolean; // final if decidedAt != null OR thru==18
+};
 
-  for (let i = 0; i < 18; i++) {
-    const h = holeWinners[i] ?? "HALVED";
-    if (h === "A") aUp++;
-    if (h === "B") bUp++;
+// ✅ key change: only count holes where BOTH sides are computable
+function computeMatchplaySummary(holeWinners: Array<"A" | "B" | "HALVED" | "NO_DATA">): MatchplaySummary {
+  let diff = 0;
+  let thru = 0;
+  let decidedAt: number | null = null;
 
-    const diff = aUp - bUp;
-    const holesPlayed = i + 1;
-    const holesRemaining = 18 - holesPlayed;
+  for (let h = 1; h <= 18; h++) {
+    const w = holeWinners[h - 1] ?? "NO_DATA";
 
-    if (Math.abs(diff) > holesRemaining) {
-      const winner = diff > 0 ? "A" : "B";
-      const x = Math.abs(diff);
-      const y = holesRemaining;
-      return { winner, text: `${x} & ${y}` };
+    if (w === "NO_DATA") {
+      continue;
+    }
+
+    // hole is computable => update thru to this hole number
+    thru = h;
+
+    if (w === "A") diff += 1;
+    else if (w === "B") diff -= 1;
+
+    const holesRemaining = 18 - h;
+
+    // clinch if lead > holes remaining
+    if (decidedAt === null && Math.abs(diff) > holesRemaining) {
+      decidedAt = h;
+      // We can stop here for "final", but we still keep thru = clinch hole
+      break;
     }
   }
 
-  const diff = aUp - bUp;
-  if (diff === 0) return { winner: "HALVED" as const, text: "All Square" };
-  const winner = diff > 0 ? "A" : "B";
-  return { winner, text: `${Math.abs(diff)} up` };
+  const isFinal = decidedAt !== null || thru === 18;
+  return { thru, diff, decidedAt, isFinal };
+}
+
+function renderLiveText(args: { diff: number; thru: number; leftLabel: string; rightLabel: string }) {
+  const { diff, thru, leftLabel, rightLabel } = args;
+
+  if (thru <= 0) return "Not started";
+  if (diff === 0) return `All Square (after ${thru} holes)`;
+
+  const leaderLabel = diff > 0 ? leftLabel : rightLabel;
+  const up = Math.abs(diff);
+  return `${leaderLabel} is ${up} up (after ${thru} holes)`;
+}
+
+function renderFinalText(args: { diff: number; decidedAt: number | null; leftLabel: string; rightLabel: string }) {
+  const { diff, decidedAt, leftLabel, rightLabel } = args;
+
+  if (diff === 0) return "All Square";
+
+  const winnerLabel = diff > 0 ? leftLabel : rightLabel;
+  const loserLabel = diff > 0 ? rightLabel : leftLabel;
+
+  const up = Math.abs(diff);
+
+  // decided early => X & Y
+  if (decidedAt != null && decidedAt >= 1 && decidedAt <= 18) {
+    const remaining = 18 - decidedAt;
+    if (remaining > 0) return `${winnerLabel} def ${loserLabel} ${up} & ${remaining}`;
+    // decided on 18 (rare via clinch rule), fall through to "up"
+  }
+
+  // decided on 18 => "n up"
+  return `${winnerLabel} def ${loserLabel} ${up} up`;
 }
 
 export default function MatchesResultsRoundPage() {
   const params = useParams<{ id?: string; roundId?: string }>();
-  const router = useRouter();
-
   const tourId = String(params?.id ?? "").trim();
   const roundId = String(params?.roundId ?? "").trim();
 
@@ -456,11 +498,7 @@ export default function MatchesResultsRoundPage() {
     return playersById.get(id)?.name ?? "(player)";
   }
 
-  function openMatch(matchId: string) {
-    router.push(`/m/tours/${tourId}/matches/results/${roundId}/match/${matchId}`);
-  }
-
-  // Compute match results (for matchplay formats)
+  // ✅ Match results (matchplay formats) — now supports LIVE wording
   const matchResults = useMemo(() => {
     if (!settings) return [];
     if (settings.format === "INDIVIDUAL_STABLEFORD") return [];
@@ -471,6 +509,7 @@ export default function MatchesResultsRoundPage() {
       leftLabel: string;
       rightLabel: string;
       resultText: string;
+      isFinal: boolean;
     }> = [];
 
     for (const mRow of matches) {
@@ -486,7 +525,7 @@ export default function MatchesResultsRoundPage() {
       const leftLabel = isBetterBall ? `${playerName(A1)} / ${playerName(A2)}` : `${playerName(A1)}`;
       const rightLabel = isBetterBall ? `${playerName(B1)} / ${playerName(B2)}` : `${playerName(B1)}`;
 
-      const holeWinners: Array<"A" | "B" | "HALVED"> = [];
+      const holeWinners: Array<"A" | "B" | "HALVED" | "NO_DATA"> = [];
 
       for (let h = 1; h <= 18; h++) {
         const aPts = isBetterBall
@@ -497,26 +536,38 @@ export default function MatchesResultsRoundPage() {
           ? Math.max(ptsByPlayerHole.get(`${B1}|${h}`) ?? 0, ptsByPlayerHole.get(`${B2}|${h}`) ?? 0)
           : ptsByPlayerHole.get(`${B1}|${h}`) ?? 0;
 
+        // If we cannot compute either side (missing player id or missing pts row), treat as NO_DATA.
+        // We detect "computable" by checking the underlying per-player hole points existence.
+        const aHas = isBetterBall
+          ? ptsByPlayerHole.has(`${A1}|${h}`) || ptsByPlayerHole.has(`${A2}|${h}`)
+          : ptsByPlayerHole.has(`${A1}|${h}`);
+        const bHas = isBetterBall
+          ? ptsByPlayerHole.has(`${B1}|${h}`) || ptsByPlayerHole.has(`${B2}|${h}`)
+          : ptsByPlayerHole.has(`${B1}|${h}`);
+
+        if (!aHas || !bHas) {
+          holeWinners.push("NO_DATA");
+          continue;
+        }
+
         if (aPts > bPts) holeWinners.push("A");
         else if (bPts > aPts) holeWinners.push("B");
         else holeWinners.push("HALVED");
       }
 
-      const r = computeMatchplayResultText(holeWinners);
+      const summary = computeMatchplaySummary(holeWinners);
 
-      const resultText =
-        r.winner === "HALVED"
-          ? "All Square"
-          : r.winner === "A"
-          ? `${leftLabel} def ${rightLabel} ${r.text}`
-          : `${rightLabel} def ${leftLabel} ${r.text}`;
+      const resultText = summary.isFinal
+        ? renderFinalText({ diff: summary.diff, decidedAt: summary.decidedAt, leftLabel, rightLabel })
+        : renderLiveText({ diff: summary.diff, thru: summary.thru, leftLabel, rightLabel });
 
       out.push({
-        match_id: String(mRow.id),
+        match_id: mRow.id,
         match_no: Number(mRow.match_no),
         leftLabel,
         rightLabel,
         resultText,
+        isFinal: summary.isFinal,
       });
     }
 
@@ -630,7 +681,8 @@ export default function MatchesResultsRoundPage() {
               </div>
 
               <div className="p-4 text-xs text-gray-600">
-                Matchplay holes are decided using <span className="font-semibold">net Stableford points</span> per hole (pickup = 0).
+                Matchplay holes are decided using <span className="font-semibold">net Stableford points</span> per hole
+                (pickup = 0).
               </div>
             </section>
 
@@ -638,7 +690,7 @@ export default function MatchesResultsRoundPage() {
               <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Match results</div>
-                  <div className="mt-1 text-xs text-gray-600">Tap a match to view hole-by-hole scoring.</div>
+                  <div className="mt-1 text-xs text-gray-600">Live matches show “n up (after m holes)”.</div>
                 </div>
 
                 {matchResults.length === 0 ? (
@@ -646,19 +698,10 @@ export default function MatchesResultsRoundPage() {
                 ) : (
                   <div className="divide-y">
                     {matchResults.map((m) => (
-                      <button
-                        key={m.match_id}
-                        type="button"
-                        onClick={() => openMatch(m.match_id)}
-                        className="w-full text-left p-4 active:bg-gray-50"
-                        aria-label={`Open match ${m.match_no}`}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-xs text-gray-500">Match {m.match_no}</div>
-                          <div className="text-xs font-semibold text-gray-500">View</div>
-                        </div>
+                      <div key={m.match_no} className="p-4">
+                        <div className="text-xs text-gray-500">Match {m.match_no}</div>
                         <div className="mt-1 text-sm font-semibold text-gray-900">{m.resultText}</div>
-                      </button>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -673,17 +716,6 @@ export default function MatchesResultsRoundPage() {
                 </div>
 
                 <div className="p-4 space-y-3">
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-xs text-gray-700">
-                    Players on tour: <span className="font-semibold">{tourPlayerCount}</span> · Winners target:{" "}
-                    <span className="font-semibold">{stablefordWinners.target}</span>
-                    {stablefordWinners.cutoff != null ? (
-                      <>
-                        {" "}
-                        · Cutoff score: <span className="font-semibold">{stablefordWinners.cutoff}</span>
-                      </>
-                    ) : null}
-                  </div>
-
                   <div>
                     <div className="text-xs font-semibold text-gray-700">Winners</div>
                     {stablefordWinners.winners.length === 0 ? (
