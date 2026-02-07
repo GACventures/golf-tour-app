@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Tee = "M" | "F";
@@ -13,8 +13,8 @@ type RoundRow = {
   tour_id: string;
   course_id: string | null;
   round_no?: number | null;
-  round_date?: string | null; // may not exist
-  played_on?: string | null; // may not exist
+  round_date?: string | null;
+  played_on?: string | null;
   created_at: string | null;
   courses?: { name: string } | { name: string }[] | null;
 };
@@ -118,7 +118,7 @@ function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
 
 // Stableford (net) per hole
 function netStablefordPointsForHole(params: {
-  rawScore: string; // "" | "P" | "number"
+  rawScore: string;
   par: number;
   strokeIndex: number;
   playingHandicap: number;
@@ -151,12 +151,11 @@ function formatLabel(f: SettingsRow["format"]) {
 
 type MatchplaySummary = {
   thru: number;
-  diff: number; // A positive => A leading; negative => B leading
+  diff: number;
   decidedAt: number | null;
   isFinal: boolean;
 };
 
-// Only count holes where BOTH sides are computable
 function computeMatchplaySummary(holeWinners: Array<"A" | "B" | "HALVED" | "NO_DATA">): MatchplaySummary {
   let diff = 0;
   let thru = 0;
@@ -164,11 +163,9 @@ function computeMatchplaySummary(holeWinners: Array<"A" | "B" | "HALVED" | "NO_D
 
   for (let h = 1; h <= 18; h++) {
     const w = holeWinners[h - 1] ?? "NO_DATA";
-
     if (w === "NO_DATA") continue;
 
     thru = h;
-
     if (w === "A") diff += 1;
     else if (w === "B") diff -= 1;
 
@@ -185,10 +182,8 @@ function computeMatchplaySummary(holeWinners: Array<"A" | "B" | "HALVED" | "NO_D
 
 function renderLiveText(args: { diff: number; thru: number; leftLabel: string; rightLabel: string }) {
   const { diff, thru, leftLabel, rightLabel } = args;
-
   if (thru <= 0) return "Not started";
   if (diff === 0) return `All Square (after ${thru} holes)`;
-
   const leaderLabel = diff > 0 ? leftLabel : rightLabel;
   const up = Math.abs(diff);
   return `${leaderLabel} is ${up} up (after ${thru} holes)`;
@@ -196,12 +191,10 @@ function renderLiveText(args: { diff: number; thru: number; leftLabel: string; r
 
 function renderFinalText(args: { diff: number; decidedAt: number | null; leftLabel: string; rightLabel: string }) {
   const { diff, decidedAt, leftLabel, rightLabel } = args;
-
   if (diff === 0) return "All Square";
 
   const winnerLabel = diff > 0 ? leftLabel : rightLabel;
   const loserLabel = diff > 0 ? rightLabel : leftLabel;
-
   const up = Math.abs(diff);
 
   if (decidedAt != null && decidedAt >= 1 && decidedAt <= 18) {
@@ -214,6 +207,8 @@ function renderFinalText(args: { diff: number; decidedAt: number | null; leftLab
 
 export default function MatchesResultsRoundPage() {
   const params = useParams<{ id?: string; roundId?: string }>();
+  const router = useRouter();
+
   const tourId = String(params?.id ?? "").trim();
   const roundId = String(params?.roundId ?? "").trim();
 
@@ -365,19 +360,6 @@ export default function MatchesResultsRoundPage() {
           }));
         }
 
-        if (set.format === "INDIVIDUAL_STABLEFORD") {
-          const hasScore = new Set<string>();
-          sRows.forEach((s) => hasScore.add(s.player_id));
-          for (const pid of playerIds) {
-            if (!rpMap.has(pid) && hasScore.has(pid)) {
-              rpMap.set(pid, { player_id: pid, playing: true, playing_handicap: 0 });
-            } else if (rpMap.has(pid) && rpMap.get(pid)!.playing !== true && hasScore.has(pid)) {
-              const cur = rpMap.get(pid)!;
-              rpMap.set(pid, { ...cur, playing: true });
-            }
-          }
-        }
-
         const courseId = (rRow as any)?.course_id ?? null;
         let parsMap = new Map<Tee, Map<number, { par: number; si: number }>>();
         if (courseId) {
@@ -474,12 +456,7 @@ export default function MatchesResultsRoundPage() {
     if (!settings) return [];
     if (settings.format === "INDIVIDUAL_STABLEFORD") return [];
 
-    const out: Array<{
-      match_id: string;
-      match_no: number;
-      resultText: string;
-      isFinal: boolean;
-    }> = [];
+    const out: Array<{ match_id: string; match_no: number; resultText: string }> = [];
 
     for (const mRow of matches) {
       const assigns = (mRow.match_round_match_players ?? []) as any[];
@@ -528,12 +505,7 @@ export default function MatchesResultsRoundPage() {
         ? renderFinalText({ diff: summary.diff, decidedAt: summary.decidedAt, leftLabel, rightLabel })
         : renderLiveText({ diff: summary.diff, thru: summary.thru, leftLabel, rightLabel });
 
-      out.push({
-        match_id: String(mRow.id),
-        match_no: Number(mRow.match_no),
-        resultText,
-        isFinal: summary.isFinal,
-      });
+      out.push({ match_id: String(mRow.id), match_no: Number(mRow.match_no), resultText });
     }
 
     out.sort((a, b) => a.match_no - b.match_no);
@@ -584,6 +556,11 @@ export default function MatchesResultsRoundPage() {
     const c = getCourseName(round);
     return [rn, d || "", c || ""].filter(Boolean).join(" · ");
   }, [round]);
+
+  function goToMatch(matchId: string) {
+    if (!matchId) return;
+    router.push(`/m/tours/${tourId}/matches/results/${roundId}/match/${matchId}`);
+  }
 
   if (!isLikelyUuid(tourId) || !isLikelyUuid(roundId)) {
     return (
@@ -659,10 +636,11 @@ export default function MatchesResultsRoundPage() {
                 ) : (
                   <div className="divide-y">
                     {matchResults.map((m) => (
-                      <Link
+                      <button
                         key={m.match_id}
-                        href={`/m/tours/${tourId}/matches/results/${roundId}/match/${m.match_id}`}
-                        className="block p-4 cursor-pointer active:bg-gray-50"
+                        type="button"
+                        onClick={() => goToMatch(m.match_id)}
+                        className="w-full text-left p-4 active:bg-gray-50"
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -671,7 +649,7 @@ export default function MatchesResultsRoundPage() {
                           </div>
                           <div className="shrink-0 text-xs font-semibold text-gray-500">View</div>
                         </div>
-                      </Link>
+                      </button>
                     ))}
                   </div>
                 )}
