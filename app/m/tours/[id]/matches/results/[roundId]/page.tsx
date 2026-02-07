@@ -1,4 +1,3 @@
-// app/m/tours/[id]/matches/results/[roundId]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -13,8 +12,8 @@ type RoundRow = {
   tour_id: string;
   course_id: string | null;
   round_no?: number | null;
-  round_date?: string | null;
-  played_on?: string | null;
+  round_date?: string | null; // may not exist
+  played_on?: string | null; // may not exist
   created_at: string | null;
   courses?: { name: string } | { name: string }[] | null;
 };
@@ -118,7 +117,7 @@ function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
 
 // Stableford (net) per hole
 function netStablefordPointsForHole(params: {
-  rawScore: string;
+  rawScore: string; // "" | "P" | "number"
   par: number;
   strokeIndex: number;
   playingHandicap: number;
@@ -182,8 +181,10 @@ function computeMatchplaySummary(holeWinners: Array<"A" | "B" | "HALVED" | "NO_D
 
 function renderLiveText(args: { diff: number; thru: number; leftLabel: string; rightLabel: string }) {
   const { diff, thru, leftLabel, rightLabel } = args;
+
   if (thru <= 0) return "Not started";
   if (diff === 0) return `All Square (after ${thru} holes)`;
+
   const leaderLabel = diff > 0 ? leftLabel : rightLabel;
   const up = Math.abs(diff);
   return `${leaderLabel} is ${up} up (after ${thru} holes)`;
@@ -191,6 +192,7 @@ function renderLiveText(args: { diff: number; thru: number; leftLabel: string; r
 
 function renderFinalText(args: { diff: number; decidedAt: number | null; leftLabel: string; rightLabel: string }) {
   const { diff, decidedAt, leftLabel, rightLabel } = args;
+
   if (diff === 0) return "All Square";
 
   const winnerLabel = diff > 0 ? leftLabel : rightLabel;
@@ -258,9 +260,15 @@ export default function MatchesResultsRoundPage() {
                 const r3 = await fetchRound(baseCols);
                 if (r3.error) throw r3.error;
                 rRow = r3.data;
-              } else throw r2.error;
-            } else rRow = r2.data;
-          } else throw r1.error;
+              } else {
+                throw r2.error;
+              }
+            } else {
+              rRow = r2.data;
+            }
+          } else {
+            throw r1.error;
+          }
         } else {
           rRow = r1.data;
         }
@@ -467,7 +475,6 @@ export default function MatchesResultsRoundPage() {
       const B2 = assigns.find((x) => x.side === "B" && Number(x.slot) === 2)?.player_id ?? "";
 
       const isBetterBall = settings.format === "BETTERBALL_MATCHPLAY";
-
       const leftLabel = isBetterBall ? `${playerName(A1)} / ${playerName(A2)}` : `${playerName(A1)}`;
       const rightLabel = isBetterBall ? `${playerName(B1)} / ${playerName(B2)}` : `${playerName(B1)}`;
 
@@ -546,7 +553,6 @@ export default function MatchesResultsRoundPage() {
     const cutoff = stablefordTotals[cutoffIndex]?.total ?? null;
 
     const winners = cutoff == null ? [] : stablefordTotals.filter((r) => r.total >= cutoff);
-
     return { winners, cutoff, target };
   }, [settings, stablefordTotals, tourPlayerCount]);
 
@@ -557,16 +563,34 @@ export default function MatchesResultsRoundPage() {
     return [rn, d || "", c || ""].filter(Boolean).join(" · ");
   }, [round]);
 
-  function goToMatch(matchId: string) {
+  function hardNavigateToMatch(matchId: string) {
     if (!matchId) return;
-    router.push(`/m/tours/${tourId}/matches/results/${roundId}/match/${matchId}`);
+
+    const url = `/m/tours/${tourId}/matches/results/${roundId}/match/${matchId}`;
+
+    // Try SPA navigation first
+    try {
+      router.push(url);
+    } catch {
+      // ignore
+    }
+
+    // Hard fallback (covers iOS oddities / blocked client navigation)
+    if (typeof window !== "undefined") {
+      const targetPath = new URL(url, window.location.origin).pathname;
+      window.setTimeout(() => {
+        if (window.location.pathname !== targetPath) {
+          window.location.href = url;
+        }
+      }, 120);
+    }
   }
 
   if (!isLikelyUuid(tourId) || !isLikelyUuid(roundId)) {
     return (
       <div className="min-h-dvh bg-white text-gray-900 pb-10">
         <div className="mx-auto w-full max-w-md px-4 py-6">
-          <div className="rounded-2xl border p-4 text-sm">Missing or invalid params.</div>
+          <div className="rounded-2xl border p-4 text-sm">Missing or invalid tour/round id in route.</div>
           <div className="mt-4">
             <Link className="underline text-sm" href={`/m/tours/${tourId}/matches/results`}>
               Back
@@ -639,7 +663,7 @@ export default function MatchesResultsRoundPage() {
                       <button
                         key={m.match_id}
                         type="button"
-                        onClick={() => goToMatch(m.match_id)}
+                        onClick={() => hardNavigateToMatch(m.match_id)}
                         className="w-full text-left p-4 active:bg-gray-50"
                       >
                         <div className="flex items-start justify-between gap-3">
@@ -673,7 +697,10 @@ export default function MatchesResultsRoundPage() {
                     ) : (
                       <div className="mt-2 space-y-1">
                         {stablefordWinners.winners.map((w) => (
-                          <div key={w.player_id} className="flex items-center justify-between rounded-xl border border-gray-200 px-3 py-2">
+                          <div
+                            key={w.player_id}
+                            className="flex items-center justify-between rounded-xl border border-gray-200 px-3 py-2"
+                          >
                             <div className="text-sm font-semibold text-gray-900 truncate">{w.name}</div>
                             <div className="text-sm font-extrabold text-gray-900">{w.total}</div>
                           </div>
@@ -690,7 +717,9 @@ export default function MatchesResultsRoundPage() {
                       <div className="mt-2 overflow-hidden rounded-2xl border border-gray-200">
                         <div className="grid grid-cols-12 bg-gray-50 border-b">
                           <div className="col-span-9 px-3 py-2 text-[11px] font-semibold text-gray-700">Player</div>
-                          <div className="col-span-3 px-3 py-2 text-right text-[11px] font-semibold text-gray-700">Total</div>
+                          <div className="col-span-3 px-3 py-2 text-right text-[11px] font-semibold text-gray-700">
+                            Total
+                          </div>
                         </div>
                         <div className="divide-y">
                           {stablefordTotals.map((r) => (
