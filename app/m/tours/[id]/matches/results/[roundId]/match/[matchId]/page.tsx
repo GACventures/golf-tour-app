@@ -116,32 +116,9 @@ function getCourseName(r: RoundRow) {
 }
 
 function isMissingColumnError(msg: string, column: string) {
-  const m = msg.toLowerCase();
+  const m = String(msg ?? "").toLowerCase();
   const c = column.toLowerCase();
   return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
-}
-
-function matchStatusText(diff: number, thru: number): string {
-  if (thru <= 0) return "Not started";
-  if (diff === 0) return `AS thru ${thru}`;
-  const leader = diff > 0 ? "A" : "B";
-  const up = Math.abs(diff);
-  return `${leader} ${up}up thru ${thru}`;
-}
-
-function matchResultTextFinal(diff: number, decidedAtHole: number | null): string {
-  if (diff === 0) return "All Square";
-
-  const winner = diff > 0 ? "A" : "B";
-  const up = Math.abs(diff);
-
-  if (decidedAtHole && decidedAtHole >= 1 && decidedAtHole <= 18) {
-    const remaining = 18 - decidedAtHole;
-    if (remaining > 0) return `${winner} won ${up}&${remaining}`;
-    return `${winner} won ${up}up`;
-  }
-
-  return `${winner} won ${up}up`;
 }
 
 function holeResultLabel(aPts: number | null, bPts: number | null): "A" | "B" | "AS" | "—" {
@@ -149,6 +126,33 @@ function holeResultLabel(aPts: number | null, bPts: number | null): "A" | "B" | 
   if (aPts > bPts) return "A";
   if (bPts > aPts) return "B";
   return "AS";
+}
+
+function renderLiveText(args: { diff: number; thru: number; labelA: string; labelB: string }) {
+  const { diff, thru, labelA, labelB } = args;
+  if (thru <= 0) return "Not started";
+  if (diff === 0) return `All Square (after ${thru} holes)`;
+  const leader = diff > 0 ? labelA : labelB;
+  const up = Math.abs(diff);
+  return `${leader} is ${up} up (after ${thru} holes)`;
+}
+
+function renderFinalText(args: { diff: number; decidedAt: number | null; labelA: string; labelB: string }) {
+  const { diff, decidedAt, labelA, labelB } = args;
+  if (diff === 0) return "All Square";
+
+  const winner = diff > 0 ? labelA : labelB;
+  const loser = diff > 0 ? labelB : labelA;
+  const up = Math.abs(diff);
+
+  // If decided early, use X & Y based on decidedAt (clinch hole)
+  if (decidedAt != null && decidedAt >= 1 && decidedAt <= 18) {
+    const remaining = 18 - decidedAt;
+    if (remaining > 0) return `${winner} def ${loser} ${up} & ${remaining}`;
+  }
+
+  // Otherwise (decided on 18), traditional "n up"
+  return `${winner} def ${loser} ${up} up`;
 }
 
 export default function MatchDetailPage() {
@@ -163,7 +167,6 @@ export default function MatchDetailPage() {
   const [error, setError] = useState("");
 
   const [format, setFormat] = useState<MatchFormat | null>(null);
-  const [roundId, setRoundId] = useState<string>(roundIdFromRoute);
 
   const [round, setRound] = useState<RoundRow | null>(null);
   const [playersBySide, setPlayersBySide] = useState<{ A: MatchPlayerRow[]; B: MatchPlayerRow[] }>({ A: [], B: [] });
@@ -200,7 +203,6 @@ export default function MatchDetailPage() {
         if (!sRoundId) throw new Error("Match settings are missing round_id.");
 
         setFormat(fmt || null);
-        setRoundId(sRoundId);
 
         const { data: mpRows, error: mpErr } = await supabase
           .from("match_round_match_players")
@@ -416,56 +418,6 @@ export default function MatchDetailPage() {
     return out;
   }, [playersBySide, ptsByPlayerHole, format]);
 
-  const computed = useMemo(() => {
-    let diff = 0;
-    let thru = 0;
-    let decidedAt: number | null = null;
-
-    const rows: Array<{
-      hole: number;
-      aPts: number | null;
-      bPts: number | null;
-      holeResult: "A" | "B" | "AS" | "—";
-      diffAfter: number;
-      statusAfter: string;
-    }> = [];
-
-    for (let h = 1; h <= 18; h++) {
-      const aPts = sidePtsByHole.get(`A|${h}`) ?? null;
-      const bPts = sidePtsByHole.get(`B|${h}`) ?? null;
-
-      const hr = holeResultLabel(aPts, bPts);
-
-      if (hr !== "—") {
-        thru = h;
-        if (hr === "A") diff += 1;
-        else if (hr === "B") diff -= 1;
-      }
-
-      const remaining = 18 - h;
-      if (decidedAt === null && hr !== "—" && Math.abs(diff) > remaining) {
-        decidedAt = h;
-      }
-
-      const statusAfter =
-        hr === "—"
-          ? "—"
-          : diff === 0
-          ? "AS"
-          : diff > 0
-          ? `A ${Math.abs(diff)}up`
-          : `B ${Math.abs(diff)}up`;
-
-      rows.push({ hole: h, aPts, bPts, holeResult: hr, diffAfter: diff, statusAfter });
-    }
-
-    const complete = thru === 18 || decidedAt !== null;
-    const status = matchStatusText(diff, thru);
-    const resultText = complete ? matchResultTextFinal(diff, decidedAt) : status;
-
-    return { rows, diff, thru, decidedAt, complete, status, resultText };
-  }, [sidePtsByHole]);
-
   const sideLabel = useMemo(() => {
     function label(side: Side) {
       const ps = side === "A" ? playersBySide.A : playersBySide.B;
@@ -479,6 +431,80 @@ export default function MatchDetailPage() {
     }
     return { A: label("A"), B: label("B") };
   }, [playersBySide, format]);
+
+  // ✅ Step-2 core fix: freeze at clinch hole and blank the remaining holes
+  const computed = useMemo(() => {
+    let diff = 0;
+    let thru = 0;
+    let decidedAt: number | null = null;
+
+    // diff at clinch (or final) that we should use for display
+    let diffFrozen: number | null = null;
+
+    const rows: Array<{
+      hole: number;
+      aPts: number | null;
+      bPts: number | null;
+      holeResult: "A" | "B" | "AS" | "—";
+      statusAfter: string; // blank for holes after match over
+    }> = [];
+
+    for (let h = 1; h <= 18; h++) {
+      // If match already decided, push blank rows
+      if (decidedAt !== null) {
+        rows.push({ hole: h, aPts: null, bPts: null, holeResult: "—", statusAfter: "" });
+        continue;
+      }
+
+      const aPts = sidePtsByHole.get(`A|${h}`) ?? null;
+      const bPts = sidePtsByHole.get(`B|${h}`) ?? null;
+
+      const hr = holeResultLabel(aPts, bPts);
+
+      // Only advance state if computable
+      if (hr !== "—") {
+        thru = h;
+        if (hr === "A") diff += 1;
+        else if (hr === "B") diff -= 1;
+
+        const remaining = 18 - h;
+        if (Math.abs(diff) > remaining) {
+          decidedAt = h;
+          diffFrozen = diff; // freeze right at clinch hole
+        }
+      }
+
+      const statusAfter =
+        hr === "—"
+          ? "—"
+          : diff === 0
+          ? "AS"
+          : diff > 0
+          ? `A ${Math.abs(diff)}up`
+          : `B ${Math.abs(diff)}up`;
+
+      rows.push({ hole: h, aPts: hr === "—" ? null : aPts, bPts: hr === "—" ? null : bPts, holeResult: hr, statusAfter });
+    }
+
+    const complete = decidedAt !== null || thru === 18;
+    const diffForDisplay = diffFrozen !== null ? diffFrozen : diff;
+
+    const headerText = complete
+      ? renderFinalText({ diff: diffForDisplay, decidedAt, labelA: sideLabel.A || "A", labelB: sideLabel.B || "B" })
+      : renderLiveText({ diff: diffForDisplay, thru, labelA: sideLabel.A || "A", labelB: sideLabel.B || "B" });
+
+    const liveText = renderLiveText({ diff: diffForDisplay, thru, labelA: sideLabel.A || "A", labelB: sideLabel.B || "B" });
+
+    return {
+      rows,
+      diff: diffForDisplay,
+      thru,
+      decidedAt,
+      complete,
+      headerText,
+      liveText,
+    };
+  }, [sidePtsByHole, sideLabel.A, sideLabel.B]);
 
   function goBack() {
     router.push(`/m/tours/${tourId}/matches/results/${roundIdFromRoute}`);
@@ -545,7 +571,7 @@ export default function MatchDetailPage() {
           <div className="p-4 border-b">
             <div className="text-sm font-semibold text-gray-900">{fmtShort}</div>
             <div className="mt-1 text-xs text-gray-600">
-              {computed.complete ? "Final" : "In progress"} · {computed.resultText}
+              {computed.complete ? "Final" : "In progress"} · {computed.headerText}
             </div>
           </div>
 
@@ -565,7 +591,7 @@ export default function MatchDetailPage() {
 
             {!computed.complete ? (
               <div className="text-xs text-gray-600">
-                Current: <span className="font-semibold">{computed.status}</span>
+                Current: <span className="font-semibold">{computed.liveText}</span>
               </div>
             ) : null}
           </div>
@@ -607,14 +633,14 @@ export default function MatchDetailPage() {
                   return (
                     <tr key={r.hole} className="border-b last:border-b-0">
                       <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900">{r.hole}</td>
-                      <td className="px-3 py-2 text-center text-sm text-gray-900">{r.aPts === null ? "—" : r.aPts}</td>
-                      <td className="px-3 py-2 text-center text-sm text-gray-900">{r.bPts === null ? "—" : r.bPts}</td>
+                      <td className="px-3 py-2 text-center text-sm text-gray-900">{r.aPts === null ? "" : r.aPts}</td>
+                      <td className="px-3 py-2 text-center text-sm text-gray-900">{r.bPts === null ? "" : r.bPts}</td>
                       <td className="px-3 py-2 text-center">
                         <span className={`inline-flex min-w-[56px] justify-center rounded-full px-2 py-1 text-xs font-semibold ${badge}`}>
-                          {r.holeResult}
+                          {r.holeResult === "—" ? "" : r.holeResult}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-center text-sm font-semibold text-gray-900">{r.statusAfter}</td>
+                      <td className="px-3 py-2 text-center text-sm font-semibold text-gray-900">{r.statusAfter || ""}</td>
                     </tr>
                   );
                 })}
@@ -640,6 +666,16 @@ export default function MatchDetailPage() {
               <div className="mt-3 space-y-4">
                 {Array.from({ length: 18 }).map((_, idx) => {
                   const hole = idx + 1;
+
+                  // ✅ If match is over and this is after clinch hole, hide remaining hole detail blocks
+                  if (computed.decidedAt !== null && hole > computed.decidedAt) {
+                    return (
+                      <div key={hole} className="rounded-xl border border-gray-200 bg-white p-3">
+                        <div className="text-sm font-extrabold text-gray-900">Hole {hole}</div>
+                        <div className="mt-1 text-xs text-gray-500">Match already decided.</div>
+                      </div>
+                    );
+                  }
 
                   const aSide = playersBySide.A;
                   const bSide = playersBySide.B;
@@ -700,14 +736,16 @@ export default function MatchDetailPage() {
                       <div className="mt-3 grid grid-cols-1 gap-3">
                         <div className="rounded-lg border border-gray-200 p-2">
                           <div className="text-xs font-semibold text-gray-600 mb-2">
-                            Side A {format === "BETTERBALL_MATCHPLAY" && aCounted ? `· counted: ${aCounted.player.name}` : ""}
+                            Side A{" "}
+                            {format === "BETTERBALL_MATCHPLAY" && aCounted ? `· counted: ${aCounted.player.name}` : ""}
                           </div>
                           <div className="space-y-2">{aSide.map(playerLine)}</div>
                         </div>
 
                         <div className="rounded-lg border border-gray-200 p-2">
                           <div className="text-xs font-semibold text-gray-600 mb-2">
-                            Side B {format === "BETTERBALL_MATCHPLAY" && bCounted ? `· counted: ${bCounted.player.name}` : ""}
+                            Side B{" "}
+                            {format === "BETTERBALL_MATCHPLAY" && bCounted ? `· counted: ${bCounted.player.name}` : ""}
                           </div>
                           <div className="space-y-2">{bSide.map(playerLine)}</div>
                         </div>
