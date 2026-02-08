@@ -179,7 +179,8 @@ function computeStopAndRunning(holeOutcomes: HoleOutcome[]) {
     }
   }
 
-  return { stopHoleExclusive: 19, reason: null as const, decidedAt: null };
+ return { stopHoleExclusive: 19, reason: null, decidedAt: null };
+
 }
 
 function liveStatusText(diff: number, thru: number) {
@@ -734,7 +735,7 @@ export default function MatchDetailPage() {
               </div>
 
               {/* Stop note */}
-              <div className="p-4 text-xs text-gray-600 border-t bg-white">
+            stopHoleExclusive  <div className="p-4 text-xs text-gray-600 border-t bg-white">
                 {(holeRows as any).stop?.reason === "NO_DATA"
                   ? "Stopped because one side is missing scores from that hole onwards."
                   : (holeRows as any).stop?.reason === "CLINCHED"
