@@ -28,6 +28,14 @@ const JAPAN_HERO = "/tours/japan-poster_mobile_1080w.webp";
 const PORTUGAL_TOUR_ID = "b5e5b90d-0ae5-4be5-a3cd-3ef1c73cb6b5";
 const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
 
+// ✅ Kiwi Madness tour (mobile landing hero override) — match EXACT tour name
+const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
+const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
+
+function isKiwiMadnessTourName(name: string | null | undefined) {
+  return (name ?? "").trim() === KIWI_MADNESS_TOUR_NAME;
+}
+
 function parseDate(value: string | null): Date | null {
   if (!value) return null;
   const d = new Date(value);
@@ -106,16 +114,19 @@ export default function MobileTourLandingPage() {
 
   const title = tour?.name?.trim() || "Tour";
 
-  // ✅ Hero selection:
-  // - Portugal tour: always use local hero override (public/)
-  // - Japan tour: always use local hero override (public/)
-  // - Otherwise: tour image_url if present, else default
+  // ✅ Hero selection priority:
+  // 1) Kiwi Madness (exact tour name): local hero override
+  // 2) Portugal (tour id): local hero override
+  // 3) Japan (tour id): local hero override
+  // 4) Otherwise: tour.image_url if present, else default
   const heroImage = useMemo(() => {
+    if (isKiwiMadnessTourName(tour?.name)) return KIWI_MADNESS_HERO;
     if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
     if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
+
     const t = (tour?.image_url ?? "").trim();
     return t ? t : DEFAULT_HERO;
-  }, [tourId, tour?.image_url]);
+  }, [tourId, tour?.image_url, tour?.name]);
 
   // Default dates from rounds.played_on if tour dates not set
   const derived = useMemo(() => {
