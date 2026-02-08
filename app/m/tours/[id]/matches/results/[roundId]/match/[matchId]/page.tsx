@@ -29,6 +29,8 @@ type SettingsRow = {
   double_points: boolean;
 };
 
+type GroupRow = { id: string; name: string | null };
+
 type PlayerRow = { id: string; name: string; gender?: string | null };
 
 type RoundPlayerRow = {
@@ -47,6 +49,7 @@ type ScoreRow = {
 type MatchRow = {
   id: string;
   match_no: number;
+  settings_id?: string | null;
   match_round_match_players?: Array<{ side: "A" | "B"; slot: number; player_id: string }>;
 };
 
@@ -114,7 +117,7 @@ function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
   return Number.isFinite(n) ? String(n) : "";
 }
 
-// Net stableford per hole (pickup=0)
+// Stableford (net) per hole
 function netStablefordPointsForHole(params: {
   rawScore: string; // "" | "P" | "number"
   par: number;
@@ -141,65 +144,66 @@ function netStablefordPointsForHole(params: {
   return Math.max(0, Math.min(pts, 10));
 }
 
-type Winner = "A" | "B" | "HALVED" | "NO_DATA";
+function formatLabel(f: SettingsRow["format"]) {
+  if (f === "INDIVIDUAL_MATCHPLAY") return "Individual matchplay";
+  if (f === "BETTERBALL_MATCHPLAY") return "Better ball matchplay";
+  return "Individual stableford";
+}
 
-type Summary = {
-  thru: number;
-  diff: number; // + => A leading; - => B leading
-  decidedAt: number | null;
-  isFinal: boolean;
-};
+type HoleOutcome = "A" | "B" | "HALVED" | "NO_DATA";
 
-function computeSummary(winners: Winner[]): Summary {
-  let diff = 0;
+type MatchStop = { stopHoleExclusive: number; reason: "NO_DATA" | "CLINCHED" | null; decidedAt: number | null };
+
+function computeStopAndRunning(holeOutcomes: HoleOutcome[]) {
+  let diff = 0; // + => A leading; - => B leading
   let thru = 0;
   let decidedAt: number | null = null;
 
   for (let h = 1; h <= 18; h++) {
-    const w = winners[h - 1] ?? "NO_DATA";
-    if (w === "NO_DATA") continue;
+    const w = holeOutcomes[h - 1] ?? "NO_DATA";
+    if (w === "NO_DATA") {
+      // stop at first missing-data hole
+      return { stopHoleExclusive: h, reason: "NO_DATA" as const, decidedAt: null };
+    }
 
     thru = h;
+
     if (w === "A") diff += 1;
     else if (w === "B") diff -= 1;
 
     const holesRemaining = 18 - h;
-    if (decidedAt === null && Math.abs(diff) > holesRemaining) {
+    if (Math.abs(diff) > holesRemaining) {
       decidedAt = h;
-      break;
+      // stop after clinch hole
+      return { stopHoleExclusive: h + 1, reason: "CLINCHED" as const, decidedAt };
     }
   }
 
-  const isFinal = decidedAt !== null || thru === 18;
-  return { thru, diff, decidedAt, isFinal };
+  return { stopHoleExclusive: 19, reason: null as const, decidedAt: null };
 }
 
-function renderLiveText(args: { diff: number; thru: number; leftLabel: string; rightLabel: string }) {
-  const { diff, thru, leftLabel, rightLabel } = args;
+function liveStatusText(diff: number, thru: number) {
   if (thru <= 0) return "Not started";
-  if (diff === 0) return `All Square (after ${thru} holes)`;
-  const leader = diff > 0 ? leftLabel : rightLabel;
-  return `${leader} ${Math.abs(diff)} up (after ${thru} holes)`;
+  if (diff === 0) return `All Square (thru ${thru})`;
+  const up = Math.abs(diff);
+  const who = diff > 0 ? "A" : "B";
+  return `${who} ${up} up (thru ${thru})`;
 }
 
-function renderFinalText(args: { diff: number; decidedAt: number | null; leftLabel: string; rightLabel: string }) {
-  const { diff, decidedAt, leftLabel, rightLabel } = args;
+function finalText(diff: number, decidedAt: number | null) {
   if (diff === 0) return "All Square";
-
-  const winner = diff > 0 ? leftLabel : rightLabel;
-  const loser = diff > 0 ? rightLabel : leftLabel;
+  const winner = diff > 0 ? "A" : "B";
   const up = Math.abs(diff);
 
   if (decidedAt != null && decidedAt >= 1 && decidedAt <= 18) {
     const remaining = 18 - decidedAt;
-    if (remaining > 0) return `${winner} def ${loser} ${up} & ${remaining}`;
+    if (remaining > 0) return `${winner} wins ${up} & ${remaining}`;
   }
-  return `${winner} def ${loser} ${up} up`;
+  return `${winner} wins ${up} up`;
 }
 
 export default function MatchDetailPage() {
   const params = useParams<{ id?: string; roundId?: string; matchId?: string }>();
-
   const tourId = String(params?.id ?? "").trim();
   const roundId = String(params?.roundId ?? "").trim();
   const matchId = String(params?.matchId ?? "").trim();
@@ -209,7 +213,11 @@ export default function MatchDetailPage() {
 
   const [round, setRound] = useState<RoundRow | null>(null);
   const [settings, setSettings] = useState<SettingsRow | null>(null);
-  const [match, setMatch] = useState<MatchRow | null>(null);
+
+  const [groupA, setGroupA] = useState<GroupRow | null>(null);
+  const [groupB, setGroupB] = useState<GroupRow | null>(null);
+
+  const [matchRow, setMatchRow] = useState<MatchRow | null>(null);
 
   const [playersById, setPlayersById] = useState<Map<string, PlayerRow>>(new Map());
   const [roundPlayersById, setRoundPlayersById] = useState<Map<string, RoundPlayerRow>>(new Map());
@@ -236,7 +244,6 @@ export default function MatchDetailPage() {
         const cols2 = `${baseCols},played_on`;
 
         let rRow: any = null;
-
         const r1 = await fetchRound(cols1);
         if (r1.error) {
           if (isMissingColumnError(r1.error.message, "round_date")) {
@@ -268,30 +275,46 @@ export default function MatchDetailPage() {
         if (sErr) throw sErr;
 
         const set = (sRow ?? null) as any as SettingsRow | null;
-        if (!set) throw new Error("No match settings found for this round.");
+        if (!set) {
+          if (!alive) return;
+          setRound(rRow as any);
+          setSettings(null);
+          setLoading(false);
+          return;
+        }
 
-        // Match + players
+        // Group names
+        const { data: gRows, error: gErr } = await supabase
+          .from("tour_groups")
+          .select("id,name")
+          .in("id", [set.group_a_id, set.group_b_id]);
+        if (gErr) throw gErr;
+
+        const gA = (gRows ?? []).find((g: any) => String(g.id) === set.group_a_id) ?? null;
+        const gB = (gRows ?? []).find((g: any) => String(g.id) === set.group_b_id) ?? null;
+
+        // Match row
         const { data: mRow, error: mErr } = await supabase
           .from("match_round_matches")
-          .select("id,match_no,match_round_match_players(side,slot,player_id)")
+          .select("id,match_no,settings_id,match_round_match_players(side,slot,player_id)")
           .eq("id", matchId)
           .maybeSingle();
         if (mErr) throw mErr;
-        if (!mRow) throw new Error("Match not found.");
 
-        const matchRow = mRow as any as MatchRow;
+        const match = (mRow ?? null) as any as MatchRow | null;
+        if (!match) {
+          throw new Error("Match not found.");
+        }
 
-        const assigns = (matchRow.match_round_match_players ?? []) as any[];
+        const assigns = (match.match_round_match_players ?? []) as any[];
+        const A1 = assigns.find((x) => x.side === "A" && Number(x.slot) === 1)?.player_id ?? "";
+        const A2 = assigns.find((x) => x.side === "A" && Number(x.slot) === 2)?.player_id ?? "";
+        const B1 = assigns.find((x) => x.side === "B" && Number(x.slot) === 1)?.player_id ?? "";
+        const B2 = assigns.find((x) => x.side === "B" && Number(x.slot) === 2)?.player_id ?? "";
+
         const playerIds = Array.from(
-          new Set(
-            assigns
-              .map((a) => String(a.player_id ?? ""))
-              .map((x) => x.trim())
-              .filter(Boolean)
-          )
+          new Set([A1, A2, B1, B2].map((x) => String(x || "").trim()).filter(Boolean))
         );
-
-        if (playerIds.length === 0) throw new Error("No players assigned to this match.");
 
         // Players info
         const { data: pRows, error: pErr } = await supabase.from("players").select("id,name,gender").in("id", playerIds);
@@ -320,19 +343,34 @@ export default function MatchDetailPage() {
         });
 
         // Scores
-        const { data: scRows, error: scErr } = await supabase
-          .from("scores")
-          .select("player_id,hole_number,strokes,pickup")
-          .eq("round_id", roundId)
-          .in("player_id", playerIds);
-        if (scErr) throw scErr;
+        let sRows: ScoreRow[] = [];
+        if (playerIds.length > 0) {
+          const { data: scRows, error: scErr } = await supabase
+            .from("scores")
+            .select("player_id,hole_number,strokes,pickup")
+            .eq("round_id", roundId)
+            .in("player_id", playerIds);
+          if (scErr) throw scErr;
 
-        const sRows: ScoreRow[] = (scRows ?? []).map((s: any) => ({
-          player_id: String(s.player_id),
-          hole_number: Number(s.hole_number),
-          strokes: s.strokes === null || s.strokes === undefined ? null : Number(s.strokes),
-          pickup: s.pickup === true ? true : s.pickup === false ? false : (s.pickup ?? null),
-        }));
+          sRows = (scRows ?? []).map((s: any) => ({
+            player_id: String(s.player_id),
+            hole_number: Number(s.hole_number),
+            strokes: s.strokes === null || s.strokes === undefined ? null : Number(s.strokes),
+            pickup: s.pickup === true ? true : s.pickup === false ? false : (s.pickup ?? null),
+          }));
+        }
+
+        // If round_players.playing not set but scores exist, treat as playing (for match calc)
+        const hasScore = new Set<string>();
+        sRows.forEach((s) => hasScore.add(s.player_id));
+        for (const pid of playerIds) {
+          if (!rpMap.has(pid) && hasScore.has(pid)) {
+            rpMap.set(pid, { player_id: pid, playing: true, playing_handicap: 0 });
+          } else if (rpMap.has(pid) && rpMap.get(pid)!.playing !== true && hasScore.has(pid)) {
+            const cur = rpMap.get(pid)!;
+            rpMap.set(pid, { ...cur, playing: true });
+          }
+        }
 
         // Pars
         const courseId = (rRow as any)?.course_id ?? null;
@@ -358,7 +396,10 @@ export default function MatchDetailPage() {
 
         setRound(rRow as any);
         setSettings(set);
-        setMatch(matchRow);
+        setGroupA(gA ? { id: String(gA.id), name: gA.name ?? null } : null);
+        setGroupB(gB ? { id: String(gB.id), name: gB.name ?? null } : null);
+        setMatchRow(match);
+
         setPlayersById(pMap);
         setRoundPlayersById(rpMap);
         setScores(sRows);
@@ -377,35 +418,15 @@ export default function MatchDetailPage() {
     };
   }, [tourId, roundId, matchId]);
 
-  const headerLine = useMemo(() => {
-    const rn = round?.round_no != null ? `Round ${round.round_no}` : "Round";
-    const d = fmtAuMelbourneDate(parseDateForDisplay(pickBestRoundDateISO(round)));
-    const c = getCourseName(round);
-    return [rn, d || "", c || ""].filter(Boolean).join(" · ");
-  }, [round]);
+  const assigns = useMemo(() => (matchRow?.match_round_match_players ?? []) as any[], [matchRow]);
 
-  const assigns = useMemo(() => {
-    const a = (match?.match_round_match_players ?? []) as Array<{ side: "A" | "B"; slot: number; player_id: string }>;
-    const get = (side: "A" | "B", slot: 1 | 2) =>
-      a.find((x) => x.side === side && Number(x.slot) === slot)?.player_id ? String(a.find((x) => x.side === side && Number(x.slot) === slot)!.player_id) : "";
-    return {
-      A1: get("A", 1),
-      A2: get("A", 2),
-      B1: get("B", 1),
-      B2: get("B", 2),
-    };
-  }, [match]);
-
-  function playerName(id: string) {
-    return playersById.get(id)?.name ?? "(player)";
-  }
-
-  const labels = useMemo(() => {
-    const isBetterBall = settings?.format === "BETTERBALL_MATCHPLAY";
-    const left = isBetterBall ? `${playerName(assigns.A1)} / ${playerName(assigns.A2)}` : `${playerName(assigns.A1)}`;
-    const right = isBetterBall ? `${playerName(assigns.B1)} / ${playerName(assigns.B2)}` : `${playerName(assigns.B1)}`;
-    return { left, right, isBetterBall };
-  }, [settings, assigns, playersById]);
+  const sideIds = useMemo(() => {
+    const A1 = assigns.find((x) => x.side === "A" && Number(x.slot) === 1)?.player_id ?? "";
+    const A2 = assigns.find((x) => x.side === "A" && Number(x.slot) === 2)?.player_id ?? "";
+    const B1 = assigns.find((x) => x.side === "B" && Number(x.slot) === 1)?.player_id ?? "";
+    const B2 = assigns.find((x) => x.side === "B" && Number(x.slot) === 2)?.player_id ?? "";
+    return { A1: String(A1 || ""), A2: String(A2 || ""), B1: String(B1 || ""), B2: String(B2 || "") };
+  }, [assigns]);
 
   const scoreByPlayerHole = useMemo(() => {
     const m = new Map<string, ScoreRow>();
@@ -417,20 +438,21 @@ export default function MatchDetailPage() {
     const m = new Map<string, number>();
     if (!round?.course_id) return m;
 
-    for (const [pid, p] of playersById.entries()) {
+    for (const [playerId, p] of playersById.entries()) {
+      const rp = roundPlayersById.get(playerId);
+      if (!rp?.playing) continue;
+
       const tee: Tee = p.gender ? normalizeTee(p.gender) : "M";
       const pars = parsByTeeHole.get(tee) || parsByTeeHole.get("M") || parsByTeeHole.get("F") || null;
       if (!pars) continue;
 
-      const rp = roundPlayersById.get(pid);
-      // even if playing flag missing, we can still compute if scores exist; but keep strict for now:
-      const hcp = Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp?.playing_handicap) : 0;
+      const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
 
       for (let h = 1; h <= 18; h++) {
         const pr = pars.get(h);
         if (!pr) continue;
 
-        const sc = scoreByPlayerHole.get(`${pid}|${h}`);
+        const sc = scoreByPlayerHole.get(`${playerId}|${h}`);
         if (!sc) continue;
 
         const raw = normalizeRawScore(sc.strokes, sc.pickup);
@@ -440,111 +462,143 @@ export default function MatchDetailPage() {
           strokeIndex: pr.si,
           playingHandicap: hcp,
         });
-        m.set(`${pid}|${h}`, pts);
+
+        m.set(`${playerId}|${h}`, pts);
       }
     }
 
     return m;
   }, [round, playersById, roundPlayersById, parsByTeeHole, scoreByPlayerHole]);
 
-  const holes = useMemo(() => {
-    if (!settings || !match) return [];
+  function playerName(pid: string) {
+    return playersById.get(pid)?.name ?? "(player)";
+  }
 
-    const { A1, A2, B1, B2 } = assigns;
-    const isBetterBall = settings.format === "BETTERBALL_MATCHPLAY";
+  const labels = useMemo(() => {
+    if (!settings) return { left: "", right: "", aLabel: "", bLabel: "" };
+    const isBB = settings.format === "BETTERBALL_MATCHPLAY";
+    const aLabel = isBB ? `${playerName(sideIds.A1)} / ${playerName(sideIds.A2)}` : `${playerName(sideIds.A1)}`;
+    const bLabel = isBB ? `${playerName(sideIds.B1)} / ${playerName(sideIds.B2)}` : `${playerName(sideIds.B1)}`;
+    return { left: aLabel, right: bLabel, aLabel, bLabel };
+  }, [settings, sideIds, playersById]);
 
+  const holeRows = useMemo(() => {
+    if (!settings) return [];
+
+    const isBB = settings.format === "BETTERBALL_MATCHPLAY";
+
+    // Determine per-hole outcome (A/B/HALVED/NO_DATA) using "computable" rule
+    const outcomes: HoleOutcome[] = [];
+    const aPtsArr: Array<number | null> = [];
+    const bPtsArr: Array<number | null> = [];
+
+    for (let h = 1; h <= 18; h++) {
+      const aHas = isBB
+        ? ptsByPlayerHole.has(`${sideIds.A1}|${h}`) || ptsByPlayerHole.has(`${sideIds.A2}|${h}`)
+        : ptsByPlayerHole.has(`${sideIds.A1}|${h}`);
+      const bHas = isBB
+        ? ptsByPlayerHole.has(`${sideIds.B1}|${h}`) || ptsByPlayerHole.has(`${sideIds.B2}|${h}`)
+        : ptsByPlayerHole.has(`${sideIds.B1}|${h}`);
+
+      if (!aHas || !bHas) {
+        outcomes.push("NO_DATA");
+        aPtsArr.push(null);
+        bPtsArr.push(null);
+        continue;
+      }
+
+      const aPts = isBB
+        ? Math.max(ptsByPlayerHole.get(`${sideIds.A1}|${h}`) ?? 0, ptsByPlayerHole.get(`${sideIds.A2}|${h}`) ?? 0)
+        : ptsByPlayerHole.get(`${sideIds.A1}|${h}`) ?? 0;
+
+      const bPts = isBB
+        ? Math.max(ptsByPlayerHole.get(`${sideIds.B1}|${h}`) ?? 0, ptsByPlayerHole.get(`${sideIds.B2}|${h}`) ?? 0)
+        : ptsByPlayerHole.get(`${sideIds.B1}|${h}`) ?? 0;
+
+      aPtsArr.push(aPts);
+      bPtsArr.push(bPts);
+
+      if (aPts > bPts) outcomes.push("A");
+      else if (bPts > aPts) outcomes.push("B");
+      else outcomes.push("HALVED");
+    }
+
+    // Stop logic (first NO_DATA OR clinch)
+    const stop: MatchStop = computeStopAndRunning(outcomes);
+
+    // Build table rows, blanking everything at/after stopHoleExclusive
     const rows: Array<{
       hole: number;
       aPts: number | null;
       bPts: number | null;
-      winner: Winner;
-      runningText: string;
+      winner: "A" | "B" | "HALVED" | null;
+      status: string | null;
     }> = [];
 
-    const winners: Winner[] = [];
-
-    let diff = 0;
+    let runningDiff = 0;
     let thru = 0;
 
     for (let h = 1; h <= 18; h++) {
-      const aHas = isBetterBall
-        ? ptsByPlayerHole.has(`${A1}|${h}`) || ptsByPlayerHole.has(`${A2}|${h}`)
-        : ptsByPlayerHole.has(`${A1}|${h}`);
-      const bHas = isBetterBall
-        ? ptsByPlayerHole.has(`${B1}|${h}`) || ptsByPlayerHole.has(`${B2}|${h}`)
-        : ptsByPlayerHole.has(`${B1}|${h}`);
+      const shouldBlank = h >= stop.stopHoleExclusive;
 
-      let aPts: number | null = null;
-      let bPts: number | null = null;
-
-      if (aHas) {
-        aPts = isBetterBall
-          ? Math.max(ptsByPlayerHole.get(`${A1}|${h}`) ?? 0, ptsByPlayerHole.get(`${A2}|${h}`) ?? 0)
-          : ptsByPlayerHole.get(`${A1}|${h}`) ?? 0;
-      }
-      if (bHas) {
-        bPts = isBetterBall
-          ? Math.max(ptsByPlayerHole.get(`${B1}|${h}`) ?? 0, ptsByPlayerHole.get(`${B2}|${h}`) ?? 0)
-          : ptsByPlayerHole.get(`${B1}|${h}`) ?? 0;
+      if (shouldBlank) {
+        rows.push({ hole: h, aPts: null, bPts: null, winner: null, status: null });
+        continue;
       }
 
-      let w: Winner = "NO_DATA";
-      if (aHas && bHas) {
-        thru = h;
-        if ((aPts ?? 0) > (bPts ?? 0)) {
-          w = "A";
-          diff += 1;
-        } else if ((bPts ?? 0) > (aPts ?? 0)) {
-          w = "B";
-          diff -= 1;
-        } else {
-          w = "HALVED";
-        }
-      }
+      const w = outcomes[h - 1];
+      const aPts = aPtsArr[h - 1];
+      const bPts = bPtsArr[h - 1];
 
-      winners.push(w);
+      // By definition pre-stop, w cannot be NO_DATA.
+      if (w === "A") runningDiff += 1;
+      else if (w === "B") runningDiff -= 1;
+      thru = h;
 
-      const runningText =
-        thru <= 0
-          ? ""
-          : diff === 0
-          ? "AS"
-          : diff > 0
-          ? `A ${Math.abs(diff)} up`
-          : `B ${Math.abs(diff)} up`;
+      const status = stop.reason === "CLINCHED" && stop.decidedAt != null && h === stop.decidedAt
+        ? finalText(runningDiff, stop.decidedAt)
+        : liveStatusText(runningDiff, thru);
 
-      rows.push({ hole: h, aPts, bPts, winner: w, runningText });
+      rows.push({
+        hole: h,
+        aPts: aPts ?? 0,
+        bPts: bPts ?? 0,
+        winner: w === "HALVED" ? "HALVED" : (w as any),
+        status,
+      });
     }
 
-    // (not used directly here, but kept for consistency)
-    void winners;
+    return { rows, stop };
+  }, [settings, sideIds, ptsByPlayerHole]);
 
-    return rows;
-  }, [settings, match, assigns, ptsByPlayerHole]);
+  const headerLine = useMemo(() => {
+    const rn = round?.round_no != null ? `Round ${round.round_no}` : "Round";
+    const d = fmtAuMelbourneDate(parseDateForDisplay(pickBestRoundDateISO(round)));
+    const c = getCourseName(round);
+    return [rn, d || "", c || ""].filter(Boolean).join(" · ");
+  }, [round]);
 
-  const overall = useMemo(() => {
-    if (!settings || !match) return { title: "", subtitle: "" };
+  const topStatus = useMemo(() => {
+    if (!holeRows || !("rows" in holeRows)) return "";
+    const rows = (holeRows as any).rows as Array<any>;
+    const stop = (holeRows as any).stop as MatchStop;
 
-    const { left, right } = labels;
+    // Find last non-null status (pre-stop)
+    for (let i = Math.min(rows.length, 18) - 1; i >= 0; i--) {
+      if (rows[i]?.status) return rows[i].status as string;
+    }
 
-    const winners: Winner[] = holes.map((h) => h.winner);
-    const s = computeSummary(winners);
-
-    const title = `Match ${match.match_no}: ${left} vs ${right}`;
-    const subtitle = s.isFinal
-      ? renderFinalText({ diff: s.diff, decidedAt: s.decidedAt, leftLabel: left, rightLabel: right })
-      : renderLiveText({ diff: s.diff, thru: s.thru, leftLabel: left, rightLabel: right });
-
-    return { title, subtitle };
-  }, [settings, match, holes, labels]);
+    if (stop?.reason === "NO_DATA") return "Not started";
+    return "Not started";
+  }, [holeRows]);
 
   if (!isLikelyUuid(tourId) || !isLikelyUuid(roundId) || !isLikelyUuid(matchId)) {
     return (
       <div className="min-h-dvh bg-white text-gray-900 pb-10">
         <div className="mx-auto w-full max-w-md px-4 py-6">
-          <div className="rounded-2xl border p-4 text-sm">Missing or invalid route params.</div>
+          <div className="rounded-2xl border p-4 text-sm">Missing or invalid tour/round/match id in route.</div>
           <div className="mt-4">
-            <Link className="underline text-sm" href={`/m/tours/${tourId}/matches/results/${roundId}`}>
+            <Link className="underline text-sm" href={`/m/tours/${tourId}/matches/results`}>
               Back
             </Link>
           </div>
@@ -553,12 +607,17 @@ export default function MatchDetailPage() {
     );
   }
 
+  const isMatchplay = settings && settings.format !== "INDIVIDUAL_STABLEFORD";
+  const matchNo = matchRow?.match_no ?? null;
+
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-base font-semibold">Match – Detail</div>
+            <div className="text-base font-semibold">
+              Match {matchNo ?? ""} – Detail
+            </div>
             <div className="truncate text-sm text-gray-500">{headerLine || "Round"}</div>
           </div>
 
@@ -576,55 +635,115 @@ export default function MatchDetailPage() {
           <div className="rounded-2xl border p-4 text-sm">Loading…</div>
         ) : errorMsg ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{errorMsg}</div>
-        ) : !settings || !match ? (
-          <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">Match not available.</div>
+        ) : !settings ? (
+          <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
+            No match format is set for this round yet.
+          </div>
+        ) : !isMatchplay ? (
+          <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
+            This match detail view is only for matchplay formats.
+          </div>
         ) : (
           <>
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">{overall.title}</div>
-                <div className="mt-1 text-xs text-gray-600">{overall.subtitle}</div>
+                <div className="text-sm font-semibold text-gray-900">Match summary</div>
+                <div className="mt-1 text-xs text-gray-600">
+                  {formatLabel(settings.format)}
+                  {settings.double_points ? <span className="ml-2 font-semibold">· Double points</span> : null}
+                </div>
                 <div className="mt-2 text-xs text-gray-600">
-                  Holes are decided using <span className="font-semibold">net Stableford points</span> (pickup = 0).
-                  {settings.format === "BETTERBALL_MATCHPLAY" ? (
-                    <span className="ml-2">Betterball uses the best score per side per hole.</span>
-                  ) : null}
+                  Status: <span className="font-semibold text-gray-900">{topStatus || "Not started"}</span>
                 </div>
               </div>
 
-              <div className="p-4">
-                <div className="grid grid-cols-12 text-[11px] font-semibold text-gray-700">
-                  <div className="col-span-2">Hole</div>
-                  <div className="col-span-3 text-center">A</div>
-                  <div className="col-span-3 text-center">B</div>
-                  <div className="col-span-2 text-center">Win</div>
-                  <div className="col-span-2 text-right">Status</div>
-                </div>
+              <div className="p-4 space-y-2">
+                <div className="text-xs font-semibold text-gray-700">Sides</div>
 
-                <div className="mt-2 divide-y rounded-2xl border border-gray-200 overflow-hidden">
-                  {holes.map((h) => (
-                    <div key={h.hole} className="grid grid-cols-12 items-center px-3 py-2 text-sm">
-                      <div className="col-span-2 font-semibold text-gray-900">{h.hole}</div>
-
-                      <div className="col-span-3 text-center font-semibold text-gray-900">
-                        {h.aPts == null ? "–" : h.aPts}
-                      </div>
-                      <div className="col-span-3 text-center font-semibold text-gray-900">
-                        {h.bPts == null ? "–" : h.bPts}
-                      </div>
-
-                      <div className="col-span-2 text-center text-xs font-semibold text-gray-700">
-                        {h.winner === "NO_DATA" ? "–" : h.winner === "HALVED" ? "½" : h.winner}
-                      </div>
-
-                      <div className="col-span-2 text-right text-xs font-semibold text-gray-700">{h.runningText}</div>
+                <div className="grid grid-cols-1 gap-2">
+                  <div className="rounded-xl border border-gray-200 overflow-hidden">
+                    <div className="px-3 py-2 text-[11px] font-semibold text-gray-700 bg-blue-50 border-b border-gray-200">
+                      A {safeText(groupA?.name, "Team A") ? `· ${safeText(groupA?.name, "Team A")}` : ""}
                     </div>
-                  ))}
-                </div>
+                    <div className="px-3 py-2 text-sm font-semibold text-gray-900 bg-blue-50/50">
+                      {labels.aLabel}
+                    </div>
+                  </div>
 
-                <div className="mt-3 text-[11px] text-gray-400">Dates shown in Australia/Melbourne.</div>
+                  <div className="rounded-xl border border-gray-200 overflow-hidden">
+                    <div className="px-3 py-2 text-[11px] font-semibold text-gray-700 bg-amber-50 border-b border-gray-200">
+                      B {safeText(groupB?.name, "Team B") ? `· ${safeText(groupB?.name, "Team B")}` : ""}
+                    </div>
+                    <div className="px-3 py-2 text-sm font-semibold text-gray-900 bg-amber-50/50">
+                      {labels.bLabel}
+                    </div>
+                  </div>
+                </div>
               </div>
             </section>
+
+            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+              <div className="p-4 border-b">
+                <div className="text-sm font-semibold text-gray-900">Hole-by-hole</div>
+                <div className="mt-1 text-xs text-gray-600">
+                  Rows stop at first missing data, or when the match is clinched.
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="grid grid-cols-12 bg-gray-50 border-b">
+                <div className="col-span-2 px-3 py-2 text-[11px] font-semibold text-gray-700">Hole</div>
+                <div className="col-span-2 px-3 py-2 text-[11px] font-semibold text-gray-700 bg-blue-50">A</div>
+                <div className="col-span-2 px-3 py-2 text-[11px] font-semibold text-gray-700 bg-amber-50">B</div>
+                <div className="col-span-2 px-3 py-2 text-[11px] font-semibold text-gray-700">Win</div>
+                <div className="col-span-4 px-3 py-2 text-[11px] font-semibold text-gray-700">Status</div>
+              </div>
+
+              <div className="divide-y">
+                {(holeRows as any).rows?.map((r: any) => {
+                  const win = r.winner as ("A" | "B" | "HALVED" | null);
+
+                  const winBg =
+                    win === "A" ? "bg-blue-50" : win === "B" ? "bg-amber-50" : win === "HALVED" ? "bg-gray-50" : "";
+
+                  const winText =
+                    win === "A" ? "A" : win === "B" ? "B" : win === "HALVED" ? "½" : "";
+
+                  return (
+                    <div key={r.hole} className="grid grid-cols-12">
+                      <div className="col-span-2 px-3 py-2 text-sm font-semibold text-gray-900">{r.hole}</div>
+
+                      <div className={`col-span-2 px-3 py-2 text-sm font-extrabold text-gray-900 bg-blue-50`}>
+                        {r.aPts == null ? "" : String(r.aPts)}
+                      </div>
+
+                      <div className={`col-span-2 px-3 py-2 text-sm font-extrabold text-gray-900 bg-amber-50`}>
+                        {r.bPts == null ? "" : String(r.bPts)}
+                      </div>
+
+                      <div className={`col-span-2 px-3 py-2 text-sm font-extrabold text-gray-900 ${winBg}`}>
+                        {winText}
+                      </div>
+
+                      <div className="col-span-4 px-3 py-2 text-sm text-gray-800">
+                        {r.status ?? ""}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Stop note */}
+              <div className="p-4 text-xs text-gray-600 border-t bg-white">
+                {(holeRows as any).stop?.reason === "NO_DATA"
+                  ? "Stopped because one side is missing scores from that hole onwards."
+                  : (holeRows as any).stop?.reason === "CLINCHED"
+                  ? "Stopped because the match was clinched."
+                  : "Full 18-hole data available."}
+              </div>
+            </section>
+
+            <div className="text-[11px] text-gray-400">Dates shown in Australia/Melbourne.</div>
           </>
         )}
       </main>
