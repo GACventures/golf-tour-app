@@ -36,7 +36,7 @@ type RoundRow = {
 };
 
 type PlayerRow = {
-  id: revealStickyBottomNavBgFix; // <-- INTENTIONAL STRAY TEXT
+  id: string;
   name: string;
   gender?: Tee | null;
 };
@@ -173,7 +173,12 @@ function clampInt(n: number, min: number, max: number) {
 }
 
 // Stableford (net) per hole
-function netStablefordPointsForHole(params: { rawScore: string; par: number; strokeIndex: number; playingHandicap: number }) {
+function netStablefordPointsForHole(params: {
+  rawScore: string; // "" | "P" | "number"
+  par: number;
+  strokeIndex: number;
+  playingHandicap: number;
+}) {
   const { rawScore, par, strokeIndex, playingHandicap } = params;
 
   const raw = String(rawScore ?? "").trim().toUpperCase();
@@ -298,7 +303,7 @@ export default function MobileLeaderboardsPage() {
   // ✅ separate genders toggle (individual only)
   const [separateGender, setSeparateGender] = useState(false);
 
-  // ✅ NEW: diagnostics toggle
+  // ✅ diagnostics toggle
   const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   // Rules (mobile read-only, loaded from DB)
@@ -1126,7 +1131,7 @@ export default function MobileLeaderboardsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      <div className="sticky top-0 z-50 isolate border-b bg-white shadow-sm">
+      <div className="sticky top-0 z-50 isolate border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="grid grid-cols-3 gap-2">
             <button
@@ -1448,10 +1453,7 @@ export default function MobileLeaderboardsPage() {
       </main>
 
       {/* Bottom nav background scrim (prevents table text showing through nav buttons) */}
-      <div
-        aria-hidden="true"
-        className="fixed bottom-0 left-0 right-0 z-40 h-24 border-t border-gray-200 bg-white"
-      />
+      <div aria-hidden="true" className="fixed bottom-0 left-0 right-0 z-40 h-24 border-t border-gray-200 bg-white" />
 
       <MobileNav />
     </div>
