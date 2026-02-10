@@ -42,6 +42,16 @@ function safeCourseName(courseNameById: Record<string, string>, course_id: strin
   return courseNameById[course_id] ?? course_id;
 }
 
+function clampPositiveIntOrNull(v: string): number | null {
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  const i = Math.floor(n);
+  if (i < 1) return null;
+  return i;
+}
+
 export default function TourRoundsPage() {
   const params = useParams<{ id: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -62,6 +72,9 @@ export default function TourRoundsPage() {
   // NEW: required played_on + optional tee_time on create
   const [newPlayedOn, setNewPlayedOn] = useState<string>(todayISODate());
   const [newTeeTime, setNewTeeTime] = useState<string>("");
+
+  // NEW: required round_no on create
+  const [newRoundNo, setNewRoundNo] = useState<string>("");
 
   // Inline edit state (per round)
   const [editByRoundId, setEditByRoundId] = useState<Record<string, { played_on: string; tee_time: string }>>({});
@@ -104,6 +117,9 @@ export default function TourRoundsPage() {
       // Default selection if not set
       if (!selectedCourseId && cs.length) setSelectedCourseId(cs[0].id);
 
+      // Default round number if blank
+      if (!newRoundNo) setNewRoundNo(String(rs.length + 1));
+
       // Seed edit state for rounds (so inputs are controlled)
       const nextEdit: Record<string, { played_on: string; tee_time: string }> = {};
       for (const r of rs) {
@@ -134,26 +150,34 @@ export default function TourRoundsPage() {
   }, [tourId]);
 
   const canAdd = useMemo(() => {
-    // played_on is required
-    return !savingAdd && Boolean(selectedCourseId) && Boolean(newPlayedOn);
-  }, [savingAdd, selectedCourseId, newPlayedOn]);
+    // played_on and round_no are required
+    const rn = clampPositiveIntOrNull(newRoundNo);
+    return !savingAdd && Boolean(selectedCourseId) && Boolean(newPlayedOn) && rn !== null;
+  }, [savingAdd, selectedCourseId, newPlayedOn, newRoundNo]);
 
   async function addRound() {
     setErrorMsg("");
     if (!canAdd) return;
+
+    const roundNo = clampPositiveIntOrNull(newRoundNo);
+    if (roundNo === null) {
+      setErrorMsg("Round number is required (must be 1 or greater).");
+      return;
+    }
 
     setSavingAdd(true);
     try {
       // NOTE: If your DB enforces rounds.name NOT NULL, we must provide a value.
       // Your schema shows name is nullable, but you got a NOT NULL constraint error earlier.
       // So we ALWAYS provide a fallback name.
-      const fallbackName = `Round ${rounds.length + 1}`;
+      const fallbackName = `Round ${roundNo}`;
       const nameToUse = newRoundName.trim() ? newRoundName.trim() : fallbackName;
 
       const payload: any = {
         tour_id: tourId,
         course_id: selectedCourseId,
         name: nameToUse,
+        round_no: roundNo,
         played_on: newPlayedOn, // required
       };
 
@@ -165,6 +189,7 @@ export default function TourRoundsPage() {
 
       setNewRoundName("");
       setNewTeeTime("");
+      setNewRoundNo(String(roundNo + 1));
       // keep date (often adding multiple rounds same day)
       await load();
     } catch (e: any) {
@@ -276,6 +301,9 @@ export default function TourRoundsPage() {
     );
   }
 
+  const roundNoHelp =
+    newRoundNo.trim() && clampPositiveIntOrNull(newRoundNo) === null ? "Enter a whole number (1 or greater)." : "";
+
   return (
     <main className="mx-auto max-w-5xl p-4 space-y-4">
       {/* Breadcrumb */}
@@ -312,7 +340,20 @@ export default function TourRoundsPage() {
       <section className="rounded-2xl border bg-white p-4 space-y-3">
         <div className="text-lg font-semibold">Add a round</div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <div>
+            <div className="text-sm opacity-70 mb-1">Round number (required)</div>
+            <input
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+              inputMode="numeric"
+              value={newRoundNo}
+              onChange={(e) => setNewRoundNo(e.target.value)}
+              placeholder={`${rounds.length + 1}`}
+            />
+            <div className="mt-1 text-xs opacity-60">Used for ordering (e.g. 1, 2, 3…).</div>
+            {roundNoHelp ? <div className="mt-1 text-xs text-red-700">{roundNoHelp}</div> : null}
+          </div>
+
           <div>
             <div className="text-sm opacity-70 mb-1">Round name</div>
             <input
@@ -388,9 +429,7 @@ export default function TourRoundsPage() {
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <div className="font-medium truncate">{fmtRoundDisplayName(r, idx)}</div>
-                      <div className="text-xs opacity-70 mt-1">
-                        Course: {safeCourseName(courseNameById, r.course_id)}
-                      </div>
+                      <div className="text-xs opacity-70 mt-1">Course: {safeCourseName(courseNameById, r.course_id)}</div>
 
                       <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 max-w-xl">
                         <label className="text-xs">
