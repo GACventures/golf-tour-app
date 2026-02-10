@@ -1,4 +1,3 @@
-// app/m/tours/[id]/matches/results/[roundId]/match/[matchId]/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -96,18 +95,15 @@ function parseDateForDisplay(s: string | null): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function fmtAuMelbourneDate(d: Date | null): string {
+function fmtDate(d: Date | null): string {
   if (!d) return "";
-  const parts = new Intl.DateTimeFormat("en-AU", {
-    timeZone: "Australia/Melbourne",
+  // No explicit timezone mention/handling in UI (display-only).
+  return new Intl.DateTimeFormat("en-AU", {
     weekday: "short",
     day: "2-digit",
     month: "short",
     year: "numeric",
-  }).formatToParts(d);
-
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`.replace(/\s+/g, " ");
+  }).format(d);
 }
 
 function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
@@ -156,7 +152,6 @@ type MatchStop = { stopHoleExclusive: number; reason: "NO_DATA" | "CLINCHED" | n
 
 function computeStopAndRunning(holeOutcomes: HoleOutcome[]) {
   let diff = 0; // + => A leading; - => B leading
-  let thru = 0;
   let decidedAt: number | null = null;
 
   for (let h = 1; h <= 18; h++) {
@@ -165,8 +160,6 @@ function computeStopAndRunning(holeOutcomes: HoleOutcome[]) {
       // stop at first missing-data hole
       return { stopHoleExclusive: h, reason: "NO_DATA" as const, decidedAt: null };
     }
-
-    thru = h;
 
     if (w === "A") diff += 1;
     else if (w === "B") diff -= 1;
@@ -182,6 +175,7 @@ function computeStopAndRunning(holeOutcomes: HoleOutcome[]) {
   return { stopHoleExclusive: 19, reason: null, decidedAt: null };
 }
 
+// Used for per-row status strings (kept as-is except for display trimming in the table)
 function liveStatusText(diff: number, thru: number) {
   if (thru <= 0) return "Not started";
   if (diff === 0) return `All Square (thru ${thru})`;
@@ -202,39 +196,42 @@ function finalText(diff: number, decidedAt: number | null) {
   return `${winner} wins ${up} up`;
 }
 
-function mapStatusToPlayerNames(args: { status: string; leftLabel: string; rightLabel: string }) {
-  const { status, leftLabel, rightLabel } = args;
-  const s = String(status ?? "").trim();
-
-  // Replace leading "A ..." / "B ..." with the player label.
-  if (s.startsWith("A ")) return s.replace(/^A\b/, leftLabel);
-  if (s.startsWith("B ")) return s.replace(/^B\b/, rightLabel);
-
-  // Replace final result forms "A wins ..." / "B wins ..." similarly.
-  if (s.startsWith("A wins")) return s.replace(/^A\b/, leftLabel);
-  if (s.startsWith("B wins")) return s.replace(/^B\b/, rightLabel);
-
-  // Otherwise leave as-is (e.g. "All Square", "Not started")
-  return s;
+// Display-only helper: remove "(thru X...)" / "(after X...)" suffixes from status strings
+function stripThruSuffix(s: string) {
+  const raw = String(s ?? "").trim();
+  if (!raw) return "";
+  // remove trailing parenthetical that contains "thru" or "after" + a number
+  return raw.replace(/\s*\((?:thru|after)\s*\d+[^)]*\)\s*$/i, "").trim();
 }
 
-function mapFinalToDefText(args: { status: string; leftLabel: string; rightLabel: string }) {
-  const { status, leftLabel, rightLabel } = args;
-  const s = String(status ?? "").trim();
+function renderLiveSummary(args: { diff: number; thru: number; leftLabel: string; rightLabel: string }) {
+  const { diff, thru, leftLabel, rightLabel } = args;
 
-  // Transform "X wins 4 & 2" to "X def Y 4 & 2" etc.
-  // This is purely string formatting (no logic change).
-  const m = s.match(/^(A|B)\s+wins\s+(.+)$/i);
-  if (!m) return mapStatusToPlayerNames({ status: s, leftLabel, rightLabel });
+  if (thru <= 0) return "Not started";
+  if (diff === 0) return "All Square";
 
-  const side = m[1].toUpperCase();
-  const rest = String(m[2] ?? "").trim();
+  const leaderLabel = diff > 0 ? leftLabel : rightLabel;
+  const up = Math.abs(diff);
 
-  const winner = side === "A" ? leftLabel : rightLabel;
-  const loser = side === "A" ? rightLabel : leftLabel;
+  // wording requested: "2 up through 5"
+  return `${leaderLabel} is ${up} up through ${thru}`;
+}
 
-  if (!rest) return `${winner} def ${loser}`;
-  return `${winner} def ${loser} ${rest}`;
+function renderFinalSummary(args: { diff: number; decidedAt: number | null; leftLabel: string; rightLabel: string }) {
+  const { diff, decidedAt, leftLabel, rightLabel } = args;
+
+  if (diff === 0) return "All Square";
+
+  const winnerLabel = diff > 0 ? leftLabel : rightLabel;
+  const loserLabel = diff > 0 ? rightLabel : leftLabel;
+  const up = Math.abs(diff);
+
+  if (decidedAt != null && decidedAt >= 1 && decidedAt <= 18) {
+    const remaining = 18 - decidedAt;
+    if (remaining > 0) return `${winnerLabel} def ${loserLabel} ${up} & ${remaining}`;
+  }
+
+  return `${winnerLabel} def ${loserLabel} ${up} up`;
 }
 
 export default function MatchDetailPage() {
@@ -337,9 +334,7 @@ export default function MatchDetailPage() {
         if (mErr) throw mErr;
 
         const match = (mRow ?? null) as any as MatchRow | null;
-        if (!match) {
-          throw new Error("Match not found.");
-        }
+        if (!match) throw new Error("Match not found.");
 
         const assigns = (match.match_round_match_players ?? []) as any[];
         const A1 = assigns.find((x) => x.side === "A" && Number(x.slot) === 1)?.player_id ?? "";
@@ -516,7 +511,7 @@ export default function MatchDetailPage() {
   }, [settings, sideIds, playersById]);
 
   const holeRows = useMemo(() => {
-    if (!settings) return [];
+    if (!settings) return null;
 
     const isBB = settings.format === "BETTERBALL_MATCHPLAY";
 
@@ -607,34 +602,48 @@ export default function MatchDetailPage() {
 
   const headerLine = useMemo(() => {
     const rn = round?.round_no != null ? `Round ${round.round_no}` : "Round";
-    const d = fmtAuMelbourneDate(parseDateForDisplay(pickBestRoundDateISO(round)));
+    const d = fmtDate(parseDateForDisplay(pickBestRoundDateISO(round)));
     const c = getCourseName(round);
     return [rn, d || "", c || ""].filter(Boolean).join(" · ");
   }, [round]);
 
-  const topStatus = useMemo(() => {
-    if (!holeRows || !("rows" in holeRows)) return "";
-    const rows = (holeRows as any).rows as Array<any>;
-    const stop = (holeRows as any).stop as MatchStop;
+  const matchNo = matchRow?.match_no ?? null;
 
-    // Find last non-null status (pre-stop)
+  const topSummaryText = useMemo(() => {
+    if (!settings) return "";
+    if (!holeRows?.rows) return "Not started";
+
+    const rows = holeRows.rows;
+    const stop = holeRows.stop;
+
+    // Find last non-null status row to infer thru & whether final
+    let lastIdx = -1;
     for (let i = Math.min(rows.length, 18) - 1; i >= 0; i--) {
-      if (rows[i]?.status) return rows[i].status as string;
+      if (rows[i]?.status) {
+        lastIdx = i;
+        break;
+      }
     }
 
-    if (stop?.reason === "NO_DATA") return "Not started";
-    return "Not started";
-  }, [holeRows]);
+    if (lastIdx < 0) return "Not started";
 
-  const matchSummaryLine = useMemo(() => {
-    if (!settings) return "";
-    const isFinal = / wins /i.test(String(topStatus ?? ""));
-    const statusText = isFinal
-      ? mapFinalToDefText({ status: topStatus, leftLabel: labels.left, rightLabel: labels.right })
-      : mapStatusToPlayerNames({ status: topStatus, leftLabel: labels.left, rightLabel: labels.right });
+    const thru = Number(rows[lastIdx]?.hole) || 0;
 
-    return `Match Summary: ${statusText || "Not started"}`;
-  }, [settings, topStatus, labels.left, labels.right]);
+    // Recompute diff up to `thru` using the same outcome rules embedded in status generation:
+    // We can derive diff from the "Win" column data we already stored in rows (A/B/HALVED).
+    let diff = 0;
+    for (let i = 0; i <= lastIdx; i++) {
+      const w = rows[i]?.winner;
+      if (w === "A") diff += 1;
+      else if (w === "B") diff -= 1;
+    }
+
+    const isFinal = stop?.reason === "CLINCHED" || thru === 18;
+
+    return isFinal
+      ? renderFinalSummary({ diff, decidedAt: stop?.decidedAt ?? null, leftLabel: labels.left, rightLabel: labels.right })
+      : renderLiveSummary({ diff, thru, leftLabel: labels.left, rightLabel: labels.right });
+  }, [settings, holeRows, labels.left, labels.right]);
 
   if (!isLikelyUuid(tourId) || !isLikelyUuid(roundId) || !isLikelyUuid(matchId)) {
     return (
@@ -652,15 +661,17 @@ export default function MatchDetailPage() {
   }
 
   const isMatchplay = settings && settings.format !== "INDIVIDUAL_STABLEFORD";
-  const matchNo = matchRow?.match_no ?? null;
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
+      {/* Top bar — consistent with tee-times style */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-base font-semibold">Match {matchNo ?? ""} – Detail</div>
-            <div className="truncate text-sm text-gray-500">{headerLine || "Round"}</div>
+            <div className="text-base font-semibold">Matches – Results</div>
+            <div className="truncate text-sm text-gray-500">
+              {`Match ${matchNo ?? ""}${headerLine ? ` · ${headerLine}` : ""}`.trim() || "Match"}
+            </div>
           </div>
 
           <Link
@@ -687,34 +698,43 @@ export default function MatchDetailPage() {
           </div>
         ) : (
           <>
+            {/* Match summary */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">{matchSummaryLine}</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  Round format: <span className="font-semibold text-gray-900">{formatLabel(settings.format)}</span>
+              <div className="p-4 border-b space-y-2">
+                <div className="text-sm font-semibold text-gray-900">
+                  Match summary:{" "}
+                  <span className="font-semibold text-gray-900">{topSummaryText || "Not started"}</span>
+                </div>
+
+                <div className="text-xs text-gray-600">
+                  Round format:{" "}
+                  <span className="font-semibold text-gray-900">{formatLabel(settings.format)}</span>
                   {settings.double_points ? <span className="ml-2 font-semibold">· Double points</span> : null}
                 </div>
               </div>
 
+              {/* Sides (single-row each) */}
               <div className="p-4 space-y-2">
                 <div className="text-xs font-semibold text-gray-700">Sides</div>
 
-                <div className="space-y-2">
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900">
-                    <span className="font-semibold">A:</span>{" "}
-                    <span className="font-semibold">{safeText(groupA?.name, "Team A")}:</span>{" "}
-                    <span className="font-semibold">{labels.aLabel}</span>
+                <div className="rounded-xl border border-gray-200 overflow-hidden">
+                  <div className="px-3 py-2 text-sm">
+                    <span className="font-semibold text-gray-900">
+                      A: {safeText(groupA?.name, "Team A")}:
+                    </span>{" "}
+                    <span className="font-semibold text-gray-900">{labels.aLabel}</span>
                   </div>
-
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900">
-                    <span className="font-semibold">B:</span>{" "}
-                    <span className="font-semibold">{safeText(groupB?.name, "Team B")}:</span>{" "}
-                    <span className="font-semibold">{labels.bLabel}</span>
+                  <div className="border-t border-gray-200 px-3 py-2 text-sm">
+                    <span className="font-semibold text-gray-900">
+                      B: {safeText(groupB?.name, "Team B")}:
+                    </span>{" "}
+                    <span className="font-semibold text-gray-900">{labels.bLabel}</span>
                   </div>
                 </div>
               </div>
             </section>
 
+            {/* Hole-by-hole */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
               <div className="p-4 border-b">
                 <div className="text-sm font-semibold text-gray-900">Hole-by-hole</div>
@@ -730,17 +750,11 @@ export default function MatchDetailPage() {
               </div>
 
               <div className="divide-y">
-                {(holeRows as any).rows?.map((r: any) => {
+                {holeRows?.rows?.map((r: any) => {
                   const win = r.winner as ("A" | "B" | "HALVED" | null);
 
-                  const winBg =
-                    win === "A" ? "bg-blue-50" : win === "B" ? "bg-amber-50" : win === "HALVED" ? "bg-gray-50" : "";
-
+                  const winBg = win === "A" ? "bg-blue-50" : win === "B" ? "bg-amber-50" : win === "HALVED" ? "bg-gray-50" : "";
                   const winText = win === "A" ? "A" : win === "B" ? "B" : win === "HALVED" ? "½" : "";
-
-                  const statusText = r.status
-                    ? mapStatusToPlayerNames({ status: String(r.status), leftLabel: labels.left, rightLabel: labels.right })
-                    : "";
 
                   return (
                     <div key={r.hole} className="grid grid-cols-12">
@@ -756,7 +770,9 @@ export default function MatchDetailPage() {
 
                       <div className={`col-span-2 px-3 py-2 text-sm font-extrabold text-gray-900 ${winBg}`}>{winText}</div>
 
-                      <div className="col-span-4 px-3 py-2 text-sm text-gray-800">{statusText}</div>
+                      <div className="col-span-4 px-3 py-2 text-sm text-gray-800">
+                        {r.status ? stripThruSuffix(String(r.status)) : ""}
+                      </div>
                     </div>
                   );
                 })}
