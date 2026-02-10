@@ -36,7 +36,7 @@ type RoundRow = {
 };
 
 type PlayerRow = {
-  id: string;
+  id: revealStickyBottomNavBgFix; // <-- INTENTIONAL STRAY TEXT
   name: string;
   gender?: Tee | null;
 };
@@ -721,7 +721,9 @@ export default function MobileLeaderboardsPage() {
     if (kind === "pairs") {
       if (pairRule.mode === "ALL") return "Pairs Better Ball · Total points across all rounds";
       const r = pairRule;
-      return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
+      return r.finalRequired
+        ? `Pairs Better Ball · Best ${r.q} rounds (Final required)`
+        : `Pairs Better Ball · Best ${r.q} rounds`;
     }
 
     return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 for each zero · All rounds`;
@@ -1124,7 +1126,6 @@ export default function MobileLeaderboardsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* UI FIX: make sticky header fully opaque so table content cannot show through */}
       <div className="sticky top-0 z-50 isolate border-b bg-white shadow-sm">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="grid grid-cols-3 gap-2">
@@ -1165,7 +1166,6 @@ export default function MobileLeaderboardsPage() {
 
           <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">{description}</div>
 
-          {/* ✅ Diagnostics toggle */}
           <div className="mt-3">
             <button
               type="button"
@@ -1205,10 +1205,7 @@ export default function MobileLeaderboardsPage() {
                           <div className="text-[10px] font-semibold text-gray-700">Men (M)</div>
                           <div className="mt-1 flex flex-wrap gap-2">
                             {dr.mVals.map((v) => (
-                              <div
-                                key={`m-${dr.roundId}-${v.hole}`}
-                                className="rounded-md border border-gray-200 bg-white px-2 py-1"
-                              >
+                              <div key={`m-${dr.roundId}-${v.hole}`} className="rounded-md border border-gray-200 bg-white px-2 py-1">
                                 <span className="font-semibold">H{v.hole}</span> · Par {v.par} · SI {v.si}
                               </div>
                             ))}
@@ -1219,10 +1216,7 @@ export default function MobileLeaderboardsPage() {
                           <div className="text-[10px] font-semibold text-gray-700">Women (F)</div>
                           <div className="mt-1 flex flex-wrap gap-2">
                             {dr.fVals.map((v) => (
-                              <div
-                                key={`f-${dr.roundId}-${v.hole}`}
-                                className="rounded-md border border-gray-200 bg-white px-2 py-1"
-                              >
+                              <div key={`f-${dr.roundId}-${v.hole}`} className="rounded-md border border-gray-200 bg-white px-2 py-1">
                                 <span className="font-semibold">H{v.hole}</span> · Par {v.par} · SI {v.si}
                               </div>
                             ))}
@@ -1297,7 +1291,6 @@ export default function MobileLeaderboardsPage() {
                     ) : (
                       teamRows.map((row) => (
                         <tr key={row.groupId} className="border-b last:border-b-0">
-                          {/* ✅ Team name plain text (no click, no members) */}
                           <td className="sticky left-0 z-10 bg-white px-3 py-2 whitespace-nowrap align-top">
                             <div className="text-sm font-semibold text-gray-900">{row.title}</div>
                           </td>
@@ -1308,7 +1301,6 @@ export default function MobileLeaderboardsPage() {
                             </span>
                           </td>
 
-                          {/* ✅ Round scores clickable again to detail page */}
                           {sortedRounds.map((r) => {
                             const val = row.perRound[r.id] ?? 0;
                             const href = `/m/tours/${tourId}/leaderboards/teams/${r.id}/${row.groupId}`;
@@ -1454,6 +1446,12 @@ export default function MobileLeaderboardsPage() {
           </>
         )}
       </main>
+
+      {/* Bottom nav background scrim (prevents table text showing through nav buttons) */}
+      <div
+        aria-hidden="true"
+        className="fixed bottom-0 left-0 right-0 z-40 h-24 border-t border-gray-200 bg-white"
+      />
 
       <MobileNav />
     </div>
