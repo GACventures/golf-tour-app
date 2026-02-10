@@ -16,6 +16,11 @@ type RoundRow = {
   created_at: string | null;
   round_no?: number | null;
   course_id?: string | null;
+
+  // 👇 may or may not exist in schema, but we request them safely anyway
+  round_date?: string | null;
+  played_on?: string | null;
+
   courses?: { name: string } | { name: string }[] | null;
 };
 
@@ -91,20 +96,38 @@ function courseName(r: RoundRow | null) {
   return c?.name ?? "";
 }
 
-function parseDate(s: string | null) {
+function isMissingColumnError(msg: string, column: string) {
+  const m = String(msg ?? "").toLowerCase();
+  const c = column.toLowerCase();
+  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
+}
+
+function pickBestRoundDateISO(r: RoundRow | null): string | null {
+  if (!r) return null;
+  return (r as any).round_date ?? (r as any).played_on ?? r.created_at ?? null;
+}
+
+function parseDateForDisplay(s: string | null): Date | null {
   if (!s) return null;
-  const d = new Date(s);
+  const raw = String(s).trim();
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+  const iso = isDateOnly ? `${raw}T00:00:00.000Z` : raw;
+  const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function fmtDate(d: Date | null) {
+function fmtAuMelbourneDate(d: Date | null): string {
   if (!d) return "";
-  return d.toLocaleDateString(undefined, {
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
     weekday: "short",
     day: "2-digit",
     month: "short",
     year: "numeric",
-  });
+  }).formatToParts(d);
+
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`.replace(/\s+/g, " ");
 }
 
 function ordinal(n: number) {
@@ -275,6 +298,10 @@ export default function MobileRoundTeeTimesPage() {
 
   const showGenerateButton = isJapanTour && isFinalRound;
 
+  async function fetchRound(selectCols: string) {
+    return supabase.from("rounds").select(selectCols).eq("id", roundId).single();
+  }
+
   async function loadTeeTimes() {
     setLoading(true);
     setErrorMsg("");
@@ -284,36 +311,86 @@ export default function MobileRoundTeeTimesPage() {
 
     const { data: allRounds, error: allRoundsErr } = await supabase
       .from("rounds")
-      .select("id,round_no,created_at")
+      .select("id,round_no,created_at,round_date,played_on")
       .eq("tour_id", tourId)
       .order("round_no", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: true });
 
     if (allRoundsErr) {
-      setErrorMsg(allRoundsErr.message);
-      setLoading(false);
-      return;
+      // If tour schema doesn't have round_date/played_on, fall back silently
+      const msg = String(allRoundsErr.message ?? "");
+      if (isMissingColumnError(msg, "round_date") || isMissingColumnError(msg, "played_on")) {
+        const { data: allRounds2, error: allRoundsErr2 } = await supabase
+          .from("rounds")
+          .select("id,round_no,created_at")
+          .eq("tour_id", tourId)
+          .order("round_no", { ascending: true, nullsFirst: false })
+          .order("created_at", { ascending: true });
+
+        if (allRoundsErr2) {
+          setErrorMsg(allRoundsErr2.message);
+          setLoading(false);
+          return;
+        }
+
+        const rr2 = (allRounds2 ?? []) as any[];
+        const idx2 = rr2.findIndex((r: any) => String(r.id) === roundId) + 1;
+        setRoundIndex(idx2 > 0 ? idx2 : null);
+
+        const last2 = rr2.length ? rr2[rr2.length - 1] : null;
+        setFinalRoundId(last2 ? String(last2.id) : "");
+      } else {
+        setErrorMsg(allRoundsErr.message);
+        setLoading(false);
+        return;
+      }
+    } else {
+      const rr = (allRounds ?? []) as any[];
+      const idx = rr.findIndex((r: any) => String(r.id) === roundId) + 1;
+      setRoundIndex(idx > 0 ? idx : null);
+
+      const last = rr.length ? rr[rr.length - 1] : null;
+      setFinalRoundId(last ? String(last.id) : "");
     }
 
-    const rr = (allRounds ?? []) as any[];
-    const idx = rr.findIndex((r: any) => String(r.id) === roundId) + 1;
-    setRoundIndex(idx > 0 ? idx : null);
+    // Round header info with column-fallback (round_date / played_on may not exist)
+    const baseCols = "id,created_at,round_no,course_id,courses(name)";
+    const cols1 = `${baseCols},round_date,played_on`;
+    const cols2 = `${baseCols},played_on`;
 
-    const last = rr.length ? rr[rr.length - 1] : null;
-    setFinalRoundId(last ? String(last.id) : "");
+    let rRow: any = null;
 
-    const { data: rData, error: rErr } = await supabase
-      .from("rounds")
-      .select("id,created_at,round_no,course_id,courses(name)")
-      .eq("id", roundId)
-      .single();
-
-    if (rErr) {
-      setErrorMsg(rErr.message);
-      setLoading(false);
-      return;
+    const r1 = await fetchRound(cols1);
+    if (r1.error) {
+      if (isMissingColumnError(r1.error.message, "round_date")) {
+        const r2 = await fetchRound(cols2);
+        if (r2.error) {
+          if (isMissingColumnError(r2.error.message, "played_on")) {
+            const r3 = await fetchRound(baseCols);
+            if (r3.error) {
+              setErrorMsg(r3.error.message);
+              setLoading(false);
+              return;
+            }
+            rRow = r3.data;
+          } else {
+            setErrorMsg(r2.error.message);
+            setLoading(false);
+            return;
+          }
+        } else {
+          rRow = r2.data;
+        }
+      } else {
+        setErrorMsg(r1.error.message);
+        setLoading(false);
+        return;
+      }
+    } else {
+      rRow = r1.data;
     }
-    setRound(rData as RoundRow);
+
+    setRound(rRow as RoundRow);
 
     const { data: gData, error: gErr } = await supabase
       .from("round_groups")
@@ -347,10 +424,7 @@ export default function MobileRoundTeeTimesPage() {
       setMembers([]);
     }
 
-    const { data: rpData, error: rpErr } = await supabase
-      .from("round_players")
-      .select("player_id,playing_handicap")
-      .eq("round_id", roundId);
+    const { data: rpData, error: rpErr } = await supabase.from("round_players").select("player_id,playing_handicap").eq("round_id", roundId);
 
     if (rpErr) {
       setErrorMsg(rpErr.message);
@@ -689,7 +763,7 @@ export default function MobileRoundTeeTimesPage() {
     }
   }
 
-  const roundDate = fmtDate(parseDate(round?.created_at ?? null));
+  const roundDate = fmtAuMelbourneDate(parseDateForDisplay(pickBestRoundDateISO(round)));
   const course = courseName(round);
 
   return (
@@ -755,14 +829,16 @@ export default function MobileRoundTeeTimesPage() {
                       const seat = m.seat ?? null;
 
                       return (
-                        <div key={m.player_id} className="text-sm font-semibold">
+                        <div key={m.player_id} className="text-sm font-semibold flex items-start gap-2">
                           {seat !== null ? (
-                            <span className="mr-2 inline-flex w-10 justify-center rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-extrabold text-gray-700">
+                            <span className="inline-flex w-10 justify-center rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-extrabold text-gray-700">
                               {seat}.
                             </span>
                           ) : null}
-                          {playerName(m.players)}
-                          {Number.isFinite(hcp) ? ` (${hcp})` : ""}
+                          <span className="min-w-0">
+                            {playerName(m.players)}
+                            {Number.isFinite(hcp) ? ` (${hcp})` : ""}
+                          </span>
                         </div>
                       );
                     })}
