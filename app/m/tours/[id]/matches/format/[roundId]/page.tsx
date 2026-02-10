@@ -202,7 +202,7 @@ export default function MatchesFormatRoundDetailPage() {
 
   const roundTitle = useMemo(() => {
     const rn = round?.round_no;
-    const label = rn != null ? `Round ${rn}` : "Round";
+    const label = rn !=null ? `Round ${rn}` : "Round";
     const d = fmtAuMelbourneDate(parseDateForDisplay(pickBestRoundDateISO(round)));
     const course = getCourseName(round);
     const bits = [label, d || "", course || ""].filter(Boolean);
@@ -619,7 +619,10 @@ export default function MatchesFormatRoundDetailPage() {
         return;
       }
 
-      const { data: oldMatches, error: oldErr } = await supabase.from("match_round_matches").select("id").eq("settings_id", existing.id);
+      const { data: oldMatches, error: oldErr } = await supabase
+        .from("match_round_matches")
+        .select("id")
+        .eq("settings_id", existing.id);
       if (oldErr) throw oldErr;
 
       const oldIds = (oldMatches ?? []).map((r: any) => String(r.id)).filter(Boolean);
@@ -637,7 +640,10 @@ export default function MatchesFormatRoundDetailPage() {
         match_no: i + 1,
       }));
 
-      const { data: newMatches, error: insMErr } = await supabase.from("match_round_matches").insert(toInsertMatches).select("id,match_no");
+      const { data: newMatches, error: insMErr } = await supabase
+        .from("match_round_matches")
+        .insert(toInsertMatches)
+        .select("id,match_no");
       if (insMErr) throw insMErr;
 
       const idByNo = new Map<number, string>();
@@ -872,6 +878,7 @@ export default function MatchesFormatRoundDetailPage() {
   const pillActive = "border-gray-900 bg-gray-900 text-white";
   const pillIdle = "border-gray-200 bg-white text-gray-900";
 
+  // kept (logic), even though UI section is removed
   const teamsSummary = useMemo(() => {
     if (!teamsReady) return "";
     const aName = safeText(teamAGroup?.name, "Team A");
@@ -881,19 +888,45 @@ export default function MatchesFormatRoundDetailPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
-      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-base font-semibold">Matches – Format</div>
-            <div className="truncate text-sm text-gray-500">{roundTitle || "Configure this round"}</div>
-          </div>
+      {/* Tee-times style header (3-band) */}
+      <div className="sticky top-0 z-10 bg-white/95 backdrop-blur">
+        {/* Band 1: tour name + home */}
+        <div className="border-b border-slate-200">
+          <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-slate-900">Tour</div>
+            </div>
 
-          <Link
-            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm active:bg-gray-50"
-            href={`/m/tours/${tourId}/matches/format`}
-          >
-            Back
-          </Link>
+            <Link
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm active:bg-slate-50"
+              href={`/m/tours/${tourId}`}
+            >
+              Home
+            </Link>
+          </div>
+        </div>
+
+        {/* Band 2: page title + back */}
+        <div className="border-b border-slate-200">
+          <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-base font-semibold text-slate-900">Matches – Format</div>
+            </div>
+
+            <Link
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm active:bg-slate-50"
+              href={`/m/tours/${tourId}/matches/format`}
+            >
+              Back
+            </Link>
+          </div>
+        </div>
+
+        {/* Band 3: round meta */}
+        <div className="border-b border-slate-200 bg-slate-50">
+          <div className="mx-auto w-full max-w-md px-4 py-2">
+            <div className="truncate text-sm font-semibold text-slate-800">{roundTitle || "Configure this round"}</div>
+          </div>
         </div>
       </div>
 
@@ -907,33 +940,6 @@ export default function MatchesFormatRoundDetailPage() {
           <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
-            {/* Teams status (read-only) */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Teams (tour)</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  Teams are fixed for the tour. Matches are enabled only when exactly two tour teams exist.
-                </div>
-              </div>
-
-              <div className="p-4 space-y-2">
-                {teamsWarn ? (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{teamsWarn}</div>
-                ) : (
-                  <>
-                    <div className="text-sm font-semibold text-gray-900">{teamsSummary}</div>
-                    <div className="text-xs text-gray-600">
-                      Team A:{" "}
-                      <span className="font-medium">{teamALoading ? "Loading…" : `${teamA.length} player${teamA.length === 1 ? "" : "s"}`}</span>
-                      {" · "}
-                      Team B:{" "}
-                      <span className="font-medium">{teamBLoading ? "Loading…" : `${teamB.length} player${teamB.length === 1 ? "" : "s"}`}</span>
-                    </div>
-                  </>
-                )}
-              </div>
-            </section>
-
             {/* Format */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b">
@@ -1059,7 +1065,9 @@ export default function MatchesFormatRoundDetailPage() {
                     Configure exactly two tour teams before enabling matches for this round.
                   </div>
                 ) : !existing ? (
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Save settings above to start match setup.</div>
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                    Save settings above to start match setup.
+                  </div>
                 ) : settingsDirty ? (
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                     You have unsaved settings changes. Save settings above before editing match setup.
@@ -1096,7 +1104,9 @@ export default function MatchesFormatRoundDetailPage() {
                         Not enough players to create matches for this format.
                       </div>
                     ) : matchLoading ? (
-                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading match setup…</div>
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                        Loading match setup…
+                      </div>
                     ) : (
                       <div className="space-y-3">
                         {teamA.length !== teamB.length ? (
@@ -1113,7 +1123,9 @@ export default function MatchesFormatRoundDetailPage() {
                             <div key={idx} className="rounded-2xl border border-gray-200 bg-white p-3">
                               <div className="flex items-center justify-between">
                                 <div className="text-sm font-semibold text-gray-900">Match {idx + 1}</div>
-                                <div className="text-[11px] text-gray-500">{existing.format === "INDIVIDUAL_MATCHPLAY" ? "1 v 1" : "2 v 2"}</div>
+                                <div className="text-[11px] text-gray-500">
+                                  {existing.format === "INDIVIDUAL_MATCHPLAY" ? "1 v 1" : "2 v 2"}
+                                </div>
                               </div>
 
                               <div className="mt-3 grid grid-cols-2 gap-3">
@@ -1210,7 +1222,9 @@ export default function MatchesFormatRoundDetailPage() {
                       </button>
                     </div>
 
-                    {matchErr ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{matchErr}</div> : null}
+                    {matchErr ? (
+                      <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{matchErr}</div>
+                    ) : null}
                     {matchMsg ? <div className="text-sm text-green-700">{matchMsg}</div> : null}
                   </>
                 )}
@@ -1221,9 +1235,7 @@ export default function MatchesFormatRoundDetailPage() {
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b">
                 <div className="text-sm font-semibold text-gray-900">Tee times override</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  When enabled, tee-time groups for this round are rewritten in match order.
-                </div>
+                <div className="mt-1 text-xs text-gray-600">When enabled, tee-time groups for this round are rewritten in match order.</div>
               </div>
 
               <div className="p-4 space-y-3">
@@ -1232,9 +1244,7 @@ export default function MatchesFormatRoundDetailPage() {
                 ) : null}
 
                 {existing?.format === "INDIVIDUAL_STABLEFORD" ? (
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                    Not applicable for Individual stableford.
-                  </div>
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Not applicable for Individual stableford.</div>
                 ) : (
                   <>
                     <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
@@ -1292,6 +1302,9 @@ export default function MatchesFormatRoundDetailPage() {
                 )}
               </div>
             </section>
+
+            {/* (kept for logic/debug only; not displayed) */}
+            {teamsSummary ? null : null}
           </>
         )}
       </main>
