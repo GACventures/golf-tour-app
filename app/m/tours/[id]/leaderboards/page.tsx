@@ -661,7 +661,6 @@ export default function MobileLeaderboardsPage() {
     return ids.map((pid) => playerById.get(pid)?.name ?? pid).join(" / ");
   }
 
-  // Team title + members line
   const teamLabelById = useMemo(() => {
     const m = new Map<string, { title: string; members: string }>();
 
@@ -679,9 +678,6 @@ export default function MobileLeaderboardsPage() {
     return m;
   }, [teamGroups, memberIdsByTeam, playerById]);
 
-  // -----------------------------
-  // Diagnostics (holes 1,2,14)
-  // -----------------------------
   const diagnosticsRows = useMemo(() => {
     const holes = [1, 2, 14];
 
@@ -711,9 +707,6 @@ export default function MobileLeaderboardsPage() {
     });
   }, [sortedRounds, finalRoundId, parsByCourseTeeHole]);
 
-  // -----------------------------
-  // Description
-  // -----------------------------
   const description = useMemo(() => {
     if (kind === "individual") {
       if (individualRule.mode === "ALL") return "Individual Stableford · Total points across all rounds";
@@ -734,9 +727,6 @@ export default function MobileLeaderboardsPage() {
     return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 for each zero · All rounds`;
   }, [kind, individualRule, pairRule, teamRule.bestY]);
 
-  // -----------------------------
-  // Individual scoring
-  // -----------------------------
   const individualRows = useMemo(() => {
     const rows: Array<{
       playerId: string;
@@ -831,9 +821,6 @@ export default function MobileLeaderboardsPage() {
     return individualRows.filter((r) => normalizeTee(playerById.get(r.playerId)?.gender) !== "F");
   }, [individualRows, playerById]);
 
-  // -----------------------------
-  // Pairs scoring (Better Ball per hole)
-  // -----------------------------
   const pairRows = useMemo(() => {
     const rows: Array<{
       groupId: string;
@@ -927,9 +914,6 @@ export default function MobileLeaderboardsPage() {
     scoreByRoundPlayerHole,
   ]);
 
-  // -----------------------------
-  // Teams scoring
-  // -----------------------------
   const teamRows = useMemo(() => {
     const rows: Array<{
       groupId: string;
@@ -1021,9 +1005,6 @@ export default function MobileLeaderboardsPage() {
     parsByCourseTeeHole,
   ]);
 
-  // -----------------------------
-  // TapCell
-  // -----------------------------
   function TapCell({
     href,
     counted,
@@ -1081,7 +1062,8 @@ export default function MobileLeaderboardsPage() {
   }) {
     return (
       <tr key={row.playerId} className="border-b last:border-b-0">
-        <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+        {/* z lowered so bottom nav sits above this sticky column */}
+        <td className="sticky left-0 z-[1] bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
           {row.name}
         </td>
 
@@ -1106,9 +1088,6 @@ export default function MobileLeaderboardsPage() {
     );
   }
 
-  // -----------------------------
-  // UI
-  // -----------------------------
   if (!tourId || !isLikelyUuid(tourId)) {
     return (
       <div className="min-h-dvh bg-white text-gray-900">
@@ -1260,7 +1239,8 @@ export default function MobileLeaderboardsPage() {
               <table className="min-w-full border-collapse">
                 <thead>
                   <tr className="bg-gray-50">
-                    <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
+                    {/* z lowered (but still above normal cells) so bottom nav can sit above */}
+                    <th className="sticky left-0 z-[2] bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
                       Name
                     </th>
 
@@ -1285,8 +1265,6 @@ export default function MobileLeaderboardsPage() {
                   </tr>
                 </thead>
 
-                <tbody>{kind === "teams" ? null : null}</tbody>
-
                 <tbody>
                   {kind === "teams" ? (
                     teamRows.length === 0 ? (
@@ -1298,7 +1276,7 @@ export default function MobileLeaderboardsPage() {
                     ) : (
                       teamRows.map((row) => (
                         <tr key={row.groupId} className="border-b last:border-b-0">
-                          <td className="sticky left-0 z-10 bg-white px-3 py-2 whitespace-nowrap align-top">
+                          <td className="sticky left-0 z-[1] bg-white px-3 py-2 whitespace-nowrap align-top">
                             <div className="text-sm font-semibold text-gray-900">{row.title}</div>
                           </td>
 
@@ -1333,7 +1311,7 @@ export default function MobileLeaderboardsPage() {
                     ) : (
                       pairRows.map((row) => (
                         <tr key={row.groupId} className="border-b last:border-b-0">
-                          <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                          <td className="sticky left-0 z-[1] bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
                             {row.name}
                           </td>
 
@@ -1451,7 +1429,6 @@ export default function MobileLeaderboardsPage() {
               ) : null}
             </div>
 
-            {/* Spacer to ensure content finishes above the fixed bottom nav */}
             <div aria-hidden="true" className="h-28" />
           </>
         )}
