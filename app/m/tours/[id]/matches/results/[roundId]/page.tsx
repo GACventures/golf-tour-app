@@ -741,7 +741,7 @@ export default function MatchesResultsRoundPage() {
                         </div>
                         <div className="divide-y">
                           {stablefordTotals.map((r) => (
-                       F     <div key={r.player_id} className="grid grid-cols-12">
+                           <div key={r.player_id} className="grid grid-cols-12">
                               <div className="col-span-9 px-3 py-2 text-sm font-semibold text-gray-900 truncate">{r.name}</div>
                               <div className="col-span-3 px-3 py-2 text-right text-sm font-extrabold text-gray-900">{r.total}</div>
                             </div>
