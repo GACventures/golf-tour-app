@@ -38,10 +38,12 @@ export default function MobileNav() {
         left: 0,
         right: 0,
         bottom: 0,
+        zIndex: 1000,
         borderTop: "1px solid #e5e7eb",
         background: "white",
         padding: "10px 10px 10px",
         paddingBottom: "calc(10px + env(safe-area-inset-bottom))",
+        boxShadow: "0 -6px 18px rgba(0,0,0,0.06)",
       }}
     >
       <div style={{ maxWidth: 860, margin: "0 auto" }}>
