@@ -385,6 +385,7 @@ export default function MobileRoundResultsPage() {
     return list.map((x, idx) => ({ ...x, rank: idx + 1 }));
   }, [players, roundPlayers, rpByPlayer, scoresByPlayerHole, parsModel]);
 
+  // (kept to avoid logic churn; no longer displayed)
   const headerTitle = useMemo(() => {
     const courseName = round?.courses?.name ? ` – ${round.courses.name}` : "";
     const roundNo = typeof round?.round_no === "number" && round.round_no ? `Round ${round.round_no}` : "Round";
@@ -394,15 +395,29 @@ export default function MobileRoundResultsPage() {
 
   const dateText = useMemo(() => formatDate(round?.played_on ?? null), [round?.played_on]);
 
+  // ✅ Tee-times style meta line: Round no · Date · Course
+  const roundLabel = useMemo(() => {
+    const n = Number(round?.round_no);
+    return Number.isFinite(n) && n > 0 ? `Round ${n}` : "Round";
+  }, [round?.round_no]);
+
+  const course = useMemo(() => String(round?.courses?.name ?? "").trim(), [round?.courses?.name]);
+
+  const metaLine = useMemo(() => {
+    const parts: string[] = [roundLabel];
+    if (dateText) parts.push(dateText);
+    if (course) parts.push(course);
+    return parts.join(" · ");
+  }, [roundLabel, dateText, course]);
+
   return (
     <div className="bg-white text-slate-900 min-h-dvh">
-      <main className="mx-auto w-full max-w-md px-4 py-4 pb-24">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-xl font-semibold">Results</div>
-            <div className="mt-1 truncate text-sm text-slate-700">{headerTitle}</div>
-            {dateText ? <div className="mt-1 text-sm text-slate-500">{dateText}</div> : null}
-          </div>
+      {/* NOTE: Tour name + Home is already rendered by the layout above this page.
+          We only make this page match the Tee-times round header style underneath that layout header. */}
+
+      <div className="border-b bg-white">
+        <div className="mx-auto max-w-md px-4 py-3 flex items-center justify-between gap-3">
+          <div className="text-base font-semibold">Results</div>
 
           <button
             type="button"
@@ -412,13 +427,19 @@ export default function MobileRoundResultsPage() {
             Back
           </button>
         </div>
+      </div>
 
+      <div className="border-b bg-gray-50">
+        <div className="mx-auto max-w-md px-4 py-3 text-sm font-semibold text-gray-800">{metaLine}</div>
+      </div>
+
+      <main className="mx-auto w-full max-w-md px-4 pt-4 pb-24">
         {errorMsg ? (
-          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMsg}</div>
+          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMsg}</div>
         ) : null}
 
         {loading ? (
-          <div className="mt-4 space-y-3">
+          <div className="space-y-3">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="h-5 w-52 rounded bg-slate-100" />
@@ -427,7 +448,7 @@ export default function MobileRoundResultsPage() {
             ))}
           </div>
         ) : (
-          <div className="mt-4">
+          <div>
             <div className="px-2 text-xs font-semibold text-slate-600">
               <div className="grid grid-cols-[64px_1fr_64px_64px] items-center gap-2">
                 <div>Rank</div>
