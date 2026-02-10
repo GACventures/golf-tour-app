@@ -1285,6 +1285,8 @@ export default function MobileLeaderboardsPage() {
                   </tr>
                 </thead>
 
+                <tbody>{kind === "teams" ? null : null}</tbody>
+
                 <tbody>
                   {kind === "teams" ? (
                     teamRows.length === 0 ? (
@@ -1448,12 +1450,12 @@ export default function MobileLeaderboardsPage() {
                 </div>
               ) : null}
             </div>
+
+            {/* Spacer to ensure content finishes above the fixed bottom nav */}
+            <div aria-hidden="true" className="h-28" />
           </>
         )}
       </main>
-
-      {/* Bottom nav background scrim (prevents table text showing through nav buttons) */}
-      <div aria-hidden="true" className="fixed bottom-0 left-0 right-0 z-40 h-24 border-t border-gray-200 bg-white" />
 
       <MobileNav />
     </div>
