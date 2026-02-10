@@ -14,6 +14,7 @@ type TourRow = { id: string; name: string | null };
 type RoundRow = {
   id: string;
   created_at: string | null;
+  played_on?: string | null; // ✅ correct “round date”
   round_no?: number | null;
   course_id?: string | null;
   courses?: { name: string } | { name: string }[] | null;
@@ -282,11 +283,13 @@ export default function MobileRoundTeeTimesPage() {
     const { data: tData } = await supabase.from("tours").select("id,name").eq("id", tourId).maybeSingle();
     setTour((tData ?? null) as TourRow | null);
 
+    // ✅ include played_on so sorting/indexing matches rounds landing page
     const { data: allRounds, error: allRoundsErr } = await supabase
       .from("rounds")
-      .select("id,round_no,created_at")
+      .select("id,round_no,played_on,created_at")
       .eq("tour_id", tourId)
       .order("round_no", { ascending: true, nullsFirst: false })
+      .order("played_on", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: true });
 
     if (allRoundsErr) {
@@ -302,9 +305,10 @@ export default function MobileRoundTeeTimesPage() {
     const last = rr.length ? rr[rr.length - 1] : null;
     setFinalRoundId(last ? String(last.id) : "");
 
+    // ✅ include played_on for the header date
     const { data: rData, error: rErr } = await supabase
       .from("rounds")
-      .select("id,created_at,round_no,course_id,courses(name)")
+      .select("id,played_on,created_at,round_no,course_id,courses(name)")
       .eq("id", roundId)
       .single();
 
@@ -445,11 +449,13 @@ export default function MobileRoundTeeTimesPage() {
         }
       }
 
+      // ✅ include played_on (not used in calc, but keeps ordering consistent if you ever change sorting)
       const { data: roundsData, error: roundsErr } = await supabase
         .from("rounds")
-        .select("id,round_no,created_at,course_id")
+        .select("id,round_no,played_on,created_at,course_id")
         .eq("tour_id", tourId)
         .order("round_no", { ascending: true, nullsFirst: false })
+        .order("played_on", { ascending: true, nullsFirst: false })
         .order("created_at", { ascending: true });
       if (roundsErr) throw roundsErr;
 
@@ -460,6 +466,12 @@ export default function MobileRoundTeeTimesPage() {
         const an = a.round_no ?? 999999;
         const bn = b.round_no ?? 999999;
         if (an !== bn) return an - bn;
+
+        // ✅ prefer played_on for tie-break ordering
+        const ap = String(a.played_on ?? "");
+        const bp = String(b.played_on ?? "");
+        if (ap && bp && ap !== bp) return ap.localeCompare(bp);
+
         return String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""));
       });
 
@@ -614,7 +626,9 @@ export default function MobileRoundTeeTimesPage() {
 
       const fullGroups = Math.floor(Math.min(maleCount, femaleCount) / 2);
       if (fullGroups <= 0) {
-        throw new Error(`Not enough players to form 2M+2F groups. Men=${maleCount}, Women=${femaleCount}. Need at least 2 of each.`);
+        throw new Error(
+          `Not enough players to form 2M+2F groups. Men=${maleCount}, Women=${femaleCount}. Need at least 2 of each.`
+        );
       }
 
       const builtGroups: Array<{ groupNo: number; seats: Array<{ seat: number; playerId: string }> }> = [];
@@ -689,7 +703,8 @@ export default function MobileRoundTeeTimesPage() {
     }
   }
 
-  const roundDate = fmtDate(parseDate(round?.created_at ?? null));
+  // ✅ Use played_on for “round date”, fallback to created_at if missing
+  const roundDate = fmtDate(parseDate(round?.played_on ?? round?.created_at ?? null));
   const course = courseName(round);
 
   return (
