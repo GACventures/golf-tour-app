@@ -563,6 +563,12 @@ export default function MatchesResultsRoundPage() {
     return [rn, d || "", c || ""].filter(Boolean).join(" · ");
   }, [round]);
 
+  const roundFormatLine = useMemo(() => {
+  if (!settings) return "";
+  return `Round format: ${formatLabel(settings.format)}${settings.double_points ? " · Double points" : ""}`;
+}, [settings]);
+
+
   function hardNavigateToMatch(matchId: string) {
     if (!matchId) return;
 
@@ -603,19 +609,45 @@ export default function MatchesResultsRoundPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
-      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-base font-semibold">Matches – Results</div>
-            <div className="truncate text-sm text-gray-500">{headerLine || "Round"}</div>
-          </div>
+      {/* Tee-times style header (3-band) */}
+      <div className="sticky top-0 z-10 bg-white/95 backdrop-blur">
+        {/* Band 1: tour + home */}
+        <div className="border-b border-slate-200">
+          <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-slate-900">Tour</div>
+            </div>
 
-          <Link
-            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm active:bg-gray-50"
-            href={`/m/tours/${tourId}/matches/results`}
-          >
-            Back
-          </Link>
+            <Link
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm active:bg-slate-50"
+              href={`/m/tours/${tourId}`}
+            >
+              Home
+            </Link>
+          </div>
+        </div>
+
+        {/* Band 2: page title + back */}
+        <div className="border-b border-slate-200">
+          <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-base font-semibold text-slate-900">Matches – Results</div>
+            </div>
+
+            <Link
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm active:bg-slate-50"
+              href={`/m/tours/${tourId}/matches/results`}
+            >
+              Back
+            </Link>
+          </div>
+        </div>
+
+        {/* Band 3: round meta */}
+        <div className="border-b border-slate-200 bg-slate-50">
+          <div className="mx-auto w-full max-w-md px-4 py-2">
+            <div className="truncate text-sm font-semibold text-slate-800">{headerLine || "Round"}</div>
+          </div>
         </div>
       </div>
 
@@ -631,20 +663,8 @@ export default function MatchesResultsRoundPage() {
         ) : (
           <>
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Round format</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  {formatLabel(settings.format)}
-                  {settings.double_points ? <span className="ml-2 font-semibold">· Double points</span> : null}
-                </div>
-                <div className="mt-1 text-xs text-gray-600">
-                  Teams: <span className="font-semibold">{safeText(groupA?.name, "Team A")}</span> vs{" "}
-                  <span className="font-semibold">{safeText(groupB?.name, "Team B")}</span>
-                </div>
-              </div>
-
-              <div className="p-4 text-xs text-gray-600">
-                Matchplay holes are decided using <span className="font-semibold">net Stableford points</span> per hole (pickup = 0).
+              <div className="p-4">
+                <div className="text-sm font-semibold text-gray-900">{roundFormatLine}</div>
               </div>
             </section>
 
@@ -717,13 +737,11 @@ export default function MatchesResultsRoundPage() {
                       <div className="mt-2 overflow-hidden rounded-2xl border border-gray-200">
                         <div className="grid grid-cols-12 bg-gray-50 border-b">
                           <div className="col-span-9 px-3 py-2 text-[11px] font-semibold text-gray-700">Player</div>
-                          <div className="col-span-3 px-3 py-2 text-right text-[11px] font-semibold text-gray-700">
-                            Total
-                          </div>
+                          <div className="col-span-3 px-3 py-2 text-right text-[11px] font-semibold text-gray-700">Total</div>
                         </div>
                         <div className="divide-y">
                           {stablefordTotals.map((r) => (
-                            <div key={r.player_id} className="grid grid-cols-12">
+                       F     <div key={r.player_id} className="grid grid-cols-12">
                               <div className="col-span-9 px-3 py-2 text-sm font-semibold text-gray-900 truncate">{r.name}</div>
                               <div className="col-span-3 px-3 py-2 text-right text-sm font-extrabold text-gray-900">{r.total}</div>
                             </div>
@@ -737,8 +755,6 @@ export default function MatchesResultsRoundPage() {
             )}
           </>
         )}
-
-        <div className="text-[11px] text-gray-400">Dates shown in Australia/Melbourne.</div>
       </main>
     </div>
   );
