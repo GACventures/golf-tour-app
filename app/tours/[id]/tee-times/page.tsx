@@ -911,12 +911,20 @@ export default function TourTeeTimesPage() {
     const groupsOut: string[][] = [];
 
     // Add all-M groups first (target 2 if enough)
-    while (groupsOut.length < groupCount && mPool.length >= 4 && groupsOut.filter((g) => g.every((p) => (playerGenderById.get(p) ?? "M") === "M")).length < 2) {
+    while (
+      groupsOut.length < groupCount &&
+      mPool.length >= 4 &&
+      groupsOut.filter((g) => g.every((p) => (playerGenderById.get(p) ?? "M") === "M")).length < 2
+    ) {
       groupsOut.push([mPool.shift()!, mPool.shift()!, mPool.shift()!, mPool.shift()!]);
     }
 
     // Add all-F groups (target 2 if enough)
-    while (groupsOut.length < groupCount && fPool.length >= 4 && groupsOut.filter((g) => g.every((p) => (playerGenderById.get(p) ?? "M") === "F")).length < 2) {
+    while (
+      groupsOut.length < groupCount &&
+      fPool.length >= 4 &&
+      groupsOut.filter((g) => g.every((p) => (playerGenderById.get(p) ?? "M") === "F")).length < 2
+    ) {
       groupsOut.push([fPool.shift()!, fPool.shift()!, fPool.shift()!, fPool.shift()!]);
     }
 
@@ -947,7 +955,10 @@ export default function TourTeeTimesPage() {
     for (let gi = 0; gi < groupsOut.length; gi++) {
       const g = groupsOut[gi];
       // sort by "how many repeats with others" (lower first)
-      g.sort((a, b) => groupScore(g.filter((x) => x !== a), a, matrix) - groupScore(g.filter((x) => x !== b), b, matrix));
+      g.sort(
+        (a, b) =>
+          groupScore(g.filter((x) => x !== a), a, matrix) - groupScore(g.filter((x) => x !== b), b, matrix)
+      );
       groupsOut[gi] = g;
     }
 
@@ -1049,7 +1060,9 @@ export default function TourTeeTimesPage() {
         } else {
           const ready = await penultimateHasAnyScores(penultimate.id);
           if (!ready) {
-            setInfoMsg("Generated Round 1 + middle rounds. Final round NOT generated yet (no scores found for penultimate round).");
+            setInfoMsg(
+              "Generated Round 1 + middle rounds. Final round NOT generated yet (no scores found for penultimate round)."
+            );
           } else {
             const finalIds = playerIdsForRound(last.id);
             await ensureRoundPlayers(last.id, finalIds);
@@ -1143,9 +1156,7 @@ export default function TourTeeTimesPage() {
         const ids = playerIdsForRound(r7.id);
         await ensureRoundPlayers(r7.id, ids);
 
-        const upToIds = sorted
-          .map((r) => r.id)
-          .filter((rid) => rid !== r7.id);
+        const upToIds = sorted.map((r) => r.id).filter((rid) => rid !== r7.id);
 
         // If no prior scores, still create 2M2F fair mix
         const anyScores = await penultimateHasAnyScores(getRound(6).id);
@@ -1427,7 +1438,9 @@ export default function TourTeeTimesPage() {
                                         ({tee} · HCP {hcp})
                                       </span>
                                     </div>
-                                    <div className="opacity-60 whitespace-nowrap">Seat {m.seat ?? "—"}</div>
+                                    <div className="opacity-60 whitespace-nowrap">
+                                      {m.seat != null ? `${m.seat}.` : "—"}
+                                    </div>
                                   </div>
                                 );
                               })}
