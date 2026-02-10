@@ -171,10 +171,7 @@ function isMissingColumnError(msg: string, column: string) {
 // ✅ Load pars in a tee-aware way (prefer pars.tee schema)
 async function loadParsForCourse(courseId: string) {
   // Try modern schema first: tee-aware rows
-  const attempt1 = await supabase
-    .from("pars")
-    .select("course_id,hole_number,tee,par,stroke_index")
-    .eq("course_id", courseId);
+  const attempt1 = await supabase.from("pars").select("course_id,hole_number,tee,par,stroke_index").eq("course_id", courseId);
 
   if (!attempt1.error) return (attempt1.data ?? []) as ParRow[];
 
@@ -292,7 +289,9 @@ export default function MobileRoundPlayerResultPage() {
   const parRowsByHole = useMemo(() => {
     const byHole = new Map<number, { M?: ParRow; F?: ParRow; legacy?: ParRow }>();
 
-    const hasTee = pars.some((p) => String((p as any)?.tee ?? "").toUpperCase() === "M" || String((p as any)?.tee ?? "").toUpperCase() === "F");
+    const hasTee = pars.some(
+      (p) => String((p as any)?.tee ?? "").toUpperCase() === "M" || String((p as any)?.tee ?? "").toUpperCase() === "F"
+    );
 
     for (const p of pars) {
       const hole = Number((p as any).hole_number);
@@ -424,14 +423,18 @@ export default function MobileRoundPlayerResultPage() {
     return { courseId, hasTee: parRowsByHole.hasTee, rows };
   }, [round?.course_id, computed.tee, parRowsByHole]);
 
-  const headerTitle = useMemo(() => {
-    const courseName = round?.courses?.name ? ` – ${round.courses.name}` : "";
-    const roundNo = typeof round?.round_no === "number" && round.round_no ? `Round ${round.round_no}` : "Round";
-    const rname = (round?.name ?? "").trim();
-    return `${rname || roundNo}${courseName}`;
-  }, [round]);
+  const roundIndexText = useMemo(() => {
+    const n = Number(round?.round_no);
+    if (Number.isFinite(n) && n > 0) return `Round ${n}`;
+    return "Round";
+  }, [round?.round_no]);
 
-  const dateText = useMemo(() => formatDate(round?.played_on ?? null), [round?.played_on]);
+  const roundDate = useMemo(() => formatDate(round?.played_on ?? null), [round?.played_on]);
+
+  const course = useMemo(() => {
+    const c = round?.courses?.name ?? "";
+    return String(c ?? "").trim();
+  }, [round?.courses?.name]);
 
   function ScoreBox({ shade, label }: { shade: Shade; label: string | number }) {
     const isBlue = shade === "ace" || shade === "eagle" || shade === "birdie";
@@ -456,34 +459,40 @@ export default function MobileRoundPlayerResultPage() {
   }
 
   return (
-    <div className="bg-white text-slate-900 min-h-dvh">
-      <main className="mx-auto w-full max-w-md px-4 py-4 pb-24">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-xl font-semibold">Scorecard</div>
-            <div className="mt-1 truncate text-sm text-slate-700">{headerTitle}</div>
-            {dateText ? <div className="mt-1 text-sm text-slate-500">{dateText}</div> : null}
+    <div className="min-h-dvh bg-white text-gray-900">
+      {/* Header (match tee-times/results style; do NOT duplicate tour name/home header from layout) */}
+      <div className="border-b bg-white">
+        <div className="mx-auto max-w-md px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-base font-semibold">Scorecard</div>
+            <button
+              type="button"
+              onClick={goBack}
+              className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-sm font-semibold hover:bg-slate-200 active:bg-slate-300"
+            >
+              Back
+            </button>
           </div>
-
-          <button
-            type="button"
-            onClick={goBack}
-            className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-sm font-semibold hover:bg-slate-200 active:bg-slate-300"
-          >
-            Back
-          </button>
         </div>
+      </div>
 
+      <div className="border-b bg-gray-50">
+        <div className="mx-auto max-w-md px-4 py-3 text-sm font-semibold text-gray-800">
+          {roundIndexText} · {roundDate} · {course}
+        </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-md px-4 pt-4 pb-24">
         {errorMsg ? (
-          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMsg}</div>
+          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMsg}</div>
         ) : null}
 
         {loading ? (
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">Loading…</div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">Loading…</div>
         ) : (
           <>
             {/* ✅ Diagnostics (holes 1,2,14) */}
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+            <div className="mt-0 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
               <div className="font-semibold text-slate-900">Diagnostics</div>
               <div className="mt-1">
                 CourseId: <span className="font-mono">{diag.courseId || "(none)"}</span> · Pars schema:{" "}
@@ -619,15 +628,17 @@ export default function MobileRoundPlayerResultPage() {
                 Par <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm bg-white border border-slate-300" />
               </div>
               <div className="rounded-md px-3 py-2 text-sm font-bold border border-slate-300 bg-slate-50 text-slate-900">
-                Bogey <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm" style={{ backgroundColor: "#f8cfcf" }} />
+                Bogey{" "}
+                <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm" style={{ backgroundColor: "#f8cfcf" }} />
               </div>
               <div className="rounded-md px-3 py-2 text-sm font-bold border border-slate-300 bg-slate-50 text-slate-900">
-                D. Bogey + <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm" style={{ backgroundColor: "#c0392b" }} />
+                D. Bogey +{" "}
+                <span className="ml-2 inline-block w-3 h-3 align-middle rounded-sm" style={{ backgroundColor: "#c0392b" }} />
               </div>
             </div>
           </>
         )}
-      </main>
+      </div>
     </div>
   );
 }
