@@ -1,3 +1,4 @@
+// app/m/tours/[id]/more/admin/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -59,6 +60,33 @@ type RoundPlayerHCRow = {
   base_playing_handicap: number | null;
 };
 
+// Tee time grouping tables (existing)
+type RoundGroupRow = {
+  id: string;
+  round_id: string;
+  group_no: number;
+  start_hole: number;
+  tee_time: string | null;
+  notes: string | null;
+};
+
+type RoundGroupPlayerRow = {
+  id: string;
+  round_id: string;
+  group_id: string;
+  player_id: string;
+  seat: number | null;
+};
+
+type ManualGroup = {
+  // local-only id (stable key for React even before save)
+  key: string;
+  // 1..N visual order
+  groupNo: number;
+  // ordered player_ids
+  playerIds: string[];
+};
+
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
@@ -108,6 +136,11 @@ function roundLabel(r: RoundOption) {
   const course = (r.course_name ?? "").trim();
   const baseName = course || (r.name ?? "").trim() || `Round ${r.round_no}`;
   return `R${r.round_no} • ${baseName} • ${r.played_on}`;
+}
+
+function makeLocalKey() {
+  // deterministic enough for UI keys; avoids crypto dependency
+  return `g_${Date.now()}_${Math.floor(Math.random() * 1e9)}`;
 }
 
 export default function MobileTourAdminPage() {
@@ -164,6 +197,16 @@ export default function MobileTourAdminPage() {
   const [ooRoundPlayers, setOoRoundPlayers] = useState<Map<string, RoundPlayerHCRow>>(new Map());
   const [ooInputs, setOoInputs] = useState<Record<string, string>>({}); // player_id -> text
 
+  // Manual tee time groups (uses existing round_groups / round_group_players)
+  const [ttSelectedRoundId, setTtSelectedRoundId] = useState<string>("");
+  const [ttLoading, setTtLoading] = useState(false);
+  const [ttSaving, setTtSaving] = useState(false);
+  const [ttError, setTtError] = useState("");
+  const [ttMsg, setTtMsg] = useState("");
+
+  const [ttGroups, setTtGroups] = useState<ManualGroup[]>([]);
+  const [ttAddTargetGroupNo, setTtAddTargetGroupNo] = useState<number>(1);
+
   const rehandicappingEnabled = tour?.rehandicapping_enabled === true;
 
   useEffect(() => {
@@ -191,6 +234,13 @@ export default function MobileTourAdminPage() {
       setOoSelectedRoundId("");
       setOoRoundPlayers(new Map());
       setOoInputs({});
+
+      // Reset tee time editor
+      setTtError("");
+      setTtMsg("");
+      setTtSelectedRoundId("");
+      setTtGroups([]);
+      setTtAddTargetGroupNo(1);
 
       try {
         const { data: tData, error: tErr } = await supabase
@@ -248,8 +298,7 @@ export default function MobileTourAdminPage() {
           }));
         }
 
-        // One-off handicaps: load rounds list (so the UI can pick a round)
-        // Only needed/used when rehandicapping is OFF, but cheap and safe.
+        // One-off handicaps + tee time editor: load rounds list
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,round_no,played_on,name,courses(name)")
@@ -287,6 +336,10 @@ export default function MobileTourAdminPage() {
         setOoRounds(ropts);
         // Do NOT auto-select round (user picks)
         setOoSelectedRoundId("");
+
+        setTtSelectedRoundId("");
+        setTtGroups([]);
+        setTtAddTargetGroupNo(1);
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load Tour Admin page.");
@@ -678,6 +731,268 @@ export default function MobileTourAdminPage() {
     setOoInputs((prev) => ({ ...prev, [playerId]: next }));
   }
 
+  // -------------------------
+  // Manual tee time editor
+  // -------------------------
+
+  const playerNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of rows) m.set(r.player_id, r.name);
+    return m;
+  }, [rows]);
+
+  const ttAssignedSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const g of ttGroups) for (const pid of g.playerIds) s.add(pid);
+    return s;
+  }, [ttGroups]);
+
+  const ttUnassigned = useMemo(() => {
+    return rows
+      .map((r) => ({ id: r.player_id, name: r.name }))
+      .filter((p) => !ttAssignedSet.has(p.id))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [rows, ttAssignedSet]);
+
+  const ttGroupNos = useMemo(() => ttGroups.map((g) => g.groupNo), [ttGroups]);
+
+  function normalizeGroupNos(next: ManualGroup[]) {
+    const sorted = [...next].sort((a, b) => a.groupNo - b.groupNo);
+    return sorted.map((g, idx) => ({ ...g, groupNo: idx + 1 }));
+  }
+
+  async function loadManualTeeTimes(roundId: string) {
+    if (!roundId || !isLikelyUuid(roundId)) {
+      setTtGroups([]);
+      setTtAddTargetGroupNo(1);
+      return;
+    }
+
+    setTtLoading(true);
+    setTtError("");
+    setTtMsg("");
+
+    try {
+      const { data: gData, error: gErr } = await supabase
+        .from("round_groups")
+        .select("id,round_id,group_no,start_hole,tee_time,notes")
+        .eq("round_id", roundId)
+        .order("group_no", { ascending: true });
+
+      if (gErr) throw gErr;
+
+      const groups = (gData ?? []) as RoundGroupRow[];
+      if (groups.length === 0) {
+        setTtGroups([]);
+        setTtAddTargetGroupNo(1);
+        return;
+      }
+
+      const groupIds = groups.map((g) => g.id);
+
+      const { data: mData, error: mErr } = await supabase
+        .from("round_group_players")
+        .select("id,round_id,group_id,player_id,seat")
+        .eq("round_id", roundId)
+        .in("group_id", groupIds);
+
+      if (mErr) throw mErr;
+
+      const members = (mData ?? []) as RoundGroupPlayerRow[];
+
+      const memByGroup = new Map<string, RoundGroupPlayerRow[]>();
+      for (const m of members) {
+        if (!memByGroup.has(m.group_id)) memByGroup.set(m.group_id, []);
+        memByGroup.get(m.group_id)!.push(m);
+      }
+      for (const [gid, arr] of memByGroup.entries()) {
+        arr.sort((a, b) => (a.seat ?? 999) - (b.seat ?? 999));
+        memByGroup.set(gid, arr);
+      }
+
+      const local: ManualGroup[] = groups
+        .slice()
+        .sort((a, b) => a.group_no - b.group_no)
+        .map((g) => {
+          const mem = memByGroup.get(g.id) ?? [];
+          return {
+            key: makeLocalKey(),
+            groupNo: Number(g.group_no),
+            playerIds: mem.map((x) => String(x.player_id)).filter(Boolean),
+          };
+        });
+
+      const normalized = normalizeGroupNos(local);
+      setTtGroups(normalized);
+      setTtAddTargetGroupNo(normalized[0]?.groupNo ?? 1);
+      setTtMsg("Loaded saved groups for this round.");
+    } catch (e: any) {
+      setTtError(e?.message ?? "Failed to load tee time groups for this round.");
+      setTtGroups([]);
+      setTtAddTargetGroupNo(1);
+    } finally {
+      setTtLoading(false);
+    }
+  }
+
+  function ttAddGroup() {
+    setTtMsg("");
+    setTtError("");
+    setTtGroups((prev) => {
+      const next = [...prev, { key: makeLocalKey(), groupNo: prev.length + 1, playerIds: [] }];
+      return normalizeGroupNos(next);
+    });
+    setTtAddTargetGroupNo((prev) => (prev && prev > 0 ? prev : 1));
+  }
+
+  function ttDeleteGroup(groupNo: number) {
+    setTtMsg("");
+    setTtError("");
+    setTtGroups((prev) => normalizeGroupNos(prev.filter((g) => g.groupNo !== groupNo)));
+    setTtAddTargetGroupNo((prev) => {
+      const remaining = ttGroupNos.filter((n) => n !== groupNo);
+      const min = remaining.length ? Math.min(...remaining) : 1;
+      return prev > groupNo ? prev - 1 : prev === groupNo ? min : prev;
+    });
+  }
+
+  function ttMoveGroup(groupNo: number, dir: "up" | "down") {
+    setTtMsg("");
+    setTtError("");
+
+    setTtGroups((prev) => {
+      const next = [...prev].sort((a, b) => a.groupNo - b.groupNo);
+      const idx = next.findIndex((g) => g.groupNo === groupNo);
+      if (idx < 0) return prev;
+
+      const swapIdx = dir === "up" ? idx - 1 : idx + 1;
+      if (swapIdx < 0 || swapIdx >= next.length) return prev;
+
+      const a = next[idx];
+      const b = next[swapIdx];
+      next[idx] = { ...a, groupNo: b.groupNo };
+      next[swapIdx] = { ...b, groupNo: a.groupNo };
+
+      return normalizeGroupNos(next);
+    });
+  }
+
+  function ttAddPlayerToGroup(playerId: string, groupNo: number) {
+    setTtMsg("");
+    setTtError("");
+
+    setTtGroups((prev) => {
+      // remove from any existing group first (enforce uniqueness)
+      const stripped = prev.map((g) => ({ ...g, playerIds: g.playerIds.filter((pid) => pid !== playerId) }));
+
+      return stripped.map((g) => {
+        if (g.groupNo !== groupNo) return g;
+        return { ...g, playerIds: [...g.playerIds, playerId] };
+      });
+    });
+  }
+
+  function ttRemovePlayer(groupNo: number, playerId: string) {
+    setTtMsg("");
+    setTtError("");
+    setTtGroups((prev) =>
+      prev.map((g) => {
+        if (g.groupNo !== groupNo) return g;
+        return { ...g, playerIds: g.playerIds.filter((pid) => pid !== playerId) };
+      })
+    );
+  }
+
+  function ttMovePlayerWithinGroup(groupNo: number, playerId: string, dir: "up" | "down") {
+    setTtMsg("");
+    setTtError("");
+
+    setTtGroups((prev) =>
+      prev.map((g) => {
+        if (g.groupNo !== groupNo) return g;
+        const idx = g.playerIds.findIndex((x) => x === playerId);
+        if (idx < 0) return g;
+        const swapIdx = dir === "up" ? idx - 1 : idx + 1;
+        if (swapIdx < 0 || swapIdx >= g.playerIds.length) return g;
+        const arr = [...g.playerIds];
+        [arr[idx], arr[swapIdx]] = [arr[swapIdx], arr[idx]];
+        return { ...g, playerIds: arr };
+      })
+    );
+  }
+
+  async function ttSave() {
+    if (!ttSelectedRoundId || !isLikelyUuid(ttSelectedRoundId)) {
+      setTtError("Please select a round.");
+      return;
+    }
+
+    setTtSaving(true);
+    setTtError("");
+    setTtMsg("");
+
+    try {
+      // Only save non-empty groups
+      const nonEmpty = ttGroups
+        .map((g) => ({ ...g, playerIds: g.playerIds.filter(Boolean) }))
+        .filter((g) => g.playerIds.length > 0)
+        .sort((a, b) => a.groupNo - b.groupNo);
+
+      // Replace-all behavior (idempotent)
+      const delM = await supabase.from("round_group_players").delete().eq("round_id", ttSelectedRoundId);
+      if (delM.error) throw delM.error;
+
+      const delG = await supabase.from("round_groups").delete().eq("round_id", ttSelectedRoundId);
+      if (delG.error) throw delG.error;
+
+      if (nonEmpty.length === 0) {
+        setTtMsg("Saved: cleared all tee time groups for this round.");
+        setTtSaving(false);
+        return;
+      }
+
+      const groupRows = nonEmpty.map((g, idx) => ({
+        round_id: ttSelectedRoundId,
+        group_no: idx + 1,
+        start_hole: 1,
+        tee_time: null,
+        notes: "Manual: Mobile admin",
+      }));
+
+      const { data: insertedGroups, error: insGErr } = await supabase.from("round_groups").insert(groupRows).select("id,group_no");
+      if (insGErr) throw insGErr;
+
+      const idByNo = new Map<number, string>();
+      for (const g of insertedGroups ?? []) idByNo.set(Number((g as any).group_no), String((g as any).id));
+
+      const memberRows: any[] = [];
+      nonEmpty.forEach((g, idx) => {
+        const groupNo = idx + 1; // saved numbering
+        const groupId = idByNo.get(groupNo);
+        if (!groupId) return;
+        g.playerIds.forEach((pid, seatIdx) => {
+          memberRows.push({
+            round_id: ttSelectedRoundId,
+            group_id: groupId,
+            player_id: pid,
+            seat: seatIdx + 1,
+          });
+        });
+      });
+
+      const { error: insMErr } = await supabase.from("round_group_players").insert(memberRows);
+      if (insMErr) throw insMErr;
+
+      setTtMsg(`Saved ${nonEmpty.length} group${nonEmpty.length === 1 ? "" : "s"} (${memberRows.length} player assignments).`);
+      // Reload from DB to ensure persisted order matches
+      await loadManualTeeTimes(ttSelectedRoundId);
+    } catch (e: any) {
+      setTtError(e?.message ?? "Failed to save tee time groups.");
+    } finally {
+      setTtSaving(false);
+    }
+  }
+
   function goBack() {
     router.push(`/m/tours/${tourId}/more`);
   }
@@ -933,9 +1248,7 @@ export default function MobileTourAdminPage() {
                                         No round_players row found for this player in this round.
                                       </div>
                                     ) : (
-                                      <div className="mt-1 text-[11px] text-gray-500">
-                                        Enter the full playing handicap you want for this round.
-                                      </div>
+                                      <div className="mt-1 text-[11px] text-gray-500">Enter the full playing handicap you want for this round.</div>
                                     )}
                                   </div>
                                 );
@@ -1161,6 +1474,296 @@ export default function MobileTourAdminPage() {
                         </div>
 
                         {courseSaveMsg ? <div className="text-sm text-green-700">{courseSaveMsg}</div> : null}
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            </section>
+
+            {/* Manual Tee Time Groups */}
+            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+              <div className="p-4 border-b">
+                <div className="text-sm font-semibold text-gray-900">Tee time groups (manual)</div>
+                <div className="mt-1 text-xs text-gray-600">
+                  Saves to <span className="font-medium">round_groups</span> and <span className="font-medium">round_group_players</span>.
+                  Saving replaces prior groups for the round (idempotent). Auto-generation on desktop is unchanged.
+                </div>
+              </div>
+
+              <div className="p-4 space-y-3">
+                {ooRounds.length === 0 ? (
+                  <div className="text-sm text-gray-700">No rounds found for this tour.</div>
+                ) : (
+                  <>
+                    <label className="block text-xs font-semibold text-gray-700" htmlFor="teeTimeRoundSelect">
+                      Select round
+                    </label>
+
+                    <select
+                      id="teeTimeRoundSelect"
+                      className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                      value={ttSelectedRoundId}
+                      onChange={async (e) => {
+                        const rid = e.target.value;
+                        setTtSelectedRoundId(rid);
+                        setTtError("");
+                        setTtMsg("");
+                        setTtGroups([]);
+                        setTtAddTargetGroupNo(1);
+
+                        if (rid) {
+                          await loadManualTeeTimes(rid);
+                        }
+                      }}
+                    >
+                      <option value="">Select a round…</option>
+                      {ooRounds.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {roundLabel(r)}
+                        </option>
+                      ))}
+                    </select>
+
+                    {!ttSelectedRoundId ? (
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                        Choose a round to create or edit tee time groups.
+                      </div>
+                    ) : (
+                      <>
+                        {ttLoading ? (
+                          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading groups…</div>
+                        ) : null}
+
+                        {ttError ? (
+                          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{ttError}</div>
+                        ) : null}
+
+                        {ttMsg ? <div className="text-sm text-green-700">{ttMsg}</div> : null}
+
+                        <div className="flex items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={ttAddGroup}
+                            disabled={ttLoading || ttSaving}
+                            className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                              ttLoading || ttSaving
+                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                            }`}
+                          >
+                            + Add group
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={ttSave}
+                            disabled={ttLoading || ttSaving}
+                            className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                              ttLoading || ttSaving
+                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                            }`}
+                          >
+                            {ttSaving ? "Saving…" : "Save groups"}
+                          </button>
+                        </div>
+
+                        <div className="rounded-2xl border border-gray-200 overflow-hidden">
+                          <div className="grid grid-cols-12 gap-0 border-b bg-gray-50">
+                            <div className="col-span-7 px-2 py-2 text-[11px] font-semibold text-gray-700">Unassigned players</div>
+                            <div className="col-span-5 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">Add to…</div>
+                          </div>
+
+                          <div className="p-3 space-y-2">
+                            {ttGroups.length === 0 ? (
+                              <div className="text-sm text-gray-700">
+                                No groups yet. Tap <span className="font-medium">Add group</span> to begin.
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-xs text-gray-600">Target group for adding players</div>
+                                <select
+                                  className="h-9 rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                  value={ttAddTargetGroupNo}
+                                  onChange={(e) => setTtAddTargetGroupNo(Number(e.target.value))}
+                                  disabled={ttLoading || ttSaving || ttGroups.length === 0}
+                                >
+                                  {ttGroups
+                                    .slice()
+                                    .sort((a, b) => a.groupNo - b.groupNo)
+                                    .map((g) => (
+                                      <option key={g.key} value={g.groupNo}>
+                                        Group {g.groupNo}
+                                      </option>
+                                    ))}
+                                </select>
+                              </div>
+                            )}
+
+                            <div className="divide-y rounded-xl border border-gray-200 overflow-hidden">
+                              {ttUnassigned.length === 0 ? (
+                                <div className="p-3 text-sm text-gray-700">All players are assigned to a group.</div>
+                              ) : (
+                                ttUnassigned.map((p) => (
+                                  <div key={p.id} className="p-3 flex items-center justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      disabled={ttGroups.length === 0 || ttSaving || ttLoading}
+                                      onClick={() => ttAddPlayerToGroup(p.id, ttAddTargetGroupNo)}
+                                      className={`h-9 rounded-lg px-3 text-sm font-semibold border shadow-sm ${
+                                        ttGroups.length === 0 || ttSaving || ttLoading
+                                          ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                          : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                                      }`}
+                                    >
+                                      Add
+                                    </button>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+
+                            <div className="text-[11px] text-gray-500">
+                              Tip: this simple flow is mobile-safe (no drag/drop). Use “Move up/down” within groups to set seat order.
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          {ttGroups
+                            .slice()
+                            .sort((a, b) => a.groupNo - b.groupNo)
+                            .map((g, idx, arr) => {
+                              const count = g.playerIds.length;
+                              const over = count > 4;
+
+                              return (
+                                <div key={g.key} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                                  <div className="p-3 border-b flex items-start justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <div className="text-sm font-semibold text-gray-900">
+                                        Group {g.groupNo}{" "}
+                                        <span className={`text-xs ${over ? "text-amber-700" : "text-gray-500"}`}>
+                                          ({count} player{count === 1 ? "" : "s"})
+                                        </span>
+                                      </div>
+                                      <div className="mt-1 text-[11px] text-gray-600">
+                                        Typical is 4-ball (sometimes 3-ball/2-ball). We won’t block larger groups, but it may not be intended.
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => ttMoveGroup(g.groupNo, "up")}
+                                        disabled={ttSaving || ttLoading || g.groupNo === 1}
+                                        className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
+                                          ttSaving || ttLoading || g.groupNo === 1
+                                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                            : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                        }`}
+                                      >
+                                        ↑
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => ttMoveGroup(g.groupNo, "down")}
+                                        disabled={ttSaving || ttLoading || g.groupNo === arr.length}
+                                        className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
+                                          ttSaving || ttLoading || g.groupNo === arr.length
+                                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                            : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                        }`}
+                                      >
+                                        ↓
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => ttDeleteGroup(g.groupNo)}
+                                        disabled={ttSaving || ttLoading}
+                                        className={`h-9 rounded-lg border px-3 text-xs font-semibold shadow-sm ${
+                                          ttSaving || ttLoading
+                                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                            : "border-red-200 bg-white text-red-700 active:bg-red-50"
+                                        }`}
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {g.playerIds.length === 0 ? (
+                                    <div className="p-3 text-sm text-gray-700">No players in this group yet.</div>
+                                  ) : (
+                                    <div className="divide-y">
+                                      {g.playerIds.map((pid) => {
+                                        const name = playerNameById.get(pid) ?? pid;
+                                        const isFirst = g.playerIds[0] === pid;
+                                        const isLast = g.playerIds[g.playerIds.length - 1] === pid;
+
+                                        return (
+                                          <div key={pid} className="p-3 flex items-center justify-between gap-2">
+                                            <div className="min-w-0">
+                                              <div className="truncate text-sm font-semibold text-gray-900">{name}</div>
+                                              <div className="text-[11px] text-gray-500">Seat {g.playerIds.indexOf(pid) + 1}</div>
+                                            </div>
+
+                                            <div className="flex items-center gap-2">
+                                              <button
+                                                type="button"
+                                                onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "up")}
+                                                disabled={ttSaving || ttLoading || isFirst}
+                                                className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
+                                                  ttSaving || ttLoading || isFirst
+                                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                    : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                                }`}
+                                              >
+                                                ↑
+                                              </button>
+
+                                              <button
+                                                type="button"
+                                                onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "down")}
+                                                disabled={ttSaving || ttLoading || isLast}
+                                                className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
+                                                  ttSaving || ttLoading || isLast
+                                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                    : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                                }`}
+                                              >
+                                                ↓
+                                              </button>
+
+                                              <button
+                                                type="button"
+                                                onClick={() => ttRemovePlayer(g.groupNo, pid)}
+                                                disabled={ttSaving || ttLoading}
+                                                className={`h-9 rounded-lg border px-3 text-xs font-semibold shadow-sm ${
+                                                  ttSaving || ttLoading
+                                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                    : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                                }`}
+                                              >
+                                                Remove
+                                              </button>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                        </div>
                       </>
                     )}
                   </>
