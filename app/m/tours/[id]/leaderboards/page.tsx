@@ -64,9 +64,9 @@ type ParRow = {
   stroke_index: number;
 };
 
-type IndividualRule = | { mode: "ALL" } | { mode: "BEST_N"; n: number; finalRequired: boolean };
+type IndividualRule = { mode: "ALL" } | { mode: "BEST_N"; n: number; finalRequired: boolean };
 
-type PairRule = | { mode: "ALL" } | { mode: "BEST_Q"; q: number; finalRequired: boolean };
+type PairRule = { mode: "ALL" } | { mode: "BEST_Q"; q: number; finalRequired: boolean };
 
 type TeamRule = { bestY: number };
 
@@ -173,12 +173,7 @@ function clampInt(n: number, min: number, max: number) {
 }
 
 // Stableford (net) per hole
-function netStablefordPointsForHole(params: {
-  rawScore: string; // "" | "P" | "number"
-  par: number;
-  strokeIndex: number;
-  playingHandicap: number;
-}) {
+function netStablefordPointsForHole(params: { rawScore: string; par: number; strokeIndex: number; playingHandicap: number }) {
   const { rawScore, par, strokeIndex, playingHandicap } = params;
 
   const raw = String(rawScore ?? "").trim().toUpperCase();
@@ -1129,8 +1124,8 @@ export default function MobileLeaderboardsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* ✅ FIX: make page header definitively above sticky table cells */}
-      <div className="sticky top-0 z-50 isolate border-b bg-white/95 backdrop-blur">
+      {/* UI FIX: make sticky header fully opaque so table content cannot show through */}
+      <div className="sticky top-0 z-50 isolate border-b bg-white shadow-sm">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="grid grid-cols-3 gap-2">
             <button
@@ -1168,9 +1163,7 @@ export default function MobileLeaderboardsPage() {
             </button>
           </div>
 
-          <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
-            {description}
-          </div>
+          <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">{description}</div>
 
           {/* ✅ Diagnostics toggle */}
           <div className="mt-3">
@@ -1212,7 +1205,10 @@ export default function MobileLeaderboardsPage() {
                           <div className="text-[10px] font-semibold text-gray-700">Men (M)</div>
                           <div className="mt-1 flex flex-wrap gap-2">
                             {dr.mVals.map((v) => (
-                              <div key={`m-${dr.roundId}-${v.hole}`} className="rounded-md border border-gray-200 bg-white px-2 py-1">
+                              <div
+                                key={`m-${dr.roundId}-${v.hole}`}
+                                className="rounded-md border border-gray-200 bg-white px-2 py-1"
+                              >
                                 <span className="font-semibold">H{v.hole}</span> · Par {v.par} · SI {v.si}
                               </div>
                             ))}
@@ -1223,7 +1219,10 @@ export default function MobileLeaderboardsPage() {
                           <div className="text-[10px] font-semibold text-gray-700">Women (F)</div>
                           <div className="mt-1 flex flex-wrap gap-2">
                             {dr.fVals.map((v) => (
-                              <div key={`f-${dr.roundId}-${v.hole}`} className="rounded-md border border-gray-200 bg-white px-2 py-1">
+                              <div
+                                key={`f-${dr.roundId}-${v.hole}`}
+                                className="rounded-md border border-gray-200 bg-white px-2 py-1"
+                              >
                                 <span className="font-semibold">H{v.hole}</span> · Par {v.par} · SI {v.si}
                               </div>
                             ))}
