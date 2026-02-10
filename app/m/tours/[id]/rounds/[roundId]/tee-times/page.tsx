@@ -152,12 +152,7 @@ function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, x));
 }
 
-function netStablefordPointsForHole(params: {
-  rawScore: string;
-  par: number;
-  strokeIndex: number;
-  playingHandicap: number;
-}) {
+function netStablefordPointsForHole(params: { rawScore: string; par: number; strokeIndex: number; playingHandicap: number }) {
   const { rawScore, par, strokeIndex, playingHandicap } = params;
 
   const raw = String(rawScore ?? "").trim().toUpperCase();
@@ -284,11 +279,9 @@ export default function MobileRoundTeeTimesPage() {
     setLoading(true);
     setErrorMsg("");
 
-    // Tour (not used for logic now, but nice for debugging)
     const { data: tData } = await supabase.from("tours").select("id,name").eq("id", tourId).maybeSingle();
     setTour((tData ?? null) as TourRow | null);
 
-    // Rounds list (to find final round + index)
     const { data: allRounds, error: allRoundsErr } = await supabase
       .from("rounds")
       .select("id,round_no,created_at")
@@ -309,7 +302,6 @@ export default function MobileRoundTeeTimesPage() {
     const last = rr.length ? rr[rr.length - 1] : null;
     setFinalRoundId(last ? String(last.id) : "");
 
-    // Round header info (date + course)
     const { data: rData, error: rErr } = await supabase
       .from("rounds")
       .select("id,created_at,round_no,course_id,courses(name)")
@@ -323,7 +315,6 @@ export default function MobileRoundTeeTimesPage() {
     }
     setRound(rData as RoundRow);
 
-    // Tee-time groups
     const { data: gData, error: gErr } = await supabase
       .from("round_groups")
       .select("id,group_no,tee_time,start_hole,notes")
@@ -339,7 +330,6 @@ export default function MobileRoundTeeTimesPage() {
 
     const groupIds = (gData ?? []).map((g: any) => String(g.id));
 
-    // Group players
     if (groupIds.length) {
       const { data: mData, error: mErr } = await supabase
         .from("round_group_players")
@@ -357,7 +347,6 @@ export default function MobileRoundTeeTimesPage() {
       setMembers([]);
     }
 
-    // Playing handicaps (for display)
     const { data: rpData, error: rpErr } = await supabase
       .from("round_players")
       .select("player_id,playing_handicap")
@@ -625,14 +614,11 @@ export default function MobileRoundTeeTimesPage() {
 
       const fullGroups = Math.floor(Math.min(maleCount, femaleCount) / 2);
       if (fullGroups <= 0) {
-        throw new Error(
-          `Not enough players to form 2M+2F groups. Men=${maleCount}, Women=${femaleCount}. Need at least 2 of each.`
-        );
+        throw new Error(`Not enough players to form 2M+2F groups. Men=${maleCount}, Women=${femaleCount}. Need at least 2 of each.`);
       }
 
       const builtGroups: Array<{ groupNo: number; seats: Array<{ seat: number; playerId: string }> }> = [];
 
-      // Worst -> best (bottom of leaderboard first)
       for (let i = 0; i < fullGroups; i++) {
         const m1 = malesBestToWorst[maleCount - 1 - i * 2];
         const m2 = malesBestToWorst[maleCount - 2 - i * 2];
@@ -771,8 +757,8 @@ export default function MobileRoundTeeTimesPage() {
                       return (
                         <div key={m.player_id} className="text-sm font-semibold">
                           {seat !== null ? (
-                            <span className="mr-2 inline-flex w-14 justify-center rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-extrabold text-gray-700">
-                              Seat {seat}
+                            <span className="mr-2 inline-flex w-10 justify-center rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-extrabold text-gray-700">
+                              {seat}.
                             </span>
                           ) : null}
                           {playerName(m.players)}
