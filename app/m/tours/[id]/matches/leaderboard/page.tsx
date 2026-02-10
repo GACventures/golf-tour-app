@@ -672,7 +672,11 @@ export default function MatchesLeaderboardPage() {
     return best;
   }
 
-  function applyMatchResultPoints(pointsByPlayer: Map<string, number>, res: { sideAPlayers: string[]; sideBPlayers: string[]; winner: "A" | "B" | "TIE" }, mult: number) {
+  function applyMatchResultPoints(
+    pointsByPlayer: Map<string, number>,
+    res: { sideAPlayers: string[]; sideBPlayers: string[]; winner: "A" | "B" | "TIE" },
+    mult: number
+  ) {
     if (res.winner === "TIE") {
       for (const pid of res.sideAPlayers) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + 0.5 * mult);
       for (const pid of res.sideBPlayers) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + 0.5 * mult);
@@ -866,7 +870,6 @@ export default function MatchesLeaderboardPage() {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-lg font-extrabold leading-tight">Matches · Leaderboard</div>
-              <div className="mt-1 text-xs text-gray-600">{safeName(tour?.name, "Tour")}</div>
             </div>
             <Link
               className="shrink-0 rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-gray-50"
@@ -897,7 +900,6 @@ export default function MatchesLeaderboardPage() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-lg font-extrabold leading-tight">Matches · Leaderboard</div>
-            <div className="mt-1 text-xs text-gray-600">{safeName(tour?.name, "Tour")}</div>
           </div>
 
           <div className="flex gap-2">
@@ -949,9 +951,7 @@ export default function MatchesLeaderboardPage() {
             <tbody>
               {/* TEAM A header row */}
               <tr className="bg-gray-50">
-                <td className={`${bodyCellBase} ${stickyNameCell} font-extrabold text-gray-900 whitespace-nowrap`}>
-                  {teamAName}
-                </td>
+                <td className={`${bodyCellBase} ${stickyNameCell} font-extrabold text-gray-900 whitespace-nowrap`}>{teamAName}</td>
 
                 <td className={`${bodyCellBase} text-center font-extrabold`}>
                   {Number(computed.totalByTeam.get("A") || 0).toFixed(2).replace(/\.00$/, "")}
@@ -973,13 +973,9 @@ export default function MatchesLeaderboardPage() {
 
                 return (
                   <tr key={`A:${p.playerId}`}>
-                    <td className={`${bodyCellBase} ${stickyNameCell} font-semibold text-gray-900 whitespace-nowrap`}>
-                      {p.name}
-                    </td>
+                    <td className={`${bodyCellBase} ${stickyNameCell} font-semibold text-gray-900 whitespace-nowrap`}>{p.name}</td>
 
-                    <td className={`${bodyCellBase} text-center font-semibold`}>
-                      {Number(total).toFixed(2).replace(/\.00$/, "")}
-                    </td>
+                    <td className={`${bodyCellBase} text-center font-semibold`}>{Number(total).toFixed(2).replace(/\.00$/, "")}</td>
 
                     {computed.roundCols.map((c) => {
                       const v = computed.ptsByPlayerRound.get(p.playerId)?.get(c.roundId) ?? 0;
@@ -1000,9 +996,7 @@ export default function MatchesLeaderboardPage() {
 
               {/* TEAM B header row */}
               <tr className="bg-gray-50">
-                <td className={`${bodyCellBase} ${stickyNameCell} font-extrabold text-gray-900 whitespace-nowrap`}>
-                  {teamBName}
-                </td>
+                <td className={`${bodyCellBase} ${stickyNameCell} font-extrabold text-gray-900 whitespace-nowrap`}>{teamBName}</td>
 
                 <td className={`${bodyCellBase} text-center font-extrabold`}>
                   {Number(computed.totalByTeam.get("B") || 0).toFixed(2).replace(/\.00$/, "")}
@@ -1024,13 +1018,9 @@ export default function MatchesLeaderboardPage() {
 
                 return (
                   <tr key={`B:${p.playerId}`}>
-                    <td className={`${bodyCellBase} ${stickyNameCell} font-semibold text-gray-900 whitespace-nowrap`}>
-                      {p.name}
-                    </td>
+                    <td className={`${bodyCellBase} ${stickyNameCell} font-semibold text-gray-900 whitespace-nowrap`}>{p.name}</td>
 
-                    <td className={`${bodyCellBase} text-center font-semibold`}>
-                      {Number(total).toFixed(2).replace(/\.00$/, "")}
-                    </td>
+                    <td className={`${bodyCellBase} text-center font-semibold`}>{Number(total).toFixed(2).replace(/\.00$/, "")}</td>
 
                     {computed.roundCols.map((c) => {
                       const v = computed.ptsByPlayerRound.get(p.playerId)?.get(c.roundId) ?? 0;
@@ -1045,11 +1035,6 @@ export default function MatchesLeaderboardPage() {
               })}
             </tbody>
           </table>
-        </div>
-
-        {/* Small, useful hint only (no extra callouts you asked to remove) */}
-        <div className="mt-3 text-[11px] text-gray-500">
-          Tip: swipe the table sideways to view later rounds. Tap <span className="font-semibold">Format</span> to configure rounds.
         </div>
       </div>
     </div>
