@@ -179,8 +179,7 @@ function computeStopAndRunning(holeOutcomes: HoleOutcome[]) {
     }
   }
 
- return { stopHoleExclusive: 19, reason: null, decidedAt: null };
-
+  return { stopHoleExclusive: 19, reason: null, decidedAt: null };
 }
 
 function liveStatusText(diff: number, thru: number) {
@@ -201,6 +200,41 @@ function finalText(diff: number, decidedAt: number | null) {
     if (remaining > 0) return `${winner} wins ${up} & ${remaining}`;
   }
   return `${winner} wins ${up} up`;
+}
+
+function mapStatusToPlayerNames(args: { status: string; leftLabel: string; rightLabel: string }) {
+  const { status, leftLabel, rightLabel } = args;
+  const s = String(status ?? "").trim();
+
+  // Replace leading "A ..." / "B ..." with the player label.
+  if (s.startsWith("A ")) return s.replace(/^A\b/, leftLabel);
+  if (s.startsWith("B ")) return s.replace(/^B\b/, rightLabel);
+
+  // Replace final result forms "A wins ..." / "B wins ..." similarly.
+  if (s.startsWith("A wins")) return s.replace(/^A\b/, leftLabel);
+  if (s.startsWith("B wins")) return s.replace(/^B\b/, rightLabel);
+
+  // Otherwise leave as-is (e.g. "All Square", "Not started")
+  return s;
+}
+
+function mapFinalToDefText(args: { status: string; leftLabel: string; rightLabel: string }) {
+  const { status, leftLabel, rightLabel } = args;
+  const s = String(status ?? "").trim();
+
+  // Transform "X wins 4 & 2" to "X def Y 4 & 2" etc.
+  // This is purely string formatting (no logic change).
+  const m = s.match(/^(A|B)\s+wins\s+(.+)$/i);
+  if (!m) return mapStatusToPlayerNames({ status: s, leftLabel, rightLabel });
+
+  const side = m[1].toUpperCase();
+  const rest = String(m[2] ?? "").trim();
+
+  const winner = side === "A" ? leftLabel : rightLabel;
+  const loser = side === "A" ? rightLabel : leftLabel;
+
+  if (!rest) return `${winner} def ${loser}`;
+  return `${winner} def ${loser} ${rest}`;
 }
 
 export default function MatchDetailPage() {
@@ -313,9 +347,7 @@ export default function MatchDetailPage() {
         const B1 = assigns.find((x) => x.side === "B" && Number(x.slot) === 1)?.player_id ?? "";
         const B2 = assigns.find((x) => x.side === "B" && Number(x.slot) === 2)?.player_id ?? "";
 
-        const playerIds = Array.from(
-          new Set([A1, A2, B1, B2].map((x) => String(x || "").trim()).filter(Boolean))
-        );
+        const playerIds = Array.from(new Set([A1, A2, B1, B2].map((x) => String(x || "").trim()).filter(Boolean)));
 
         // Players info
         const { data: pRows, error: pErr } = await supabase.from("players").select("id,name,gender").in("id", playerIds);
@@ -556,9 +588,10 @@ export default function MatchDetailPage() {
       else if (w === "B") runningDiff -= 1;
       thru = h;
 
-      const status = stop.reason === "CLINCHED" && stop.decidedAt != null && h === stop.decidedAt
-        ? finalText(runningDiff, stop.decidedAt)
-        : liveStatusText(runningDiff, thru);
+      const status =
+        stop.reason === "CLINCHED" && stop.decidedAt != null && h === stop.decidedAt
+          ? finalText(runningDiff, stop.decidedAt)
+          : liveStatusText(runningDiff, thru);
 
       rows.push({
         hole: h,
@@ -593,6 +626,16 @@ export default function MatchDetailPage() {
     return "Not started";
   }, [holeRows]);
 
+  const matchSummaryLine = useMemo(() => {
+    if (!settings) return "";
+    const isFinal = / wins /i.test(String(topStatus ?? ""));
+    const statusText = isFinal
+      ? mapFinalToDefText({ status: topStatus, leftLabel: labels.left, rightLabel: labels.right })
+      : mapStatusToPlayerNames({ status: topStatus, leftLabel: labels.left, rightLabel: labels.right });
+
+    return `Match Summary: ${statusText || "Not started"}`;
+  }, [settings, topStatus, labels.left, labels.right]);
+
   if (!isLikelyUuid(tourId) || !isLikelyUuid(roundId) || !isLikelyUuid(matchId)) {
     return (
       <div className="min-h-dvh bg-white text-gray-900 pb-10">
@@ -616,9 +659,7 @@ export default function MatchDetailPage() {
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-base font-semibold">
-              Match {matchNo ?? ""} – Detail
-            </div>
+            <div className="text-base font-semibold">Match {matchNo ?? ""} – Detail</div>
             <div className="truncate text-sm text-gray-500">{headerLine || "Round"}</div>
           </div>
 
@@ -648,36 +689,27 @@ export default function MatchDetailPage() {
           <>
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Match summary</div>
+                <div className="text-sm font-semibold text-gray-900">{matchSummaryLine}</div>
                 <div className="mt-1 text-xs text-gray-600">
-                  {formatLabel(settings.format)}
+                  Round format: <span className="font-semibold text-gray-900">{formatLabel(settings.format)}</span>
                   {settings.double_points ? <span className="ml-2 font-semibold">· Double points</span> : null}
-                </div>
-                <div className="mt-2 text-xs text-gray-600">
-                  Status: <span className="font-semibold text-gray-900">{topStatus || "Not started"}</span>
                 </div>
               </div>
 
               <div className="p-4 space-y-2">
                 <div className="text-xs font-semibold text-gray-700">Sides</div>
 
-                <div className="grid grid-cols-1 gap-2">
-                  <div className="rounded-xl border border-gray-200 overflow-hidden">
-                    <div className="px-3 py-2 text-[11px] font-semibold text-gray-700 bg-blue-50 border-b border-gray-200">
-                      A {safeText(groupA?.name, "Team A") ? `· ${safeText(groupA?.name, "Team A")}` : ""}
-                    </div>
-                    <div className="px-3 py-2 text-sm font-semibold text-gray-900 bg-blue-50/50">
-                      {labels.aLabel}
-                    </div>
+                <div className="space-y-2">
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900">
+                    <span className="font-semibold">A:</span>{" "}
+                    <span className="font-semibold">{safeText(groupA?.name, "Team A")}:</span>{" "}
+                    <span className="font-semibold">{labels.aLabel}</span>
                   </div>
 
-                  <div className="rounded-xl border border-gray-200 overflow-hidden">
-                    <div className="px-3 py-2 text-[11px] font-semibold text-gray-700 bg-amber-50 border-b border-gray-200">
-                      B {safeText(groupB?.name, "Team B") ? `· ${safeText(groupB?.name, "Team B")}` : ""}
-                    </div>
-                    <div className="px-3 py-2 text-sm font-semibold text-gray-900 bg-amber-50/50">
-                      {labels.bLabel}
-                    </div>
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900">
+                    <span className="font-semibold">B:</span>{" "}
+                    <span className="font-semibold">{safeText(groupB?.name, "Team B")}:</span>{" "}
+                    <span className="font-semibold">{labels.bLabel}</span>
                   </div>
                 </div>
               </div>
@@ -686,9 +718,6 @@ export default function MatchDetailPage() {
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
               <div className="p-4 border-b">
                 <div className="text-sm font-semibold text-gray-900">Hole-by-hole</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  Rows stop at first missing data, or when the match is clinched.
-                </div>
               </div>
 
               {/* Table */}
@@ -707,44 +736,32 @@ export default function MatchDetailPage() {
                   const winBg =
                     win === "A" ? "bg-blue-50" : win === "B" ? "bg-amber-50" : win === "HALVED" ? "bg-gray-50" : "";
 
-                  const winText =
-                    win === "A" ? "A" : win === "B" ? "B" : win === "HALVED" ? "½" : "";
+                  const winText = win === "A" ? "A" : win === "B" ? "B" : win === "HALVED" ? "½" : "";
+
+                  const statusText = r.status
+                    ? mapStatusToPlayerNames({ status: String(r.status), leftLabel: labels.left, rightLabel: labels.right })
+                    : "";
 
                   return (
                     <div key={r.hole} className="grid grid-cols-12">
                       <div className="col-span-2 px-3 py-2 text-sm font-semibold text-gray-900">{r.hole}</div>
 
-                      <div className={`col-span-2 px-3 py-2 text-sm font-extrabold text-gray-900 bg-blue-50`}>
+                      <div className="col-span-2 px-3 py-2 text-sm font-extrabold text-gray-900 bg-blue-50">
                         {r.aPts == null ? "" : String(r.aPts)}
                       </div>
 
-                      <div className={`col-span-2 px-3 py-2 text-sm font-extrabold text-gray-900 bg-amber-50`}>
+                      <div className="col-span-2 px-3 py-2 text-sm font-extrabold text-gray-900 bg-amber-50">
                         {r.bPts == null ? "" : String(r.bPts)}
                       </div>
 
-                      <div className={`col-span-2 px-3 py-2 text-sm font-extrabold text-gray-900 ${winBg}`}>
-                        {winText}
-                      </div>
+                      <div className={`col-span-2 px-3 py-2 text-sm font-extrabold text-gray-900 ${winBg}`}>{winText}</div>
 
-                      <div className="col-span-4 px-3 py-2 text-sm text-gray-800">
-                        {r.status ?? ""}
-                      </div>
+                      <div className="col-span-4 px-3 py-2 text-sm text-gray-800">{statusText}</div>
                     </div>
                   );
                 })}
               </div>
-
-              {/* Stop note */}
-            stopHoleExclusive  <div className="p-4 text-xs text-gray-600 border-t bg-white">
-                {(holeRows as any).stop?.reason === "NO_DATA"
-                  ? "Stopped because one side is missing scores from that hole onwards."
-                  : (holeRows as any).stop?.reason === "CLINCHED"
-                  ? "Stopped because the match was clinched."
-                  : "Full 18-hole data available."}
-              </div>
             </section>
-
-            <div className="text-[11px] text-gray-400">Dates shown in Australia/Melbourne.</div>
           </>
         )}
       </main>
