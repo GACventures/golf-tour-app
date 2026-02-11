@@ -150,43 +150,25 @@ What you see
 - Total points or scores (depending on competition)
 
 What you can tap  
-- Tap a player’s round score to see detailed results for that round:  
-  - Hole-by-hole breakdown  
-  - Stableford points  
-  - Par and Stroke Index reference
+- Tap a player’s round score to see detailed results for that round.
 
 4.2 Pairs Leaderboards
 
 What you see  
 - Pair rankings  
-- Aggregated or best-ball style results (depending on competition)
+- Aggregated or best-ball style results.
 
 What you can tap  
-- Tap a pair’s round score to drill into that round’s detail.  
-- Shows the underlying individual scores that contributed to the pair result.
+- Tap a pair’s round score to drill into that round’s detail.
 
 4.3 Teams Leaderboards
 
 What you see  
 - Team rankings  
-- Team totals by round
+- Team totals by round.
 
 What you can tap  
 - Tap a team’s round score to open the round calculation detail page.
-
-What the round calculation detail page shows  
-- Hole-by-hole points for each player.  
-- Which scores counted toward the team’s score on each hole.  
-- Clear visibility of how the team’s total was calculated.
-
-Coloured boxes and totals (plain English)  
-- Dark blue box: counted in the top N scores for that hole.  
-- Light blue outline: this player’s score qualifies for the top N (their score equals the lowest counted score), even if it did not end up being counted.  
-- Red box: zero points on that hole (and this applies a −1 penalty in the team calculation).  
-- Total column: the player’s Stableford total for the full round (holes 1–18).  
-- Contribution column: the player’s contribution to the team result (counted dark blue + qualifying light blue, minus 1 for each red zero).
-
-The value of N depends on the team competition setting for the tour.
 
 5. Competitions
 
@@ -194,168 +176,63 @@ Purpose
 Display special tour competitions.
 
 Examples  
-- Napoleon (Par 3 average)  
+- Napoleon  
 - Eclectic  
 - Hot Streak  
 - Cold Streak  
-- Other derived Stableford-based competitions
 
-What you can tap  
-- In competitions where it’s supported (including Eclectic, Hot Streak, and Cold Streak):  
-  - Tap a player to view that player’s details (showing the rounds/holes contributing to the competition result).
-
-5.1 Matchplay (Format / Results / Leaderboard buttons)
+5.1 Matchplay (Format / Results / Leaderboard)
 
 Purpose  
-Matchplay competitions run as head-to-head matches (rather than total Stableford points). The app provides three matchplay pages:
+Matchplay competitions run as head-to-head matches rather than total Stableford points.
 
 A) Matchplay Format  
-What it shows  
-- The rules/structure for the matchplay competition for this tour (e.g. singles/pairs, how many matches, any points system).  
-- If the tour uses handicaps for matchplay, this page explains the handicap basis at a high level.
-
-How to use it  
-- Use this page as the “source of truth” for how matchplay works on the tour.
+- Explains how matchplay works for the tour.
 
 B) Matchplay Results  
-What it shows  
-- Results of completed matches (e.g. who won, halves, and/or points earned depending on the tour format).  
-- If a match has not been completed yet, it may show as pending / blank.
-
-How to use it  
-- Tap into matches (if supported) to see details.  
-- If something looks missing, it usually means the match result has not been recorded yet.
+- Shows completed match results.
 
 C) Matchplay Leaderboard  
-What it shows  
-- The matchplay standings table for the tour (or the stage you are in).  
-- This may be a points table (wins/halves/losses/points) depending on the configured format.
-
-How to use it  
-- Use this to see who is leading matchplay overall.  
-- If the leaderboard looks “behind”, check Matchplay Results first (results drive the leaderboard).
-
-5.2 Best of the Best (competition)
-
-Purpose  
-Best of the Best is a tour-wide competition designed to compare “top performance” outcomes across rounds.
-
-What it typically means in plain English  
-- It is not simply “total points”.  
-- It aims to identify the best performances (depending on the tour’s competition settings), often by using best rounds and/or best holes.
-
-How to use it  
-- Open the Best of the Best competition to see the current rankings.  
-- If drill-down is available, tapping a player will show which rounds/holes contributed to their Best of the Best result.
-
-Important note  
-Best of the Best is driven entirely by the underlying scoring data (including pickups). If scores are missing for a round, that round will not contribute.
+- Displays the overall matchplay standings.
 
 6. Stats
 
 Purpose  
 Provide performance insights across the tour.
 
-Examples of stats  
-- Average Stableford by par  
-- Percentage of birdies or better  
-- Percentage of zero-point holes  
-- Other performance measures
-
 7. More
 
-The More section contains tour information and administrative tools.
+Contains tour information and administrative tools.
 
-7.1 Tour Details
-
-Purpose  
+7.1 Tour Details  
 Read-only overview of the tour.
 
-Includes  
-- Tour name and dates  
-- Rehandicapping status  
-- Rehandicapping rule summary
+7.2 Rehandicapping  
+Explains how playing handicaps change round by round.
 
-No editing is possible in this section.
-
-7.2 Rehandicapping
-
-Purpose  
-Explain how handicaps are adjusted.  
-Show how handicaps change round by round.
-
-What you see  
-- The rehandicapping rule in plain English.  
-- A table showing:  
-  - Each player  
-  - Their playing handicap for each round  
-  - Their starting handicap (fallback reference)
-
-Behaviour  
-- This page refreshes automatically when revisited.  
-- Values always reflect the latest recalculation from:  
-  - score saves, or  
-  - starting handicap changes.
-
-7.3 Tour Admin
-
-Purpose  
-Manage tour-level configuration.
-
-Starting Handicaps  
-- Edit each player’s tour starting handicap.  
-- Leaving a value blank uses the player’s global handicap.  
-- Saving:  
-  - Updates the tour starting handicap  
-  - Automatically recalculates playing handicaps for all rounds
-
-Course Par & Stroke Index (Global)  
-- Select a course used in the tour.  
-- Edit Par and Stroke Index for:  
-  - Men’s tees (M)  
-  - Women’s tees (F)  
-- One row per hole (1–18).  
-- All fields are dropdown-based.
-
-Validation  
-- Par must be 3, 4, or 5.  
-- Stroke Index must be unique from 1 to 18 for each tee.
-
-Saving updates the global course data, affecting all tours that use that course.
-
-Rehandicapping Rule (Plain English)
-
-After each completed round, the Playing Handicap (PH) for the next round is recalculated using Stableford results.
-
-The rounded average Stableford score for the round is calculated across all players who completed the round. Each player’s Stableford score is compared to this average, and the difference is multiplied by one-third. The result is rounded to the nearest whole number, with .5 rounding up, and applied as an adjustment to the player’s PH.
-
-The resulting Playing Handicap cannot exceed Starting Handicap + 3, and cannot be lower than half the Starting Handicap, rounded up if the Starting Handicap is odd.
-
-If a player does not play a round, their Playing Handicap carries forward unchanged to the next round.
+7.3 Tour Admin  
+Manage starting handicaps, course par/SI, and rehandicapping rules.
 `;
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-base font-semibold text-gray-900">App User Guide</div>
-            <div className="truncate text-sm text-gray-500">Tour</div>
-          </div>
-
+          <div className="text-base font-semibold text-gray-900">App User Guide</div>
           <Link
             href={`/m/tours/${tourId}/more`}
-            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm active:bg-gray-50"
+            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900"
           >
             Back
           </Link>
         </div>
       </div>
 
-      <main className="mx-auto w-full max-w-md px-4 py-4 space-y-4">
-        <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
-          <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{guide}</div>
+      <main className="mx-auto w-full max-w-md px-4 py-4">
+        <section className="rounded-2xl border border-gray-200 bg-white p-4">
+          <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+            {guide}
+          </div>
         </section>
       </main>
 
