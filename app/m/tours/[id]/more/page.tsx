@@ -20,17 +20,33 @@ function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
-// ✅ bucket is private; we use signed URLs
 const PDF_BUCKET = "tours-pdfs";
 
-function normalizeStoragePath(p: string) {
-  let s = String(p ?? "").trim();
-  if (!s) return "";
-  // Fix accidental double folder
-  s = s.replace(/^tours\/tours\//i, "tours/");
-  // Collapse any repeated slashes
-  s = s.replace(/\/{2,}/g, "/");
-  return s;
+function cleanPath(p: string) {
+  return String(p ?? "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/\/{2,}/g, "/");
+}
+
+function isObjectNotFound(errMsg: string) {
+  const m = String(errMsg ?? "").toLowerCase();
+  return m.includes("object not found") || m.includes("not found");
+}
+
+// If DB has: tours/<tourId>/file.pdf
+// but Storage has: tours/tours/<tourId>/file.pdf
+function altToursToursPath(path: string) {
+  const p = cleanPath(path);
+
+  // already tours/tours/...
+  if (p.startsWith("tours/tours/")) return p;
+
+  // if tours/<something> -> tours/tours/<something>
+  if (p.startsWith("tours/")) return `tours/${p}`;
+
+  // if <something> -> tours/tours/<something> (last resort)
+  return `tours/tours/${p}`;
 }
 
 export default function MobileMorePage() {
@@ -45,7 +61,6 @@ export default function MobileMorePage() {
   const [loadingDocs, setLoadingDocs] = useState(false);
   const [docsError, setDocsError] = useState<string>("");
 
-  // ✅ helps debug “nothing happens”
   const [opening, setOpening] = useState<string>("");
 
   const pillBase = "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
@@ -94,7 +109,7 @@ export default function MobileMorePage() {
           doc_key: String(x.doc_key),
           title: String(x.title),
           storage_bucket: PDF_BUCKET, // force correct bucket
-          storage_path: normalizeStoragePath(String(x.storage_path)),
+          storage_path: cleanPath(String(x.storage_path)),
           sort_order: Number(x.sort_order ?? 0),
         })) as TourDocRow[];
 
@@ -117,10 +132,31 @@ export default function MobileMorePage() {
     };
   }, [tourId]);
 
-  async function openDoc(doc: TourDocRow) {
-    const bucket = PDF_BUCKET;
-    const path = normalizeStoragePath(String(doc.storage_path ?? ""));
+  async function createSignedUrlWithFallback(path: string) {
+    const primary = cleanPath(path);
+    const fallback = altToursToursPath(primary);
 
+    // Try primary first
+    const r1 = await supabase.storage.from(PDF_BUCKET).createSignedUrl(primary, 60 * 10);
+    if (!r1.error && r1.data?.signedUrl) return { url: r1.data.signedUrl, usedPath: primary };
+
+    // If it wasn't "not found", fail immediately
+    if (r1.error && !isObjectNotFound(r1.error.message)) {
+      throw new Error(`Failed to open PDF: ${r1.error.message}`);
+    }
+
+    // Retry with tours/tours/...
+    const r2 = await supabase.storage.from(PDF_BUCKET).createSignedUrl(fallback, 60 * 10);
+    if (r2.error || !r2.data?.signedUrl) {
+      const msg = r2.error?.message || "Object not found.";
+      throw new Error(`Failed to open PDF.\nTried:\n- ${primary}\n- ${fallback}\n\nError: ${msg}`);
+    }
+
+    return { url: r2.data.signedUrl, usedPath: fallback };
+  }
+
+  async function openDoc(doc: TourDocRow) {
+    const path = cleanPath(String(doc.storage_path ?? ""));
     if (!path) {
       alert("This document has no storage path.");
       return;
@@ -129,13 +165,9 @@ export default function MobileMorePage() {
     setOpening(`Opening: ${doc.title}…`);
 
     try {
-      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 10);
-      if (error) throw error;
+      const { url } = await createSignedUrlWithFallback(path);
 
-      const url = data?.signedUrl;
-      if (!url) throw new Error("No signed URL returned.");
-
-      // ✅ Most reliable on iPhone + desktop: navigate same tab (no popup blockers)
+      // Most reliable on mobile/desktop: open in same tab
       window.location.href = url;
     } catch (e: any) {
       alert(e?.message ?? "Failed to open document.");
