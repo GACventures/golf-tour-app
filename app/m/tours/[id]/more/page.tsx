@@ -1,3 +1,4 @@
+// app/m/tours/[id]/more/page.tsx
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
@@ -38,9 +39,20 @@ export default function MobileMorePage() {
   const pillIdle = "border-gray-200 bg-white text-gray-900";
   const pillDisabled = "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed";
 
-  // ✅ Hard-force the bucket name (ignore DB)
-  // Your bucket is: tours-pdfs
+  // ✅ Correct bucket name
   const PDF_BUCKET = "tours-pdfs";
+
+  // ✅ Fix for mistakenly-stored paths like "tours/tours/<id>/file.pdf"
+  // We'll normalize by collapsing "tours/tours/" -> "tours/"
+  function normalizeStoragePath(p: string) {
+    let s = String(p ?? "").trim();
+    if (!s) return "";
+    // remove accidental double "tours/"
+    s = s.replace(/^tours\/tours\//i, "tours/");
+    // also collapse any repeated slashes
+    s = s.replace(/\/{2,}/g, "/");
+    return s;
+  }
 
   const topItems = useMemo(
     () =>
@@ -79,13 +91,14 @@ export default function MobileMorePage() {
         if (error) throw error;
 
         // ✅ Still read rows from DB, but force storage_bucket to the correct bucket
+        // ✅ Also normalize paths so "tours/tours/..." still works
         const rows = ((data ?? []) as any[]).map((x) => ({
           id: String(x.id),
           tour_id: String(x.tour_id),
           doc_key: String(x.doc_key),
           title: String(x.title),
           storage_bucket: PDF_BUCKET, // hard-forced
-          storage_path: String(x.storage_path),
+          storage_path: normalizeStoragePath(String(x.storage_path)),
           sort_order: Number(x.sort_order ?? 0),
         })) as TourDocRow[];
 
@@ -110,36 +123,36 @@ export default function MobileMorePage() {
 
   async function openDoc(doc: TourDocRow) {
     const bucket = PDF_BUCKET;
-    const rawPath = String(doc.storage_path ?? "").trim();
+    const path = normalizeStoragePath(String(doc.storage_path ?? ""));
 
-    if (!rawPath) {
+    if (!path) {
       alert("This document has no storage path.");
       return;
     }
 
-    // ✅ Fix common upload mistake: objects stored as "tours/tours/<tourId>/..."
-    // Your DB paths look like: "tours/<tourId>/file.pdf"
-    // Your actual storage objects are: "tours/tours/<tourId>/file.pdf"
-    //
-    // We try DB path first, then fallback to the double-prefix.
-    const tryPaths: string[] = [rawPath];
-
-    if (rawPath.startsWith("tours/") && !rawPath.startsWith("tours/tours/")) {
-      tryPaths.push("tours/" + rawPath); // becomes tours/tours/...
+    // ✅ IMPORTANT FOR iOS/Safari:
+    // open the tab immediately before any await, or Safari blocks it
+    const newTab = window.open("", "_blank", "noopener,noreferrer");
+    if (!newTab) {
+      alert("Your browser blocked the popup. Please allow popups for this site.");
+      return;
     }
 
-    for (const p of tryPaths) {
-      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(p, 60 * 10); // 10 min
-      if (!error && data?.signedUrl) {
-        window.open(data.signedUrl, "_blank", "noopener,noreferrer");
-        return;
-      }
-    }
+    try {
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 10); // 10 minutes
+      if (error) throw error;
 
-    alert(`Object not found.\nTried:\n- ${tryPaths.join("\n- ")}`);
+      const url = data?.signedUrl;
+      if (!url) throw new Error("No URL returned.");
+
+      newTab.location.href = url;
+    } catch (e: any) {
+      newTab.close();
+      alert(e?.message ?? "Failed to open document.");
+    }
   }
 
-  // We want 5 buttons in 2 rows: 3 + 2 (with placeholders to keep layout neat)
+  // We want 5 buttons in 2 rows: 3 + 2 (but keep layout 3 columns)
   const docsRow1 = docs.slice(0, 3);
   const docsRow2 = docs.slice(3, 5);
 
