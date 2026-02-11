@@ -204,6 +204,53 @@ What you can tap
 - In competitions where it’s supported (including Eclectic, Hot Streak, and Cold Streak):  
   - Tap a player to view that player’s details (showing the rounds/holes contributing to the competition result).
 
+5.1 Matchplay (Format / Results / Leaderboard buttons)
+
+Purpose  
+Matchplay competitions run as head-to-head matches (rather than total Stableford points). The app provides three matchplay pages:
+
+A) Matchplay Format  
+What it shows  
+- The rules/structure for the matchplay competition for this tour (e.g. singles/pairs, how many matches, any points system).  
+- If the tour uses handicaps for matchplay, this page explains the handicap basis at a high level.
+
+How to use it  
+- Use this page as the “source of truth” for how matchplay works on the tour.
+
+B) Matchplay Results  
+What it shows  
+- Results of completed matches (e.g. who won, halves, and/or points earned depending on the tour format).  
+- If a match has not been completed yet, it may show as pending / blank.
+
+How to use it  
+- Tap into matches (if supported) to see details.  
+- If something looks missing, it usually means the match result has not been recorded yet.
+
+C) Matchplay Leaderboard  
+What it shows  
+- The matchplay standings table for the tour (or the stage you are in).  
+- This may be a points table (wins/halves/losses/points) depending on the configured format.
+
+How to use it  
+- Use this to see who is leading matchplay overall.  
+- If the leaderboard looks “behind”, check Matchplay Results first (results drive the leaderboard).
+
+5.2 Best of the Best (competition)
+
+Purpose  
+Best of the Best is a tour-wide competition designed to compare “top performance” outcomes across rounds.
+
+What it typically means in plain English  
+- It is not simply “total points”.  
+- It aims to identify the best performances (depending on the tour’s competition settings), often by using best rounds and/or best holes.
+
+How to use it  
+- Open the Best of the Best competition to see the current rankings.  
+- If drill-down is available, tapping a player will show which rounds/holes contributed to their Best of the Best result.
+
+Important note  
+Best of the Best is driven entirely by the underlying scoring data (including pickups). If scores are missing for a round, that round will not contribute.
+
 6. Stats
 
 Purpose  
