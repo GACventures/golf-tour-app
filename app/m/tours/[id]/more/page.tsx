@@ -38,6 +38,9 @@ export default function MobileMorePage() {
   const pillIdle = "border-gray-200 bg-white text-gray-900";
   const pillDisabled = "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed";
 
+  // ✅ Hard-force the bucket name (ignore DB)
+  const PDF_BUCKET = "tours-pdf";
+
   const topItems = useMemo(
     () =>
       [
@@ -74,12 +77,13 @@ export default function MobileMorePage() {
 
         if (error) throw error;
 
+        // ✅ Still read rows from DB, but force storage_bucket to the correct bucket
         const rows = ((data ?? []) as any[]).map((x) => ({
           id: String(x.id),
           tour_id: String(x.tour_id),
           doc_key: String(x.doc_key),
           title: String(x.title),
-          storage_bucket: String(x.storage_bucket ?? "tour-pdfs"),
+          storage_bucket: PDF_BUCKET, // hard-forced
           storage_path: String(x.storage_path),
           sort_order: Number(x.sort_order ?? 0),
         })) as TourDocRow[];
@@ -105,8 +109,13 @@ export default function MobileMorePage() {
 
   async function openDoc(doc: TourDocRow) {
     // Signed URL so bucket can stay private
-    const bucket = doc.storage_bucket || "tour-pdfs";
-    const path = doc.storage_path;
+    const bucket = PDF_BUCKET; // hard-forced
+    const path = String(doc.storage_path ?? "").trim();
+
+    if (!path) {
+      alert("This document has no storage path.");
+      return;
+    }
 
     const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 10); // 10 minutes
     if (error) {
@@ -155,7 +164,13 @@ export default function MobileMorePage() {
         <div className="rounded-2xl border border-gray-200 bg-white p-3">
           <div className="text-xs font-semibold text-gray-700">Tour PDFs</div>
           <div className="mt-1 text-[11px] text-gray-500">
-            {loadingDocs ? "Loading documents..." : docsError ? docsError : docs.length ? "Tap to open" : "No documents attached to this tour."}
+            {loadingDocs
+              ? "Loading documents..."
+              : docsError
+              ? docsError
+              : docs.length
+              ? `Tap to open (bucket: ${PDF_BUCKET})`
+              : "No documents attached to this tour."}
           </div>
         </div>
 
@@ -170,7 +185,13 @@ export default function MobileMorePage() {
 
             {/* Fill if fewer than 3 */}
             {Array.from({ length: Math.max(0, 3 - docsRow1.length) }).map((_, i) => (
-              <button key={`ph1-${i}`} type="button" disabled className={`${pillBase} ${pillDisabled}`} aria-label="Placeholder button">
+              <button
+                key={`ph1-${i}`}
+                type="button"
+                disabled
+                className={`${pillBase} ${pillDisabled}`}
+                aria-label="Placeholder button"
+              >
                 &nbsp;
               </button>
             ))}
@@ -185,7 +206,13 @@ export default function MobileMorePage() {
 
             {/* Fill to 3 columns for consistent layout */}
             {Array.from({ length: Math.max(0, 3 - docsRow2.length) }).map((_, i) => (
-              <button key={`ph2-${i}`} type="button" disabled className={`${pillBase} ${pillDisabled}`} aria-label="Placeholder button">
+              <button
+                key={`ph2-${i}`}
+                type="button"
+                disabled
+                className={`${pillBase} ${pillDisabled}`}
+                aria-label="Placeholder button"
+              >
                 &nbsp;
               </button>
             ))}
