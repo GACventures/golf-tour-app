@@ -34,6 +34,8 @@ type RoundRow = {
   course_id: string | null;
 };
 
+type CourseRow = { id: string; name: string | null };
+
 type PlayerRow = {
   id: string;
   name: string;
@@ -73,7 +75,7 @@ type H2ZLegRow = {
 type BotBSettingsRow = {
   tour_id: string;
   enabled: boolean;
-  round_nos: any; // Postgres int[] comes through as unknown-ish
+  round_nos: number[];
 };
 
 function isLikelyUuid(v: string) {
@@ -162,67 +164,15 @@ type H2ZCell = {
   bestLen: number | null;
 };
 
-type BotBCell = {
-  total: number | null;
-  rank: number | null;
-};
+type BotBCell = { total: number | null; rank: number | null };
 
 function h2zHeading(leg: H2ZLeg) {
   return `H2Z: R${leg.start_round_no}–R${leg.end_round_no}`;
 }
 
-// BotB needs access to roundCtx.scores + netPointsForHole, same shape used by H2Z
-type RoundCtxLike = {
-  roundId: string;
-  scores: Record<string, string[]>;
-  netPointsForHole: (playerId: string, holeIndex: number) => number;
-};
-
-function getRoundCtx(ctx: any, roundId: string): RoundCtxLike | null {
-  const rounds = (ctx as any)?.rounds;
-  if (!Array.isArray(rounds)) return null;
-  const rid = String(roundId);
-  const found = rounds.find((r: any) => String(r?.roundId) === rid);
-  if (!found) return null;
-
-  const ok =
-    typeof found === "object" &&
-    found !== null &&
-    typeof (found as any).scores === "object" &&
-    typeof (found as any).netPointsForHole === "function";
-
-  return ok ? (found as RoundCtxLike) : null;
-}
-
-function normScoreCell(v: any): string {
-  return String(v ?? "").trim().toUpperCase();
-}
-
-function roundLabel(r: RoundRow, idxFallback: number) {
-  const nm = (r.name ?? "").trim();
-  const rn = Number.isFinite(Number(r.round_no)) ? Number(r.round_no) : null;
-  if (nm) return nm;
-  if (rn != null) return `Round ${rn}`;
-  return `Round ${idxFallback}`;
-}
-
-function courseLabel(courseNameById: Record<string, string>, courseId: string | null) {
-  if (!courseId) return "—";
-  return courseNameById[courseId] ?? courseId;
-}
-
-function normalizeRoundNos(v: any): number[] {
-  const arr = Array.isArray(v) ? v : [];
-  const out: number[] = [];
-  for (const x of arr) {
-    const n = Number(x);
-    if (!Number.isFinite(n)) continue;
-    const i = Math.floor(n);
-    if (i >= 1) out.push(i);
-  }
-  // unique + sorted
-  out.sort((a, b) => a - b);
-  return Array.from(new Set(out));
+function asInt(v: any, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.floor(n) : fallback;
 }
 
 export default function MobileCompetitionsPage() {
@@ -234,16 +184,14 @@ export default function MobileCompetitionsPage() {
 
   const [tour, setTour] = useState<Tour | null>(null);
   const [rounds, setRounds] = useState<RoundRow[]>([]);
+  const [coursesById, setCoursesById] = useState<Record<string, string>>({});
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
   const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([]);
 
-  // NEW: BotB settings + course names
-  const [botbEnabled, setBotbEnabled] = useState<boolean>(false);
-  const [botbRoundNos, setBotbRoundNos] = useState<number[]>([]);
-  const [courseNameById, setCourseNameById] = useState<Record<string, string>>({});
+  const [botb, setBotb] = useState<BotBSettingsRow | null>(null);
 
   const [openDetail, setOpenDetail] = useState<
     | { kind: "fixed"; playerId: string; key: FixedCompKey }
@@ -293,34 +241,6 @@ export default function MobileCompetitionsPage() {
     []
   );
 
-  const sortedRounds = useMemo(() => {
-    const arr = [...rounds];
-    arr.sort((a, b) => {
-      const an = a.round_no ?? 999999;
-      const bn = b.round_no ?? 999999;
-      if (an !== bn) return an - bn;
-      return (a.created_at ?? "").localeCompare(b.created_at ?? "");
-    });
-    return arr;
-  }, [rounds]);
-
-  const botbSelectedRounds = useMemo(() => {
-    if (!botbEnabled) return [];
-    const set = new Set(botbRoundNos);
-    return sortedRounds.filter((r) => Number.isFinite(Number(r.round_no)) && set.has(Number(r.round_no)));
-  }, [botbEnabled, botbRoundNos, sortedRounds]);
-
-  const botbRoundsText = useMemo(() => {
-    if (!botbEnabled || botbSelectedRounds.length === 0) return "";
-    return botbSelectedRounds
-      .map((r, idx) => {
-        const label = roundLabel(r, idx + 1);
-        const course = courseLabel(courseNameById, r.course_id);
-        return `${label} — ${course}`;
-      })
-      .join(", ");
-  }, [botbEnabled, botbSelectedRounds, courseNameById]);
-
   const definitions = useMemo(() => {
     const base = [
       { label: "Napoleon", text: "Average Stableford points on Par 3 holes" },
@@ -337,16 +257,11 @@ export default function MobileCompetitionsPage() {
         label: "H2Z",
         text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole",
       },
-    ] as Array<{ label: string; text: string }>;
+    ];
 
-    if (!botbEnabled || botbSelectedRounds.length === 0) return base;
-
-    const text = botbRoundsText
-      ? `Aggregate Stableford score on ${botbRoundsText}`
-      : "Aggregate Stableford score on the selected rounds";
-
-    return [...base, { label: "BotB", text }];
-  }, [botbEnabled, botbSelectedRounds.length, botbRoundsText]);
+    // BotB definition appended dynamically (needs rounds+courses)
+    return base;
+  }, []);
 
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
@@ -358,11 +273,34 @@ export default function MobileCompetitionsPage() {
       setErrorMsg("");
 
       try {
+        // Tour
         const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
         if (!alive) return;
         setTour(tData as Tour);
 
+        // BotB settings (may not exist)
+        {
+          const { data: bData, error: bErr } = await supabase
+            .from("tour_botb_settings")
+            .select("tour_id,enabled,round_nos")
+            .eq("tour_id", tourId)
+            .maybeSingle();
+
+          if (bErr) throw bErr;
+
+          if (!alive) return;
+
+          if (bData) {
+            const row = bData as any;
+            const round_nos = Array.isArray(row.round_nos) ? row.round_nos.map((x: any) => asInt(x, 0)).filter((n: number) => n > 0) : [];
+            setBotb({ tour_id: String(row.tour_id), enabled: row.enabled === true, round_nos });
+          } else {
+            setBotb(null);
+          }
+        }
+
+        // Rounds
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,name,round_no,created_at,course_id")
@@ -374,25 +312,20 @@ export default function MobileCompetitionsPage() {
         if (!alive) return;
         setRounds(rr);
 
-        // NEW: load course names for display (BotB definition text)
-        {
-          const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
-          if (courseIds.length > 0) {
-            const { data: cData, error: cErr } = await supabase.from("courses").select("id,name").in("id", courseIds);
-            if (cErr) throw cErr;
-            const map: Record<string, string> = {};
-            for (const c of cData ?? []) {
-              const id = String((c as any).id);
-              map[id] = safeName((c as any).name, id);
-            }
-            if (!alive) return;
-            setCourseNameById(map);
-          } else {
-            if (!alive) return;
-            setCourseNameById({});
-          }
+        // Courses for naming in BotB definition / display (optional but helpful)
+        const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
+        if (courseIds.length) {
+          const { data: cData, error: cErr } = await supabase.from("courses").select("id,name").in("id", courseIds);
+          if (cErr) throw cErr;
+          if (!alive) return;
+          const map: Record<string, string> = {};
+          for (const c of (cData ?? []) as CourseRow[]) map[String(c.id)] = safeName(c.name, "(course)");
+          setCoursesById(map);
+        } else {
+          setCoursesById({});
         }
 
+        // Players (tour_players join)
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
@@ -415,6 +348,7 @@ export default function MobileCompetitionsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
+        // Round players
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
@@ -436,7 +370,7 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
-        // Scores: one round at a time (Approach A – avoids 1000 row cap)
+        // Scores: round-by-round (keeps you away from limits)
         if (roundIds.length > 0 && playerIds.length > 0) {
           const allScores: ScoreRow[] = [];
 
@@ -450,8 +384,7 @@ export default function MobileCompetitionsPage() {
               .order("hole_number", { ascending: true });
 
             if (sErr) throw sErr;
-            const rows = (sData ?? []) as ScoreRow[];
-            allScores.push(...rows);
+            allScores.push(...((sData ?? []) as ScoreRow[]));
           }
 
           if (!alive) return;
@@ -460,7 +393,7 @@ export default function MobileCompetitionsPage() {
           setScores([]);
         }
 
-        const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
+        // Pars for all courses in tour rounds
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
             .from("pars")
@@ -485,6 +418,7 @@ export default function MobileCompetitionsPage() {
           setPars([]);
         }
 
+        // H2Z legs
         {
           const { data: lData, error: lErr } = await supabase
             .from("tour_h2z_legs")
@@ -495,25 +429,6 @@ export default function MobileCompetitionsPage() {
           if (lErr) throw lErr;
           if (!alive) return;
           setH2zLegs((lData ?? []) as H2ZLegRow[]);
-        }
-
-        // NEW: BotB settings
-        {
-          const { data: bData, error: bErr } = await supabase
-            .from("tour_botb_settings")
-            .select("tour_id,enabled,round_nos")
-            .eq("tour_id", tourId)
-            .maybeSingle();
-
-          if (bErr) throw bErr;
-
-          const row = (bData ?? null) as BotBSettingsRow | null;
-          const enabled = row ? row.enabled === true : false;
-          const roundNos = row ? normalizeRoundNos(row.round_nos) : [];
-
-          if (!alive) return;
-          setBotbEnabled(enabled && roundNos.length > 0);
-          setBotbRoundNos(roundNos);
         }
       } catch (e: any) {
         if (!alive) return;
@@ -530,6 +445,17 @@ export default function MobileCompetitionsPage() {
       alive = false;
     };
   }, [tourId]);
+
+  const sortedRounds = useMemo(() => {
+    const arr = [...rounds];
+    arr.sort((a, b) => {
+      const an = a.round_no ?? 999999;
+      const bn = b.round_no ?? 999999;
+      if (an !== bn) return an - bn;
+      return (a.created_at ?? "").localeCompare(b.created_at ?? "");
+    });
+    return arr;
+  }, [rounds]);
 
   const ctx = useMemo(() => {
     const roundsLite: TourRoundLite[] = sortedRounds.map((r) => ({
@@ -689,65 +615,85 @@ export default function MobileCompetitionsPage() {
     return perPlayer;
   }, [players, sortedRounds, roundPlayers, ctx, h2zLegsNorm]);
 
-  // NEW: BotB calculation
-  const botbMatrix = useMemo((): Record<string, BotBCell> => {
-    const perPlayer: Record<string, BotBCell> = {};
-    for (const p of players) perPlayer[p.id] = { total: null, rank: null };
+  // ---- BotB (Best of the Best) totals (computed from ctx + round_nos selection) ----
+  const botbRoundNos = useMemo(() => {
+    if (!botb?.enabled) return [];
+    const nums = (botb.round_nos ?? []).map((n) => asInt(n, 0)).filter((n) => n > 0);
+    nums.sort((a, b) => a - b);
+    return Array.from(new Set(nums));
+  }, [botb]);
 
-    if (!botbEnabled || botbSelectedRounds.length === 0) return perPlayer;
+  const botbRounds = useMemo(() => {
+    if (!botbRoundNos.length) return [];
+    return sortedRounds.filter((r) => r.round_no != null && botbRoundNos.includes(Number(r.round_no)));
+  }, [sortedRounds, botbRoundNos]);
+
+  const botbMatrix: Record<string, BotBCell> = useMemo(() => {
+    const out: Record<string, BotBCell> = {};
+    for (const p of players) out[p.id] = { total: null, rank: null };
+
+    if (!botb?.enabled || botbRounds.length === 0 || players.length === 0) return out;
 
     const playingSet = new Set<string>();
-    for (const rp of roundPlayers) {
-      if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
-    }
+    for (const rp of roundPlayers) if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
     const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
 
-    for (const p of players) {
-      let total = 0;
-      let hasAny = false;
+    const roundsCtx = (ctx as any)?.rounds;
+    const getRoundCtx = (roundId: string) => {
+      if (!Array.isArray(roundsCtx)) return null;
+      return roundsCtx.find((x: any) => String(x?.roundId) === String(roundId)) ?? null;
+    };
 
-      for (const r of botbSelectedRounds) {
+    const entries: Array<{ id: string; value: number }> = [];
+
+    for (const p of players) {
+      let sum = 0;
+      let any = false;
+
+      for (const r of botbRounds) {
         if (!isPlayingInRound(r.id, p.id)) continue;
 
-        const roundCtx = getRoundCtx(ctx as any, r.id);
-        if (!roundCtx) continue;
+        const rc = getRoundCtx(r.id);
+        if (!rc || typeof rc.netPointsForHole !== "function") continue;
 
-        const scoreArr = roundCtx.scores?.[String(p.id)];
-        if (!Array.isArray(scoreArr) || scoreArr.length < 18) continue;
-
-        // Sum Stableford points over entered holes (blank => ignore, P => 0)
-        for (let holeIndex = 0; holeIndex < 18; holeIndex++) {
-          const raw = normScoreCell(scoreArr[holeIndex]);
-          if (raw === "") continue; // not entered
-          if (raw === "P") {
-            hasAny = true;
-            continue; // pickup = 0 points
-          }
-
-          const pts = Number(roundCtx.netPointsForHole(p.id, holeIndex));
-          if (Number.isFinite(pts)) {
-            total += pts;
-            hasAny = true;
-          }
+        let roundTotal = 0;
+        for (let i = 0; i < 18; i++) {
+          const pts = Number(rc.netPointsForHole(p.id, i));
+          if (Number.isFinite(pts)) roundTotal += pts;
         }
+
+        sum += roundTotal;
+        any = true;
       }
 
-      perPlayer[p.id] = { total: hasAny ? total : null, rank: null };
+      if (any) {
+        out[p.id].total = sum;
+        entries.push({ id: p.id, value: sum });
+      } else {
+        out[p.id].total = null;
+      }
     }
-
-    const entries = players
-      .map((p) => ({ id: p.id, value: Number(perPlayer[p.id]?.total ?? 0) }))
-      // only rank players who actually have a total
-      .filter((e) => perPlayer[e.id]?.total !== null);
 
     const rankById = rankWithTies(entries, false);
     for (const p of players) {
       const rk = rankById.get(p.id);
-      perPlayer[p.id].rank = typeof rk === "number" ? rk : null;
+      out[p.id].rank = typeof rk === "number" ? rk : null;
     }
 
-    return perPlayer;
-  }, [players, roundPlayers, ctx, botbEnabled, botbSelectedRounds]);
+    return out;
+  }, [botb, botbRounds, players, roundPlayers, ctx]);
+
+  const botbRoundsLabel = useMemo(() => {
+    if (!botb?.enabled) return "";
+    if (!botbRoundNos.length || botbRounds.length === 0) return "(no rounds selected)";
+    const parts = botbRounds.map((r) => {
+      const rn = r.round_no ?? "?";
+      const rname = safeName(r.name, `Round ${rn}`);
+      const cname = r.course_id ? (coursesById[r.course_id] ?? "(course)") : "(course)";
+      return `R${rn} ${rname} — ${cname}`;
+    });
+    return parts.join(" · ");
+  }, [botb, botbRoundNos, botbRounds, coursesById]);
 
   function toggleFixedDetail(playerId: string, key: FixedCompKey) {
     setOpenDetail((prev) => {
@@ -799,6 +745,8 @@ export default function MobileCompetitionsPage() {
 
   const press = "active:bg-gray-100";
 
+  const showBotbColumn = botb?.enabled === true && botbRoundNos.length > 0;
+
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
@@ -845,8 +793,10 @@ export default function MobileCompetitionsPage() {
                       </th>
                     ))}
 
-                    {botbEnabled && botbSelectedRounds.length > 0 ? (
-                      <th className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>BotB</th>
+                    {showBotbColumn ? (
+                      <th className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>
+                        BotB
+                      </th>
                     ) : null}
                   </tr>
                 </thead>
@@ -854,6 +804,7 @@ export default function MobileCompetitionsPage() {
                 <tbody>
                   {players.map((p) => {
                     const row = compMatrix[p.id] ?? ({} as any);
+                    const botbCell = botbMatrix[p.id];
 
                     return (
                       <tr key={p.id} className="border-b last:border-b-0">
@@ -978,15 +929,18 @@ export default function MobileCompetitionsPage() {
                           );
                         })}
 
-                        {botbEnabled && botbSelectedRounds.length > 0 ? (
+                        {showBotbColumn ? (
                           <td className={tdBase}>
-                            {botbMatrix?.[p.id]?.total == null ? (
+                            {botbCell?.total == null ? (
                               <span className="text-gray-400">—</span>
                             ) : (
-                              <span className={`${boxBase} ${medalClass(botbMatrix[p.id].rank)} `}>
-                                {botbMatrix[p.id].total}{" "}
-                                <span className="text-gray-500">&nbsp;({botbMatrix[p.id].rank ?? 0})</span>
-                              </span>
+                              <Link
+                                href={`/m/tours/${tourId}/competitions/botb`}
+                                className={`${boxBase} ${medalClass(botbCell.rank)} ${medalHover(botbCell.rank)} ${press}`}
+                                aria-label="Open BotB table"
+                              >
+                                {botbCell.total} <span className="text-gray-500">&nbsp;({botbCell.rank ?? 0})</span>
+                              </Link>
                             )}
                           </td>
                         ) : null}
@@ -1000,11 +954,11 @@ export default function MobileCompetitionsPage() {
                 Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as
                 better. Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown. Tap H2Z to see peak
                 score and (holes count).
-                {botbEnabled && botbSelectedRounds.length > 0 ? (
+                {showBotbColumn ? (
                   <>
                     {" "}
-                    BotB is the aggregate Stableford score on{" "}
-                    <span className="font-semibold">{botbRoundsText || "the selected rounds"}</span>.
+                    · <span className="font-semibold">BotB</span> = aggregate Stableford on{" "}
+                    <span className="font-semibold">{botbRoundsLabel || "(selected rounds)"}</span>. Tap BotB to open the BotB table.
                   </>
                 ) : null}
               </div>
@@ -1020,6 +974,13 @@ export default function MobileCompetitionsPage() {
                       <span className="text-gray-600">—</span> <span className="text-gray-800">{d.text}</span>
                     </li>
                   ))}
+                  {showBotbColumn ? (
+                    <li className="leading-snug">
+                      <span className="font-semibold text-gray-900">BotB</span>{" "}
+                      <span className="text-gray-600">—</span>{" "}
+                      <span className="text-gray-800">Aggregate Stableford on {botbRoundsLabel || "(selected rounds)"}.</span>
+                    </li>
+                  ) : null}
                 </ul>
               </div>
             </div>
