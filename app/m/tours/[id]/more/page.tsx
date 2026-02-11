@@ -39,7 +39,7 @@ export default function MobileMorePage() {
   const pillDisabled = "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed";
 
   // ✅ Hard-force the bucket name (ignore DB)
-  const PDF_BUCKET = "tours-pdf";
+  const PDF_BUCKET = "tours-pdfs";
 
   const topItems = useMemo(
     () =>
