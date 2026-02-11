@@ -234,43 +234,7 @@ function pickBestRoundIds(args: {
 
 // ✅ IMPORTANT: Supabase/PostgREST often caps at 1000 rows per request.
 // This helper fetches ALL score rows in pages.
-async function fetchAllScores(roundIds: string[], playerIds: string[]): Promise<ScoreRow[]> {
-  const pageSize = 1000;
-  let from = 0;
-  const out: ScoreRow[] = [];
 
-  while (true) {
-    const to = from + pageSize - 1;
-
-    const { data, error } = await supabase
-      .from("scores")
-      .select("round_id,player_id,hole_number,strokes,pickup")
-      .in("round_id", roundIds)
-      .in("player_id", playerIds)
-      .order("round_id", { ascending: true })
-      .order("player_id", { ascending: true })
-      .order("hole_number", { ascending: true })
-      .range(from, to);
-
-    if (error) throw error;
-
-    const rows = (data ?? []) as any[];
-    out.push(
-      ...rows.map((x) => ({
-        round_id: String(x.round_id),
-        player_id: String(x.player_id),
-        hole_number: Number(x.hole_number),
-        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
-        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
-      }))
-    );
-
-    if (rows.length < pageSize) break;
-    from += pageSize;
-  }
-
-  return out;
-}
 
 // -----------------------------
 // Page
@@ -470,14 +434,47 @@ export default function MobileLeaderboardsPage() {
           setRoundPlayers([]);
         }
 
-        // ✅ scores (PAGINATED)
-        if (roundIds.length > 0 && playerIds.length > 0) {
-          const allScores = await fetchAllScores(roundIds, playerIds);
-          if (!alive) return;
-          setScores(allScores);
-        } else {
-          setScores([]);
-        }
+        // ✅ scores — one round at a time (avoids pagination + 1000-row issues)
+if (roundIds.length > 0 && playerIds.length > 0) {
+  const allScores: ScoreRow[] = [];
+
+  for (const r of rr) {
+    const { data: sData, error: sErr } = await supabase
+      .from("scores")
+      .select("round_id,player_id,hole_number,strokes,pickup")
+      .eq("round_id", r.id)
+      .in("player_id", playerIds)
+      .order("player_id", { ascending: true })
+      .order("hole_number", { ascending: true });
+
+    if (sErr) throw sErr;
+
+    const rows = (sData ?? []) as any[];
+
+    // Safety check: if you ever hit 1000 rows in ONE round, something is wrong.
+    if (rows.length >= 1000) {
+      throw new Error(
+        `Scores fetch for round ${String(r.id)} returned ${rows.length} rows (>= 1000). This suggests a query/limit issue.`
+      );
+    }
+
+    allScores.push(
+      ...rows.map((x) => ({
+        round_id: String(x.round_id),
+        player_id: String(x.player_id),
+        hole_number: Number(x.hole_number),
+        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
+        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
+      }))
+    );
+  }
+
+  if (!alive) return;
+  setScores(allScores);
+} else {
+  setScores([]);
+}
+
 
         // pars (both tees)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
