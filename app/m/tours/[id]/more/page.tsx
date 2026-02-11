@@ -6,6 +6,8 @@ import { supabase } from "@/lib/supabaseClient";
 
 type MoreTab = "details" | "rehandicapping" | "admin";
 
+type MidRowKey = "userGuide" | "blank2" | "blank3";
+
 type TourDocRow = {
   id: string;
   tour_id: string;
@@ -20,53 +22,26 @@ function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
-const PDF_BUCKET = "tours-pdfs";
-
-function cleanPath(p: string) {
-  return String(p ?? "")
-    .trim()
-    .replace(/\\/g, "/")
-    .replace(/\/{2,}/g, "/");
-}
-
-function isObjectNotFound(errMsg: string) {
-  const m = String(errMsg ?? "").toLowerCase();
-  return m.includes("object not found") || m.includes("not found");
-}
-
-// If DB has: tours/<tourId>/file.pdf
-// but Storage has: tours/tours/<tourId>/file.pdf
-function altToursToursPath(path: string) {
-  const p = cleanPath(path);
-
-  // already tours/tours/...
-  if (p.startsWith("tours/tours/")) return p;
-
-  // if tours/<something> -> tours/tours/<something>
-  if (p.startsWith("tours/")) return `tours/${p}`;
-
-  // if <something> -> tours/tours/<something> (last resort)
-  return `tours/tours/${p}`;
-}
-
 export default function MobileMorePage() {
   const params = useParams();
   const router = useRouter();
 
   const tourId = (params?.id as string) || "";
 
+  // Row 1: starts active (black)
   const [activeTop, setActiveTop] = useState<MoreTab>("details");
 
   const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
   const [docsError, setDocsError] = useState<string>("");
 
-  const [opening, setOpening] = useState<string>("");
-
   const pillBase = "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
   const pillActive = "border-gray-900 bg-gray-900 text-white";
   const pillIdle = "border-gray-200 bg-white text-gray-900";
   const pillDisabled = "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed";
+
+  // ✅ Correct bucket name
+  const PDF_BUCKET = "tours-pdfs";
 
   const topItems = useMemo(
     () =>
@@ -78,6 +53,16 @@ export default function MobileMorePage() {
     [tourId]
   );
 
+  const midItems = useMemo(
+    () =>
+      [
+        { key: "userGuide" as const, label: "App User Guide", href: `/m/tours/${tourId}/more/user-guide`, disabled: false },
+        { key: "blank2" as const, label: "", href: "", disabled: true },
+        { key: "blank3" as const, label: "", href: "", disabled: true },
+      ] as const,
+    [tourId]
+  );
+
   function onPickTop(key: MoreTab) {
     setActiveTop(key);
     const item = topItems.find((x) => x.key === key);
@@ -85,6 +70,13 @@ export default function MobileMorePage() {
     router.push(item.href);
   }
 
+  function onPickMid(key: MidRowKey) {
+    const item = midItems.find((x) => x.key === key);
+    if (!item || item.disabled) return;
+    router.push(item.href);
+  }
+
+  // Load docs for this tour
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
@@ -103,13 +95,14 @@ export default function MobileMorePage() {
 
         if (error) throw error;
 
+        // Force bucket to correct one; keep DB path
         const rows = ((data ?? []) as any[]).map((x) => ({
           id: String(x.id),
           tour_id: String(x.tour_id),
           doc_key: String(x.doc_key),
           title: String(x.title),
-          storage_bucket: PDF_BUCKET, // force correct bucket
-          storage_path: cleanPath(String(x.storage_path)),
+          storage_bucket: PDF_BUCKET,
+          storage_path: String(x.storage_path ?? ""),
           sort_order: Number(x.sort_order ?? 0),
         })) as TourDocRow[];
 
@@ -132,54 +125,55 @@ export default function MobileMorePage() {
     };
   }, [tourId]);
 
-  async function createSignedUrlWithFallback(path: string) {
-    const primary = cleanPath(path);
-    const fallback = altToursToursPath(primary);
+  function normalizeStoragePath(p: string) {
+    const path = String(p ?? "").trim().replace(/^\/+/, "");
+    if (!path) return "";
 
-    // Try primary first
-    const r1 = await supabase.storage.from(PDF_BUCKET).createSignedUrl(primary, 60 * 10);
-    if (!r1.error && r1.data?.signedUrl) return { url: r1.data.signedUrl, usedPath: primary };
-
-    // If it wasn't "not found", fail immediately
-    if (r1.error && !isObjectNotFound(r1.error.message)) {
-      throw new Error(`Failed to open PDF: ${r1.error.message}`);
+    // If objects were uploaded under "tours/tours/<tourId>/...", fix missing extra "tours/"
+    // - If DB says: tours/<tourId>/file.pdf
+    // - But storage object is: tours/tours/<tourId>/file.pdf
+    // then adjust.
+    if (path.startsWith(`tours/${tourId}/`)) {
+      return `tours/tours/${tourId}/${path.slice(`tours/${tourId}/`.length)}`;
     }
 
-    // Retry with tours/tours/...
-    const r2 = await supabase.storage.from(PDF_BUCKET).createSignedUrl(fallback, 60 * 10);
-    if (r2.error || !r2.data?.signedUrl) {
-      const msg = r2.error?.message || "Object not found.";
-      throw new Error(`Failed to open PDF.\nTried:\n- ${primary}\n- ${fallback}\n\nError: ${msg}`);
-    }
-
-    return { url: r2.data.signedUrl, usedPath: fallback };
+    return path;
   }
 
   async function openDoc(doc: TourDocRow) {
-    const path = cleanPath(String(doc.storage_path ?? ""));
+    const bucket = PDF_BUCKET;
+
+    // Use normalized path for safety
+    const rawPath = String(doc.storage_path ?? "").trim();
+    const path = normalizeStoragePath(rawPath);
+
     if (!path) {
       alert("This document has no storage path.");
       return;
     }
 
-    setOpening(`Opening: ${doc.title}…`);
-
-    try {
-      const { url } = await createSignedUrlWithFallback(path);
-
-      // Most reliable on mobile/desktop: open in same tab
-      window.location.href = url;
-    } catch (e: any) {
-      alert(e?.message ?? "Failed to open document.");
-      setOpening("");
+    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 10); // 10 minutes
+    if (error) {
+      alert(error.message || "Failed to open document.");
+      return;
     }
+
+    const url = data?.signedUrl;
+    if (!url) {
+      alert("No URL returned.");
+      return;
+    }
+
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
+  // 5 PDF buttons in 2 rows: 3 + 2 (with placeholders)
   const docsRow1 = docs.slice(0, 3);
   const docsRow2 = docs.slice(3, 5);
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
+      {/* Header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-sm font-semibold text-gray-900">More</div>
@@ -187,6 +181,7 @@ export default function MobileMorePage() {
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 pt-4 space-y-3">
+        {/* Row 1 */}
         <div className="flex gap-2">
           {topItems.map((it) => (
             <button
@@ -200,12 +195,27 @@ export default function MobileMorePage() {
           ))}
         </div>
 
+        {/* ✅ NEW Row 2 (3 buttons) */}
+        <div className="flex gap-2">
+          {midItems.map((it) => (
+            <button
+              key={it.key}
+              type="button"
+              onClick={() => onPickMid(it.key)}
+              disabled={it.disabled}
+              className={`${pillBase} ${it.disabled ? pillDisabled : pillIdle}`}
+              aria-label={it.label || "Placeholder button"}
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Documents header */}
         <div className="rounded-2xl border border-gray-200 bg-white p-3">
           <div className="text-xs font-semibold text-gray-700">Tour PDFs</div>
           <div className="mt-1 text-[11px] text-gray-500">
-            {opening
-              ? opening
-              : loadingDocs
+            {loadingDocs
               ? "Loading documents..."
               : docsError
               ? docsError
@@ -215,6 +225,7 @@ export default function MobileMorePage() {
           </div>
         </div>
 
+        {/* PDF buttons */}
         <div className="space-y-2">
           <div className="flex gap-2">
             {docsRow1.map((d) => (
