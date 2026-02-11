@@ -35,6 +35,8 @@ type RoundRow = {
   course_id: string | null;
 };
 
+type CourseRow = { id: string; name: string };
+
 type PlayerRow = {
   id: string;
   name: string;
@@ -69,6 +71,12 @@ type H2ZLegRow = {
   leg_no: number;
   start_round_no: number;
   end_round_no: number;
+};
+
+type BotBSettingsRow = {
+  tour_id: string;
+  enabled: boolean;
+  round_nos: number[]; // int[]
 };
 
 function isLikelyUuid(v: string) {
@@ -157,8 +165,17 @@ type H2ZCell = {
   bestLen: number | null;
 };
 
+type BotBCell = {
+  total: number | null;
+  rank: number | null;
+};
+
 function h2zHeading(leg: H2ZLeg) {
   return `H2Z: R${leg.start_round_no}–R${leg.end_round_no}`;
+}
+
+function normScoreCell(v: any): string {
+  return String(v ?? "").trim().toUpperCase();
 }
 
 export default function MobileCompetitionsPage() {
@@ -170,11 +187,16 @@ export default function MobileCompetitionsPage() {
 
   const [tour, setTour] = useState<Tour | null>(null);
   const [rounds, setRounds] = useState<RoundRow[]>([]);
+  const [coursesById, setCoursesById] = useState<Record<string, string>>({});
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
   const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([]);
+
+  // BotB
+  const [botbEnabled, setBotbEnabled] = useState(false);
+  const [botbRoundNos, setBotbRoundNos] = useState<number[]>([]);
 
   const [openDetail, setOpenDetail] = useState<
     | { kind: "fixed"; playerId: string; key: FixedCompKey }
@@ -224,26 +246,6 @@ export default function MobileCompetitionsPage() {
     []
   );
 
-  const definitions = useMemo(
-    () => [
-      { label: "Napoleon", text: "Average Stableford points on Par 3 holes" },
-      { label: "Big George", text: "Average Stableford points on Par 4 holes" },
-      { label: "Grand Canyon", text: "Average Stableford points on Par 5 holes" },
-      { label: "Wizard", text: "Percentage of holes where Stableford points are 4+" },
-      { label: "Bagel Man", text: "Percentage of holes where Stableford points are 0" },
-      { label: "Eclectic", text: "Total of each player’s best Stableford points per hole" },
-      { label: "Schumacher", text: "Average Stableford points on holes 1–3" },
-      { label: "Closer", text: "Average Stableford points on holes 16–18" },
-      { label: "Hot Streak", text: "Longest run in any round of consecutive holes where gross strokes is par or better" },
-      { label: "Cold Streak", text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse" },
-      {
-        label: "H2Z",
-        text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole",
-      },
-    ],
-    []
-  );
-
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
@@ -269,6 +271,22 @@ export default function MobileCompetitionsPage() {
         const rr = (rData ?? []) as RoundRow[];
         if (!alive) return;
         setRounds(rr);
+
+        // Courses map (for BotB description)
+        {
+          const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
+          if (courseIds.length) {
+            const { data: cData, error: cErr } = await supabase.from("courses").select("id,name").in("id", courseIds);
+            if (cErr) throw cErr;
+            const map: Record<string, string> = {};
+            for (const c of (cData ?? []) as CourseRow[]) map[String(c.id)] = String(c.name);
+            if (!alive) return;
+            setCoursesById(map);
+          } else {
+            if (!alive) return;
+            setCoursesById({});
+          }
+        }
 
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
@@ -337,29 +355,31 @@ export default function MobileCompetitionsPage() {
           setScores([]);
         }
 
-        const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
-        if (courseIds.length > 0) {
-          const { data: pData, error: pErr } = await supabase
-            .from("pars")
-            .select("course_id,hole_number,tee,par,stroke_index")
-            .in("course_id", courseIds)
-            .in("tee", ["M", "F"])
-            .order("course_id", { ascending: true })
-            .order("hole_number", { ascending: true });
-          if (pErr) throw pErr;
+        {
+          const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
+          if (courseIds.length > 0) {
+            const { data: pData, error: pErr } = await supabase
+              .from("pars")
+              .select("course_id,hole_number,tee,par,stroke_index")
+              .in("course_id", courseIds)
+              .in("tee", ["M", "F"])
+              .order("course_id", { ascending: true })
+              .order("hole_number", { ascending: true });
+            if (pErr) throw pErr;
 
-          const pr: ParRow[] = (pData ?? []).map((x: any) => ({
-            course_id: String(x.course_id),
-            hole_number: Number(x.hole_number),
-            tee: normalizeTee(x.tee),
-            par: Number(x.par),
-            stroke_index: Number(x.stroke_index),
-          }));
+            const pr: ParRow[] = (pData ?? []).map((x: any) => ({
+              course_id: String(x.course_id),
+              hole_number: Number(x.hole_number),
+              tee: normalizeTee(x.tee),
+              par: Number(x.par),
+              stroke_index: Number(x.stroke_index),
+            }));
 
-          if (!alive) return;
-          setPars(pr);
-        } else {
-          setPars([]);
+            if (!alive) return;
+            setPars(pr);
+          } else {
+            setPars([]);
+          }
         }
 
         {
@@ -372,6 +392,30 @@ export default function MobileCompetitionsPage() {
           if (lErr) throw lErr;
           if (!alive) return;
           setH2zLegs((lData ?? []) as H2ZLegRow[]);
+        }
+
+        // BotB settings (optional row)
+        {
+          const { data: bData, error: bErr } = await supabase
+            .from("tour_botb_settings")
+            .select("tour_id,enabled,round_nos")
+            .eq("tour_id", tourId)
+            .maybeSingle();
+
+          if (bErr) throw bErr;
+
+          const row = (bData ?? null) as BotBSettingsRow | null;
+          const enabled = row?.enabled === true;
+
+          const roundNos = Array.isArray(row?.round_nos)
+            ? row!.round_nos.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n >= 1)
+            : [];
+
+          roundNos.sort((a, b) => a - b);
+
+          if (!alive) return;
+          setBotbEnabled(enabled && roundNos.length > 0);
+          setBotbRoundNos(roundNos);
         }
       } catch (e: any) {
         if (!alive) return;
@@ -558,6 +602,145 @@ export default function MobileCompetitionsPage() {
     return perPlayer;
   }, [players, sortedRounds, roundPlayers, ctx, h2zLegsNorm]);
 
+  const botb = useMemo(() => {
+    // If disabled or no config, do nothing
+    if (!botbEnabled || botbRoundNos.length === 0) {
+      const empty: Record<string, BotBCell> = {};
+      for (const p of players) empty[p.id] = { total: null, rank: null };
+      return empty;
+    }
+
+    const playingSet = new Set<string>();
+    for (const rp of roundPlayers) {
+      if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
+    }
+    const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
+
+    const roundsByNo = new Map<number, RoundRow[]>();
+    for (const r of sortedRounds) {
+      const rn = Number(r.round_no);
+      if (!Number.isFinite(rn)) continue;
+      if (!roundsByNo.has(rn)) roundsByNo.set(rn, []);
+      roundsByNo.get(rn)!.push(r);
+    }
+
+    const out: Record<string, BotBCell> = {};
+    for (const p of players) out[p.id] = { total: 0, rank: null };
+
+    // Access ctx.rounds (builtTourCompetitionContext provides this; used by H2Z too)
+    const ctxRounds: any[] = Array.isArray((ctx as any)?.rounds) ? ((ctx as any).rounds as any[]) : [];
+
+    const roundCtxById = new Map<string, any>();
+    for (const rctx of ctxRounds) {
+      const rid = String((rctx as any)?.roundId ?? "");
+      if (rid) roundCtxById.set(rid, rctx);
+    }
+
+    for (const p of players) {
+      let sum = 0;
+
+      for (const rn of botbRoundNos) {
+        const rlist = roundsByNo.get(rn) ?? [];
+        if (rlist.length === 0) continue;
+
+        // If somehow multiple rounds share the same round_no, include all (safest)
+        for (const r of rlist) {
+          if (!isPlayingInRound(r.id, p.id)) continue;
+
+          const roundCtx = roundCtxById.get(String(r.id));
+          if (!roundCtx) continue;
+
+          const scoreArr = roundCtx.scores?.[String(p.id)];
+          if (!Array.isArray(scoreArr) || scoreArr.length < 18) continue;
+
+          for (let holeIndex = 0; holeIndex < 18; holeIndex++) {
+            const raw = normScoreCell(scoreArr[holeIndex]);
+
+            // Blank = not entered, ignore
+            if (raw === "") continue;
+
+            // Pickup = 0 points
+            if (raw === "P") continue;
+
+            const pts = Number(roundCtx.netPointsForHole?.(p.id, holeIndex) ?? 0);
+            if (Number.isFinite(pts)) sum += pts;
+          }
+        }
+      }
+
+      out[p.id] = { total: sum, rank: null };
+    }
+
+    // ranks (higher better)
+    const entries = players.map((p) => ({ id: p.id, value: Number(out[p.id]?.total ?? 0) }));
+    const rankById = rankWithTies(entries, false);
+    for (const p of players) {
+      const rk = rankById.get(p.id);
+      out[p.id].rank = typeof rk === "number" ? rk : null;
+    }
+
+    return out;
+  }, [botbEnabled, botbRoundNos, players, roundPlayers, sortedRounds, ctx]);
+
+  const botbRoundLabel = useMemo(() => {
+    if (!botbEnabled || botbRoundNos.length === 0) return "";
+
+    const roundsByNo = new Map<number, RoundRow[]>();
+    for (const r of sortedRounds) {
+      const rn = Number(r.round_no);
+      if (!Number.isFinite(rn)) continue;
+      if (!roundsByNo.has(rn)) roundsByNo.set(rn, []);
+      roundsByNo.get(rn)!.push(r);
+    }
+
+    const parts: string[] = [];
+    for (const rn of botbRoundNos) {
+      const list = roundsByNo.get(rn) ?? [];
+      if (!list.length) continue;
+
+      // pick the first for label (most common case: one round per round_no)
+      const r = list[0];
+      const roundName = safeName(r.name, `Round ${rn}`);
+      const courseName = r.course_id ? safeName(coursesById[r.course_id], r.course_id) : "—";
+      parts.push(`${roundName} (${courseName})`);
+    }
+
+    return parts.join(", ");
+  }, [botbEnabled, botbRoundNos, sortedRounds, coursesById]);
+
+  const definitions = useMemo(() => {
+    const base = [
+      { label: "Napoleon", text: "Average Stableford points on Par 3 holes" },
+      { label: "Big George", text: "Average Stableford points on Par 4 holes" },
+      { label: "Grand Canyon", text: "Average Stableford points on Par 5 holes" },
+      { label: "Wizard", text: "Percentage of holes where Stableford points are 4+" },
+      { label: "Bagel Man", text: "Percentage of holes where Stableford points are 0" },
+      { label: "Eclectic", text: "Total of each player’s best Stableford points per hole" },
+      { label: "Schumacher", text: "Average Stableford points on holes 1–3" },
+      { label: "Closer", text: "Average Stableford points on holes 16–18" },
+      { label: "Hot Streak", text: "Longest run in any round of consecutive holes where gross strokes is par or better" },
+      { label: "Cold Streak", text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse" },
+      {
+        label: "H2Z",
+        text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole",
+      },
+    ];
+
+    if (botbEnabled && botbRoundLabel) {
+      base.push({
+        label: "BotB",
+        text: `Aggregate Stableford score on: ${botbRoundLabel}`,
+      });
+    } else if (botbEnabled) {
+      base.push({
+        label: "BotB",
+        text: "Aggregate Stableford score across the selected rounds",
+      });
+    }
+
+    return base;
+  }, [botbEnabled, botbRoundLabel]);
+
   function toggleFixedDetail(playerId: string, key: FixedCompKey) {
     setOpenDetail((prev) => {
       if (prev?.kind === "fixed" && prev.playerId === playerId && prev.key === key) return null;
@@ -608,6 +791,13 @@ export default function MobileCompetitionsPage() {
 
   const press = "active:bg-gray-100";
 
+  const footerBotB =
+    botbEnabled && botbRoundLabel
+      ? ` BotB = aggregate Stableford on: ${botbRoundLabel}.`
+      : botbEnabled
+      ? " BotB = aggregate Stableford across selected rounds."
+      : "";
+
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
@@ -653,6 +843,10 @@ export default function MobileCompetitionsPage() {
                         {h2zHeading(leg)}
                       </th>
                     ))}
+
+                    {botbEnabled ? (
+                      <th className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>BotB</th>
+                    ) : null}
                   </tr>
                 </thead>
 
@@ -782,6 +976,27 @@ export default function MobileCompetitionsPage() {
                             </td>
                           );
                         })}
+
+                        {botbEnabled ? (
+                          <td className={tdBase}>
+                            {(() => {
+                              const cell = botb[p.id];
+                              const total = cell?.total ?? null;
+                              const rank = cell?.rank ?? null;
+
+                              const show =
+                                total === null ? (
+                                  <span className="text-gray-400">—</span>
+                                ) : (
+                                  <>
+                                    {total} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
+                                  </>
+                                );
+
+                              return <span className={`${boxBase} ${medalClass(rank)}`}>{show}</span>;
+                            })()}
+                          </td>
+                        ) : null}
                       </tr>
                     );
                   })}
@@ -791,7 +1006,7 @@ export default function MobileCompetitionsPage() {
               <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
                 Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as
                 better. Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown. Tap H2Z to see peak
-                score and (holes count).
+                score and (holes count).{footerBotB}
               </div>
             </div>
 
