@@ -37,6 +37,12 @@ type H2ZLegRow = {
   end_round_no: number;
 };
 
+type BotBSettingsRow = {
+  tour_id: string;
+  enabled: boolean;
+  round_nos: number[]; // int[]
+};
+
 function asIntOrNull(v: string) {
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
@@ -67,6 +73,17 @@ function uuidv4() {
   });
 }
 
+function uniqSortedInts(v: any): number[] {
+  const arr = Array.isArray(v) ? v : [];
+  const nums = arr
+    .map((x) => Number(x))
+    .filter((n) => Number.isFinite(n))
+    .map((n) => Math.floor(n))
+    .filter((n) => n > 0);
+  nums.sort((a, b) => a - b);
+  return Array.from(new Set(nums));
+}
+
 export default function ManageEventsPage() {
   const params = useParams<{ id: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -93,6 +110,21 @@ export default function ManageEventsPage() {
   const [h2zEnabled, setH2zEnabled] = useState<boolean>(false);
   const [legs, setLegs] = useState<Array<{ start_round_no: number; end_round_no: number }>>([]);
 
+  // BotB state
+  const [botbEnabled, setBotbEnabled] = useState<boolean>(false);
+  const [botbRoundNos, setBotbRoundNos] = useState<number[]>([]);
+
+  // Available round numbers for dropdowns
+  const roundNumbers = useMemo(() => {
+    const nums = rounds
+      .map((r) => Number(r.round_no))
+      .filter((n) => Number.isFinite(n)) as number[];
+    nums.sort((a, b) => a - b);
+    return Array.from(new Set(nums));
+  }, [rounds]);
+
+  const maxRoundNo = roundNumbers.length ? roundNumbers[roundNumbers.length - 1] : 1;
+
   // Preview summary
   const preview = useMemo(() => {
     const n = asIntOrNull(individualBestN);
@@ -112,23 +144,29 @@ export default function ManageEventsPage() {
     const h2z =
       !h2zEnabled || legs.length === 0
         ? "Not configured"
-        : legs
-            .map((l, idx) => `Leg ${idx + 1}: R${l.start_round_no}–R${l.end_round_no}`)
-            .join(" · ");
+        : legs.map((l, idx) => `Leg ${idx + 1}: R${l.start_round_no}–R${l.end_round_no}`).join(" · ");
 
-    return { indiv, pairs, teams, h2z };
-  }, [individualMode, individualBestN, individualFinalRequired, pairMode, pairBestQ, pairFinalRequired, teamBestY, h2zEnabled, legs]);
+    const botb =
+      !botbEnabled
+        ? "Disabled"
+        : botbRoundNos.length === 0
+        ? "Enabled (no rounds selected)"
+        : `Enabled · Rounds: ${botbRoundNos.slice().sort((a, b) => a - b).map((x) => `R${x}`).join(", ")}`;
 
-  // Available round numbers for dropdowns
-  const roundNumbers = useMemo(() => {
-    const nums = rounds
-      .map((r) => Number(r.round_no))
-      .filter((n) => Number.isFinite(n)) as number[];
-    nums.sort((a, b) => a - b);
-    return Array.from(new Set(nums));
-  }, [rounds]);
-
-  const maxRoundNo = roundNumbers.length ? roundNumbers[roundNumbers.length - 1] : 1;
+    return { indiv, pairs, teams, h2z, botb };
+  }, [
+    individualMode,
+    individualBestN,
+    individualFinalRequired,
+    pairMode,
+    pairBestQ,
+    pairFinalRequired,
+    teamBestY,
+    h2zEnabled,
+    legs,
+    botbEnabled,
+    botbRoundNos,
+  ]);
 
   useEffect(() => {
     let alive = true;
@@ -232,6 +270,25 @@ export default function ManageEventsPage() {
           setH2zEnabled(false);
           setLegs([]);
         }
+
+        // 4) Load BotB settings (optional row)
+        const { data: bData, error: bErr } = await supabase
+          .from("tour_botb_settings")
+          .select("tour_id,enabled,round_nos")
+          .eq("tour_id", tourId)
+          .maybeSingle();
+
+        if (bErr) throw new Error(bErr.message);
+        if (!alive) return;
+
+        if (!bData) {
+          setBotbEnabled(false);
+          setBotbRoundNos([]);
+        } else {
+          const row = bData as BotBSettingsRow;
+          setBotbEnabled(row.enabled === true);
+          setBotbRoundNos(uniqSortedInts((row as any).round_nos));
+        }
       } catch (e: any) {
         if (!alive) return;
         setError(e?.message ?? "Failed to load settings.");
@@ -280,6 +337,23 @@ export default function ManageEventsPage() {
     return null;
   }
 
+  function validateBotB(): string | null {
+    if (!botbEnabled) return null;
+    if (botbRoundNos.length === 0) return "BotB is enabled but no rounds are selected. Select at least 1 round (or disable BotB).";
+    return null;
+  }
+
+  function toggleBotbRound(n: number) {
+    setBotbRoundNos((prev) => {
+      const set = new Set(prev);
+      if (set.has(n)) set.delete(n);
+      else set.add(n);
+      const out = Array.from(set);
+      out.sort((a, b) => a - b);
+      return out;
+    });
+  }
+
   async function onSaveAll() {
     setSaving(true);
     setError("");
@@ -298,6 +372,10 @@ export default function ManageEventsPage() {
       // Validate H2Z
       const h2zErr = validateH2Z();
       if (h2zErr) throw new Error(h2zErr);
+
+      // Validate BotB
+      const botbErr = validateBotB();
+      if (botbErr) throw new Error(botbErr);
 
       // 1) Save tour_grouping_settings
       const payload: SettingsRow = {
@@ -348,6 +426,16 @@ export default function ManageEventsPage() {
         if (insErr) throw new Error(insErr.message);
       }
 
+      // 3) Save BotB settings (upsert row)
+      const botbPayload: BotBSettingsRow = {
+        tour_id: tourId,
+        enabled: botbEnabled === true,
+        round_nos: uniqSortedInts(botbRoundNos),
+      };
+
+      const { error: botbUpErr } = await supabase.from("tour_botb_settings").upsert(botbPayload, { onConflict: "tour_id" });
+      if (botbUpErr) throw new Error(botbUpErr.message);
+
       setSavedMsg("Saved ✅");
       setTimeout(() => setSavedMsg(""), 1500);
     } catch (e: any) {
@@ -380,9 +468,7 @@ export default function ManageEventsPage() {
         <Link href={`/tours/${tourId}`}>← Back to Tour</Link>
       </div>
 
-      <p style={{ marginTop: 8, color: "#444" }}>
-        These settings are saved per tour and used by leaderboards (desktop + mobile).
-      </p>
+      <p style={{ marginTop: 8, color: "#444" }}>These settings are saved per tour and used by leaderboards (desktop + mobile).</p>
 
       {/* Individual */}
       <section style={{ marginTop: 18, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
@@ -412,11 +498,7 @@ export default function ManageEventsPage() {
           </label>
 
           <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              type="checkbox"
-              checked={individualFinalRequired}
-              onChange={(e) => setIndividualFinalRequired(e.target.checked)}
-            />
+            <input type="checkbox" checked={individualFinalRequired} onChange={(e) => setIndividualFinalRequired(e.target.checked)} />
             Final required
           </label>
         </div>
@@ -475,6 +557,57 @@ export default function ManageEventsPage() {
 
           <div style={{ color: "#555" }}>Penalty: −1 for each zero among the considered scores</div>
         </div>
+      </section>
+
+      {/* BotB */}
+      <section style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
+        <div style={{ fontWeight: 900, marginBottom: 6 }}>Best of the Best (BotB)</div>
+        <div style={{ color: "#555", fontSize: 13, marginBottom: 10 }}>
+          BotB score = <b>sum of Individual Stableford totals</b> for the selected rounds.
+        </div>
+
+        <label style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
+          <input
+            type="checkbox"
+            checked={botbEnabled}
+            onChange={(e) => {
+              const on = e.target.checked;
+              setBotbEnabled(on);
+              if (!on) setBotbRoundNos([]);
+            }}
+          />
+          Enable BotB for this tour
+        </label>
+
+        {!hasRounds ? (
+          <div style={{ padding: 10, borderRadius: 8, border: "1px solid #eee", background: "#fafafa", color: "#666" }}>
+            No rounds with <code>round_no</code> found yet. Add rounds with round numbers first, then select BotB rounds.
+          </div>
+        ) : !botbEnabled ? (
+          <div style={{ color: "#666" }}>BotB is disabled.</div>
+        ) : (
+          <div style={{ padding: 10, borderRadius: 10, border: "1px solid #eee", background: "white" }}>
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>Select rounds to include</div>
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+              {roundNumbers.map((n) => {
+                const checked = botbRoundNos.includes(n);
+                return (
+                  <label key={n} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input type="checkbox" checked={checked} onChange={() => toggleBotbRound(n)} />
+                    <span style={{ fontWeight: 800 }}>R{n}</span>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div style={{ marginTop: 10, fontSize: 12, color: botbRoundNos.length ? "#555" : "crimson", fontWeight: 700 }}>
+              {botbRoundNos.length
+                ? `Selected: ${botbRoundNos.map((x) => `R${x}`).join(", ")}`
+                : "Select at least 1 round (required when BotB is enabled)."}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* H2Z Legs */}
@@ -564,10 +697,7 @@ export default function ManageEventsPage() {
                       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
                         <label>
                           Start round{" "}
-                          <select
-                            value={leg.start_round_no}
-                            onChange={(e) => updateLeg(idx, { start_round_no: Number(e.target.value) })}
-                          >
+                          <select value={leg.start_round_no} onChange={(e) => updateLeg(idx, { start_round_no: Number(e.target.value) })}>
                             {roundNumbers.map((n) => (
                               <option key={n} value={n}>
                                 R{n}
@@ -578,10 +708,7 @@ export default function ManageEventsPage() {
 
                         <label>
                           End round{" "}
-                          <select
-                            value={leg.end_round_no}
-                            onChange={(e) => updateLeg(idx, { end_round_no: Number(e.target.value) })}
-                          >
+                          <select value={leg.end_round_no} onChange={(e) => updateLeg(idx, { end_round_no: Number(e.target.value) })}>
                             {roundNumbers.map((n) => (
                               <option key={n} value={n}>
                                 R{n}
@@ -593,7 +720,9 @@ export default function ManageEventsPage() {
                         {badRange ? (
                           <span style={{ color: "crimson", fontWeight: 800 }}>Start must be ≤ End</span>
                         ) : (
-                          <span style={{ color: "#666" }}>Column heading: <b>H2Z: R{leg.start_round_no} - R{leg.end_round_no}</b></span>
+                          <span style={{ color: "#666" }}>
+                            Column heading: <b>H2Z: R{leg.start_round_no} - R{leg.end_round_no}</b>
+                          </span>
                         )}
                       </div>
                     </div>
@@ -617,6 +746,9 @@ export default function ManageEventsPage() {
           </div>
           <div style={{ marginTop: 4 }}>
             <strong>Teams:</strong> {preview.teams}
+          </div>
+          <div style={{ marginTop: 4 }}>
+            <strong>BotB:</strong> {preview.botb}
           </div>
           <div style={{ marginTop: 4 }}>
             <strong>H2Z:</strong> {preview.h2z}
