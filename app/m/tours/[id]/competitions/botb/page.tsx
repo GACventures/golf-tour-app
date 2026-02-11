@@ -1,3 +1,4 @@
+// app/m/tours/[id]/competitions/botb/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -19,12 +20,6 @@ import {
 
 type Tour = { id: string; name: string };
 
-type BotBSettingsRow = {
-  tour_id: string;
-  enabled: boolean;
-  round_nos: number[];
-};
-
 type RoundRow = {
   id: string;
   tour_id: string;
@@ -33,8 +28,6 @@ type RoundRow = {
   created_at: string | null;
   course_id: string | null;
 };
-
-type CourseRow = { id: string; name: string | null };
 
 type PlayerRow = {
   id: string;
@@ -65,6 +58,12 @@ type ParRow = {
   stroke_index: number;
 };
 
+type BotBSettingsRow = {
+  tour_id: string;
+  enabled: boolean;
+  round_nos: number[];
+};
+
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
@@ -79,17 +78,17 @@ function normalizeTee(v: any): Tee {
   return s === "F" ? "F" : "M";
 }
 
-function asInt(v: any, fallback = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.floor(n) : fallback;
+function n(x: any, fallback = 0): number {
+  const v = Number(x);
+  return Number.isFinite(v) ? v : fallback;
 }
 
-function rankWithTies(entries: Array<{ id: string; value: number }>) {
+function rankWithTies(entries: Array<{ id: string; value: number }>, lowerIsBetter: boolean) {
   const sorted = [...entries].sort((a, b) => {
     const av = Number.isFinite(a.value) ? a.value : 0;
     const bv = Number.isFinite(b.value) ? b.value : 0;
     if (av === bv) return a.id.localeCompare(b.id);
-    return bv - av; // higher is better
+    return lowerIsBetter ? av - bv : bv - av;
   });
 
   const rankById = new Map<string, number>();
@@ -100,12 +99,14 @@ function rankWithTies(entries: Array<{ id: string; value: number }>) {
   for (const e of sorted) {
     seen += 1;
     const v = Number.isFinite(e.value) ? e.value : 0;
+
     if (lastValue === null || v !== lastValue) {
-      currentRank = seen;
+      currentRank = seen; // 1,1,3 ties style
       lastValue = v;
     }
     rankById.set(e.id, currentRank);
   }
+
   return rankById;
 }
 
@@ -117,15 +118,12 @@ export default function MobileBotBPage() {
   const [errorMsg, setErrorMsg] = useState("");
 
   const [tour, setTour] = useState<Tour | null>(null);
-  const [botb, setBotb] = useState<BotBSettingsRow | null>(null);
-
   const [rounds, setRounds] = useState<RoundRow[]>([]);
-  const [coursesById, setCoursesById] = useState<Record<string, string>>({});
-
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
+  const [botb, setBotb] = useState<BotBSettingsRow | null>(null);
 
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
@@ -137,91 +135,31 @@ export default function MobileBotBPage() {
       setErrorMsg("");
 
       try {
-        // Tour
         const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
         if (!alive) return;
         setTour(tData as Tour);
 
-        // BotB settings
-        const { data: bData, error: bErr } = await supabase
-          .from("tour_botb_settings")
-          .select("tour_id,enabled,round_nos")
-          .eq("tour_id", tourId)
-          .maybeSingle();
-        if (bErr) throw bErr;
-
-        if (!alive) return;
-
-        if (!bData) {
-          setBotb(null);
-          setRounds([]);
-          setPlayers([]);
-          setRoundPlayers([]);
-          setScores([]);
-          setPars([]);
-          setCoursesById({});
-          return;
-        }
-
-        const bn = Array.isArray((bData as any).round_nos)
-          ? (bData as any).round_nos.map((x: any) => asInt(x, 0)).filter((n: number) => n > 0)
-          : [];
-
-        bn.sort((a: number, b: number) => a - b);
-
-        const botbRow: BotBSettingsRow = {
-          tour_id: String((bData as any).tour_id),
-          enabled: (bData as any).enabled === true,
-          round_nos: Array.from(new Set(bn)),
-        };
-
-        setBotb(botbRow);
-
-        if (!botbRow.enabled || botbRow.round_nos.length === 0) {
-          setRounds([]);
-          setPlayers([]);
-          setRoundPlayers([]);
-          setScores([]);
-          setPars([]);
-          setCoursesById({});
-          return;
-        }
-
-        // Rounds ONLY for selected round_nos
+        // rounds
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,name,round_no,created_at,course_id")
           .eq("tour_id", tourId)
-          .in("round_no", botbRow.round_nos)
           .order("round_no", { ascending: true, nullsFirst: false })
           .order("created_at", { ascending: true });
-        if (rErr) throw rErr;
 
+        if (rErr) throw rErr;
         const rr = (rData ?? []) as RoundRow[];
         if (!alive) return;
         setRounds(rr);
 
-        const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
-
-        // Courses for labels
-        if (courseIds.length) {
-          const { data: cData, error: cErr } = await supabase.from("courses").select("id,name").in("id", courseIds);
-          if (cErr) throw cErr;
-          if (!alive) return;
-          const map: Record<string, string> = {};
-          for (const c of (cData ?? []) as CourseRow[]) map[String(c.id)] = safeName(c.name, "(course)");
-          setCoursesById(map);
-        } else {
-          setCoursesById({});
-        }
-
-        // Players
+        // players (via tour_players join)
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
-          .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
+          .select("tour_id,player_id,players(id,name,gender)")
           .eq("tour_id", tourId)
           .order("name", { ascending: true, foreignTable: "players" });
+
         if (tpErr) throw tpErr;
 
         const ps: PlayerRow[] = (tpData ?? [])
@@ -236,16 +174,38 @@ export default function MobileBotBPage() {
         if (!alive) return;
         setPlayers(ps);
 
+        // BotB settings
+        const { data: bData, error: bErr } = await supabase
+          .from("tour_botb_settings")
+          .select("tour_id,enabled,round_nos")
+          .eq("tour_id", tourId)
+          .maybeSingle();
+
+        if (bErr) throw bErr;
+        if (!alive) return;
+
+        const bRow = (bData ?? null) as BotBSettingsRow | null;
+        setBotb(
+          bRow
+            ? {
+                tour_id: String(bRow.tour_id),
+                enabled: bRow.enabled === true,
+                round_nos: Array.isArray((bRow as any).round_nos) ? (bRow as any).round_nos.map((x: any) => Number(x)) : [],
+              }
+            : null
+        );
+
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
-        // Round players
-        if (roundIds.length && playerIds.length) {
+        // round_players
+        if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
             .select("round_id,player_id,playing,playing_handicap")
             .in("round_id", roundIds)
             .in("player_id", playerIds);
+
           if (rpErr) throw rpErr;
 
           const rpRows: RoundPlayerRow[] = (rpData ?? []).map((x: any) => ({
@@ -261,9 +221,10 @@ export default function MobileBotBPage() {
           setRoundPlayers([]);
         }
 
-        // Scores: IMPORTANT — pull scores ROUND-BY-ROUND for only BotB rounds (avoids Supabase 1000 row cap)
-        if (roundIds.length && playerIds.length) {
+        // scores — one round at a time (avoids Supabase 1000-row issues)
+        if (roundIds.length > 0 && playerIds.length > 0) {
           const allScores: ScoreRow[] = [];
+
           for (const r of rr) {
             const { data: sData, error: sErr } = await supabase
               .from("scores")
@@ -272,17 +233,20 @@ export default function MobileBotBPage() {
               .in("player_id", playerIds)
               .order("player_id", { ascending: true })
               .order("hole_number", { ascending: true });
+
             if (sErr) throw sErr;
             allScores.push(...((sData ?? []) as ScoreRow[]));
           }
+
           if (!alive) return;
           setScores(allScores);
         } else {
           setScores([]);
         }
 
-        // Pars
-        if (courseIds.length) {
+        // pars for relevant courses
+        const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
+        if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
             .from("pars")
             .select("course_id,hole_number,tee,par,stroke_index")
@@ -290,6 +254,7 @@ export default function MobileBotBPage() {
             .in("tee", ["M", "F"])
             .order("course_id", { ascending: true })
             .order("hole_number", { ascending: true });
+
           if (pErr) throw pErr;
 
           const pr: ParRow[] = (pData ?? []).map((x: any) => ({
@@ -307,7 +272,7 @@ export default function MobileBotBPage() {
         }
       } catch (e: any) {
         if (!alive) return;
-        setErrorMsg(e?.message ?? "Failed to load BotB.");
+        setErrorMsg(e?.message ?? "Failed to load BotB leaderboard.");
       } finally {
         if (!alive) return;
         setLoading(false);
@@ -315,7 +280,6 @@ export default function MobileBotBPage() {
     }
 
     void loadAll();
-
     return () => {
       alive = false;
     };
@@ -331,6 +295,23 @@ export default function MobileBotBPage() {
     });
     return arr;
   }, [rounds]);
+
+  const selectedRoundNos = useMemo(() => {
+    const raw = botb?.enabled ? botb?.round_nos ?? [] : [];
+    const cleaned = raw.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x >= 1);
+    cleaned.sort((a, b) => a - b);
+    return Array.from(new Set(cleaned));
+  }, [botb]);
+
+  const selectedRounds = useMemo(() => {
+    if (selectedRoundNos.length === 0) return [];
+    const byNo = new Map<number, RoundRow>();
+    for (const r of sortedRounds) {
+      const rn = r.round_no;
+      if (Number.isFinite(Number(rn))) byNo.set(Number(rn), r);
+    }
+    return selectedRoundNos.map((rn) => byNo.get(rn)).filter(Boolean) as RoundRow[];
+  }, [selectedRoundNos, sortedRounds]);
 
   const ctx = useMemo(() => {
     const roundsLite: TourRoundLite[] = sortedRounds.map((r) => ({
@@ -379,88 +360,82 @@ export default function MobileBotBPage() {
 
   const playingSet = useMemo(() => {
     const s = new Set<string>();
-    for (const rp of roundPlayers) if (rp.playing === true) s.add(`${rp.round_id}|${rp.player_id}`);
+    for (const rp of roundPlayers) {
+      if (rp.playing === true) s.add(`${rp.round_id}|${rp.player_id}`);
+    }
     return s;
   }, [roundPlayers]);
 
-  const perPlayerPerRound = useMemo(() => {
-    const out: Record<string, Record<string, number | null>> = {};
-    for (const p of players) out[p.id] = {};
+  const botbPerPlayer = useMemo(() => {
+    // per player: per selected round total stableford + overall sum
+    const per: Record<string, { byRoundId: Record<string, number>; total: number }> = {};
+    for (const p of players) per[p.id] = { byRoundId: {}, total: 0 };
 
-    const roundsCtx = (ctx as any)?.rounds;
-    const getRoundCtx = (roundId: string) => {
-      if (!Array.isArray(roundsCtx)) return null;
-      return roundsCtx.find((x: any) => String(x?.roundId) === String(roundId)) ?? null;
-    };
+    // ctx.rounds is what H2Z uses; it exposes netPointsForHole + scores arrays
+    const ctxRounds = (ctx as any)?.rounds;
+    if (!Array.isArray(ctxRounds)) return per;
 
-    for (const p of players) {
-      for (const r of sortedRounds) {
-        const key = r.id;
+    const selectedRoundIdSet = new Set(selectedRounds.map((r) => String(r.id)));
 
-        if (!playingSet.has(`${r.id}|${p.id}`)) {
-          out[p.id][key] = null;
-          continue;
+    for (const r of selectedRounds) {
+      const roundId = String(r.id);
+      if (!selectedRoundIdSet.has(roundId)) continue;
+
+      const roundCtx = ctxRounds.find((x: any) => String(x?.roundId) === roundId || String(x?.id) === roundId);
+      // buildTourCompetitionContext’s internal shape (as used by h2z.ts) expects roundCtx.roundId
+      const effectiveRoundCtx =
+        roundCtx && typeof roundCtx === "object"
+          ? roundCtx
+          : (ctxRounds.find((x: any) => String(x?.roundId) === roundId) ?? null);
+
+      if (!effectiveRoundCtx) continue;
+
+      for (const p of players) {
+        const key = `${roundId}|${p.id}`;
+        if (!playingSet.has(key)) continue;
+
+        // roundCtx.scores[playerId] => array of 18 raw score cells, but we can rely on netPointsForHole
+        // We compute points only for entered holes (blank ignored), pickup is already handled upstream.
+        const scoreArr = effectiveRoundCtx?.scores?.[String(p.id)];
+        if (!Array.isArray(scoreArr) || scoreArr.length < 18) continue;
+
+        let sum = 0;
+        for (let holeIndex = 0; holeIndex < 18; holeIndex++) {
+          const raw = String(scoreArr[holeIndex] ?? "").trim().toUpperCase();
+          if (!raw) continue; // blank not entered
+          const pts = n(effectiveRoundCtx.netPointsForHole?.(p.id, holeIndex), 0);
+          sum += pts;
         }
 
-        const rc = getRoundCtx(r.id);
-        if (!rc || typeof rc.netPointsForHole !== "function") {
-          out[p.id][key] = null;
-          continue;
-        }
-
-        let total = 0;
-        for (let i = 0; i < 18; i++) {
-          const pts = Number(rc.netPointsForHole(p.id, i));
-          if (Number.isFinite(pts)) total += pts;
-        }
-        out[p.id][key] = total;
+        per[p.id].byRoundId[roundId] = sum;
+        per[p.id].total += sum;
       }
     }
 
-    return out;
-  }, [ctx, players, sortedRounds, playingSet]);
+    return per;
+  }, [ctx, players, selectedRounds, playingSet]);
 
-  const totals = useMemo(() => {
-    const totalByPlayer: Record<string, number | null> = {};
-    const entries: Array<{ id: string; value: number }> = [];
+  const rankByPlayerId = useMemo(() => {
+    const entries = players.map((p) => ({
+      id: p.id,
+      value: n(botbPerPlayer[p.id]?.total, 0),
+    }));
+    // higher is better
+    return rankWithTies(entries, false);
+  }, [players, botbPerPlayer]);
 
-    for (const p of players) {
-      let sum = 0;
-      let any = false;
+  const botbDescription = useMemo(() => {
+    if (!botb?.enabled) return "BotB is disabled for this tour.";
+    if (selectedRounds.length === 0) return "BotB is enabled, but no rounds are selected.";
 
-      for (const r of sortedRounds) {
-        const v = perPlayerPerRound[p.id]?.[r.id];
-        if (typeof v === "number") {
-          sum += v;
-          any = true;
-        }
-      }
-
-      totalByPlayer[p.id] = any ? sum : null;
-      if (any) entries.push({ id: p.id, value: sum });
-    }
-
-    const rankById = rankWithTies(entries);
-
-    return { totalByPlayer, rankById };
-  }, [players, sortedRounds, perPlayerPerRound]);
-
-  const headerLabel = useMemo(() => {
-    if (!botb?.enabled) return "BotB (disabled)";
-    if (!botb.round_nos?.length) return "BotB (no rounds selected)";
-    return `BotB (R${botb.round_nos.join(", R")})`;
-  }, [botb]);
-
-  const roundsLabel = useMemo(() => {
-    if (!sortedRounds.length) return "";
-    const parts = sortedRounds.map((r) => {
-      const rn = r.round_no ?? "?";
-      const rname = safeName(r.name, `Round ${rn}`);
-      const cname = r.course_id ? (coursesById[r.course_id] ?? "(course)") : "(course)";
-      return `R${rn} ${rname} — ${cname}`;
+    const parts = selectedRounds.map((r) => {
+      const rn = Number.isFinite(Number(r.round_no)) ? `R${Number(r.round_no)}` : "R?";
+      const nm = safeName(r.name, rn);
+      return `${rn}: ${nm}`;
     });
-    return parts.join(" · ");
-  }, [sortedRounds, coursesById]);
+
+    return `BotB = aggregate Stableford score on ${parts.join(" · ")}`;
+  }, [botb, selectedRounds]);
 
   if (!tourId || !isLikelyUuid(tourId)) {
     return (
@@ -482,73 +457,85 @@ export default function MobileBotBPage() {
 
   const thBase = "border-b border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700";
   const tdBase = "px-3 py-2 text-right text-sm text-gray-900 align-top";
+  const medalClass = (rank: number | null) =>
+    rank === 1
+      ? "border border-yellow-500 bg-yellow-300 text-gray-900"
+      : rank === 2
+      ? "border border-gray-400 bg-gray-200 text-gray-900"
+      : rank === 3
+      ? "border border-amber-700 bg-amber-400 text-gray-900"
+      : "bg-transparent";
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-gray-900">{headerLabel}</div>
-              {tour?.name ? <div className="text-xs text-gray-600">{tour.name}</div> : null}
-            </div>
-            <Link className="text-xs underline text-gray-700 mt-1" href={`/m/tours/${tourId}/competitions`}>
-              Back
-            </Link>
-          </div>
+          <div className="text-sm font-semibold text-gray-900">BotB leaderboard</div>
+          {tour?.name ? <div className="text-xs text-gray-600">{tour.name}</div> : null}
         </div>
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 py-4">
         {loading ? (
           <div className="space-y-3">
-            <div className="h-5 w-56 rounded bg-gray-100" />
+            <div className="h-5 w-44 rounded bg-gray-100" />
             <div className="h-64 rounded-2xl border bg-white" />
           </div>
         ) : errorMsg ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
-        ) : !botb?.enabled ? (
-          <div className="rounded-2xl border p-4 text-sm text-gray-700">
-            BotB is disabled for this tour.
-          </div>
-        ) : sortedRounds.length === 0 ? (
-          <div className="rounded-2xl border p-4 text-sm text-gray-700">
-            BotB has no valid rounds selected (or selected round_nos don’t exist on rounds).
-          </div>
         ) : players.length === 0 ? (
-          <div className="rounded-2xl border p-4 text-sm text-gray-700">
-            No players found for this tour.
-          </div>
+          <div className="rounded-2xl border p-4 text-sm text-gray-700">No players found for this tour.</div>
         ) : (
           <>
+            <div className="mb-3 flex items-center justify-between">
+              <Link
+                href={`/m/tours/${tourId}/competitions`}
+                className="text-sm underline text-gray-800"
+              >
+                ← Back to competitions
+              </Link>
+            </div>
+
             <div className="rounded-2xl border border-gray-200 bg-white shadow-sm max-h-[70vh] overflow-auto">
               <table className="min-w-full border-collapse table-fixed">
                 <thead>
                   <tr className="bg-gray-50">
+                    {/* Player (sticky left) */}
                     <th
-                      className={`sticky left-0 top-0 z-50 bg-gray-50 border-r border-gray-200 ${thBase} text-left`}
+                      className={`sticky left-0 top-0 z-50 bg-gray-50 border-r border-gray-200 ${thBase} text-left whitespace-nowrap`}
                       style={{ width: 140, minWidth: 140 }}
                     >
                       Player
                     </th>
 
-                    {sortedRounds.map((r) => (
-                      <th key={r.id} className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>
-                        R{r.round_no ?? "?"}
-                      </th>
-                    ))}
+                    {/* BotB Total (SECOND COLUMN) — bold, wide, no-wrap */}
+                    <th
+                      className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right whitespace-nowrap`}
+                      style={{ width: 120, minWidth: 120 }}
+                    >
+                      BotB total
+                    </th>
 
-                    <th className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>Total</th>
+                    {/* Selected BotB rounds */}
+                    {selectedRounds.map((r) => {
+                      const rn = Number.isFinite(Number(r.round_no)) ? `R${Number(r.round_no)}` : "R?";
+                      return (
+                        <th key={r.id} className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right whitespace-nowrap`}>
+                          {rn}
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
 
                 <tbody>
                   {players.map((p) => {
-                    const total = totals.totalByPlayer[p.id];
-                    const rank = total == null ? null : totals.rankById.get(p.id) ?? null;
+                    const total = n(botbPerPlayer[p.id]?.total, 0);
+                    const rank = rankByPlayerId.get(p.id) ?? null;
 
                     return (
                       <tr key={p.id} className="border-b last:border-b-0">
+                        {/* Player */}
                         <td
                           className="sticky left-0 z-30 bg-white border-r border-gray-200 px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap"
                           style={{ width: 140, minWidth: 140 }}
@@ -556,24 +543,25 @@ export default function MobileBotBPage() {
                           {p.name}
                         </td>
 
-                        {sortedRounds.map((r) => {
-                          const v = perPlayerPerRound[p.id]?.[r.id];
+                        {/* BotB Total SECOND — bold, no-wrap, wide enough */}
+                        <td
+                          className={`${tdBase} whitespace-nowrap`}
+                          style={{ width: 120, minWidth: 120 }}
+                        >
+                          <span className={`inline-flex justify-end rounded-md px-2 py-1 font-bold ${medalClass(rank)}`}>
+                            {total} <span className="text-gray-700">&nbsp;({rank ?? 0})</span>
+                          </span>
+                        </td>
+
+                        {/* Round columns */}
+                        {selectedRounds.map((r) => {
+                          const v = botbPerPlayer[p.id]?.byRoundId?.[String(r.id)];
                           return (
                             <td key={`${p.id}-${r.id}`} className={tdBase}>
                               {typeof v === "number" ? v : <span className="text-gray-400">—</span>}
                             </td>
                           );
                         })}
-
-                        <td className={tdBase}>
-                          {total == null ? (
-                            <span className="text-gray-400">—</span>
-                          ) : (
-                            <>
-                              {total} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
-                            </>
-                          )}
-                        </td>
                       </tr>
                     );
                   })}
@@ -581,7 +569,7 @@ export default function MobileBotBPage() {
               </table>
 
               <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                BotB = aggregate Stableford on {roundsLabel || "(selected rounds)"}.
+                {botbDescription}
               </div>
             </div>
           </>
