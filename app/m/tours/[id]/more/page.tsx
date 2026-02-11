@@ -39,6 +39,7 @@ export default function MobileMorePage() {
   const pillDisabled = "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed";
 
   // ✅ Hard-force the bucket name (ignore DB)
+  // Your bucket is: tours-pdfs
   const PDF_BUCKET = "tours-pdfs";
 
   const topItems = useMemo(
@@ -108,31 +109,37 @@ export default function MobileMorePage() {
   }, [tourId]);
 
   async function openDoc(doc: TourDocRow) {
-    // Signed URL so bucket can stay private
-    const bucket = PDF_BUCKET; // hard-forced
-    const path = String(doc.storage_path ?? "").trim();
+    const bucket = PDF_BUCKET;
+    const rawPath = String(doc.storage_path ?? "").trim();
 
-    if (!path) {
+    if (!rawPath) {
       alert("This document has no storage path.");
       return;
     }
 
-    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 10); // 10 minutes
-    if (error) {
-      alert(error.message || "Failed to open document.");
-      return;
+    // ✅ Fix common upload mistake: objects stored as "tours/tours/<tourId>/..."
+    // Your DB paths look like: "tours/<tourId>/file.pdf"
+    // Your actual storage objects are: "tours/tours/<tourId>/file.pdf"
+    //
+    // We try DB path first, then fallback to the double-prefix.
+    const tryPaths: string[] = [rawPath];
+
+    if (rawPath.startsWith("tours/") && !rawPath.startsWith("tours/tours/")) {
+      tryPaths.push("tours/" + rawPath); // becomes tours/tours/...
     }
 
-    const url = data?.signedUrl;
-    if (!url) {
-      alert("No URL returned.");
-      return;
+    for (const p of tryPaths) {
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(p, 60 * 10); // 10 min
+      if (!error && data?.signedUrl) {
+        window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
     }
 
-    window.open(url, "_blank", "noopener,noreferrer");
+    alert(`Object not found.\nTried:\n- ${tryPaths.join("\n- ")}`);
   }
 
-  // We want 5 buttons in 2 rows: 3 + 2
+  // We want 5 buttons in 2 rows: 3 + 2 (with placeholders to keep layout neat)
   const docsRow1 = docs.slice(0, 3);
   const docsRow2 = docs.slice(3, 5);
 
