@@ -1,4 +1,3 @@
-// app/m/tours/[id]/more/page.tsx
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
@@ -21,38 +20,38 @@ function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
+// ✅ bucket is private; we use signed URLs
+const PDF_BUCKET = "tours-pdfs";
+
+function normalizeStoragePath(p: string) {
+  let s = String(p ?? "").trim();
+  if (!s) return "";
+  // Fix accidental double folder
+  s = s.replace(/^tours\/tours\//i, "tours/");
+  // Collapse any repeated slashes
+  s = s.replace(/\/{2,}/g, "/");
+  return s;
+}
+
 export default function MobileMorePage() {
   const params = useParams();
   const router = useRouter();
 
   const tourId = (params?.id as string) || "";
 
-  // Row 1: starts active (black)
   const [activeTop, setActiveTop] = useState<MoreTab>("details");
 
   const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
   const [docsError, setDocsError] = useState<string>("");
 
+  // ✅ helps debug “nothing happens”
+  const [opening, setOpening] = useState<string>("");
+
   const pillBase = "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
   const pillActive = "border-gray-900 bg-gray-900 text-white";
   const pillIdle = "border-gray-200 bg-white text-gray-900";
   const pillDisabled = "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed";
-
-  // ✅ Correct bucket name
-  const PDF_BUCKET = "tours-pdfs";
-
-  // ✅ Fix for mistakenly-stored paths like "tours/tours/<id>/file.pdf"
-  // We'll normalize by collapsing "tours/tours/" -> "tours/"
-  function normalizeStoragePath(p: string) {
-    let s = String(p ?? "").trim();
-    if (!s) return "";
-    // remove accidental double "tours/"
-    s = s.replace(/^tours\/tours\//i, "tours/");
-    // also collapse any repeated slashes
-    s = s.replace(/\/{2,}/g, "/");
-    return s;
-  }
 
   const topItems = useMemo(
     () =>
@@ -71,7 +70,6 @@ export default function MobileMorePage() {
     router.push(item.href);
   }
 
-  // Load docs for this tour
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
@@ -90,14 +88,12 @@ export default function MobileMorePage() {
 
         if (error) throw error;
 
-        // ✅ Still read rows from DB, but force storage_bucket to the correct bucket
-        // ✅ Also normalize paths so "tours/tours/..." still works
         const rows = ((data ?? []) as any[]).map((x) => ({
           id: String(x.id),
           tour_id: String(x.tour_id),
           doc_key: String(x.doc_key),
           title: String(x.title),
-          storage_bucket: PDF_BUCKET, // hard-forced
+          storage_bucket: PDF_BUCKET, // force correct bucket
           storage_path: normalizeStoragePath(String(x.storage_path)),
           sort_order: Number(x.sort_order ?? 0),
         })) as TourDocRow[];
@@ -130,43 +126,35 @@ export default function MobileMorePage() {
       return;
     }
 
-    // ✅ IMPORTANT FOR iOS/Safari:
-    // open the tab immediately before any await, or Safari blocks it
-    const newTab = window.open("", "_blank", "noopener,noreferrer");
-    if (!newTab) {
-      alert("Your browser blocked the popup. Please allow popups for this site.");
-      return;
-    }
+    setOpening(`Opening: ${doc.title}…`);
 
     try {
-      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 10); // 10 minutes
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 10);
       if (error) throw error;
 
       const url = data?.signedUrl;
-      if (!url) throw new Error("No URL returned.");
+      if (!url) throw new Error("No signed URL returned.");
 
-      newTab.location.href = url;
+      // ✅ Most reliable on iPhone + desktop: navigate same tab (no popup blockers)
+      window.location.href = url;
     } catch (e: any) {
-      newTab.close();
       alert(e?.message ?? "Failed to open document.");
+      setOpening("");
     }
   }
 
-  // We want 5 buttons in 2 rows: 3 + 2 (but keep layout 3 columns)
   const docsRow1 = docs.slice(0, 3);
   const docsRow2 = docs.slice(3, 5);
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto max-w-md px-4 py-3">
+        <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-sm font-semibold text-gray-900">More</div>
         </div>
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 pt-4 space-y-3">
-        {/* Row 1 */}
         <div className="flex gap-2">
           {topItems.map((it) => (
             <button
@@ -180,11 +168,12 @@ export default function MobileMorePage() {
           ))}
         </div>
 
-        {/* Documents header */}
         <div className="rounded-2xl border border-gray-200 bg-white p-3">
           <div className="text-xs font-semibold text-gray-700">Tour PDFs</div>
           <div className="mt-1 text-[11px] text-gray-500">
-            {loadingDocs
+            {opening
+              ? opening
+              : loadingDocs
               ? "Loading documents..."
               : docsError
               ? docsError
@@ -194,7 +183,6 @@ export default function MobileMorePage() {
           </div>
         </div>
 
-        {/* Docs buttons */}
         <div className="space-y-2">
           <div className="flex gap-2">
             {docsRow1.map((d) => (
@@ -203,7 +191,6 @@ export default function MobileMorePage() {
               </button>
             ))}
 
-            {/* Fill if fewer than 3 */}
             {Array.from({ length: Math.max(0, 3 - docsRow1.length) }).map((_, i) => (
               <button
                 key={`ph1-${i}`}
@@ -224,7 +211,6 @@ export default function MobileMorePage() {
               </button>
             ))}
 
-            {/* Fill to 3 columns for consistent layout */}
             {Array.from({ length: Math.max(0, 3 - docsRow2.length) }).map((_, i) => (
               <button
                 key={`ph2-${i}`}
