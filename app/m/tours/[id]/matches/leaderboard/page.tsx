@@ -847,10 +847,12 @@ export default function MatchesLeaderboardPage() {
     return (
       <div className="min-h-dvh bg-white text-gray-900">
         <div className="mx-auto w-full max-w-md px-4 py-6">
-          {/* Updated header (no Results/Format buttons) */}
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-base font-semibold text-gray-900">Matchplay leaderboard</div>
+          {/* Header: Matchplay leaderboard + divider (no buttons) */}
+          <div className="border-b border-slate-200 pb-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-base font-semibold text-gray-900">Matchplay leaderboard</div>
+              </div>
             </div>
           </div>
 
@@ -872,10 +874,12 @@ export default function MatchesLeaderboardPage() {
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
       <div className="mx-auto w-full max-w-md px-4 py-4">
-        {/* Updated header (no Results/Format buttons) */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-base font-semibold text-gray-900">Matchplay leaderboard</div>
+        {/* Header: Matchplay leaderboard + divider (no Results/Format buttons) */}
+        <div className="border-b border-slate-200 pb-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-base font-semibold text-gray-900">Matchplay leaderboard</div>
+            </div>
           </div>
         </div>
 
