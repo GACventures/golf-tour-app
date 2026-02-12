@@ -38,7 +38,7 @@ const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
 const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
 const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
 
-// ✅ Use the same bucket as the /more page (ignore DB bucket)
+// ✅ single source of truth for bucket name
 const PDF_BUCKET = "tours-pdfs";
 
 function parseDate(value: string | null): Date | null {
@@ -66,6 +66,19 @@ function formatTourDates(start: Date | null, end: Date | null) {
   return "";
 }
 
+function normalizeStoragePath(p: string, tourId: string) {
+  const path = String(p ?? "").trim().replace(/^\/+/, "");
+  if (!path) return "";
+
+  // If DB says: tours/<tourId>/file.pdf
+  // but storage is: tours/tours/<tourId>/file.pdf
+  if (path.startsWith(`tours/${tourId}/`)) {
+    return `tours/tours/${tourId}/${path.slice(`tours/${tourId}/`.length)}`;
+  }
+
+  return path;
+}
+
 export default function MobileTourLandingPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -82,7 +95,7 @@ export default function MobileTourLandingPage() {
     async function loadAll() {
       setLoading(true);
 
-      const [{ data: t }, { data: r }, { data: d }] = await Promise.all([
+      const [{ data: t, error: tErr }, { data: r, error: rErr }, { data: d, error: dErr }] = await Promise.all([
         supabase.from("tours").select("id,name,start_date,end_date,image_url").eq("id", tourId).single(),
         supabase.from("rounds").select("id,tour_id,played_on").eq("tour_id", tourId),
         supabase
@@ -94,9 +107,25 @@ export default function MobileTourLandingPage() {
 
       if (!alive) return;
 
-      setTour(t as TourRow);
-      setRounds((r ?? []) as RoundRow[]);
-      setDocs((d ?? []) as TourDocRow[]);
+      // Tour/rounds can still render even if docs query fails
+      if (!tErr) setTour(t as TourRow);
+      if (!rErr) setRounds((r ?? []) as RoundRow[]);
+
+      if (!dErr) {
+        // ✅ Force bucket to known constant regardless of DB contents
+        const cleanedDocs: TourDocRow[] = (d ?? []).map((x: any) => ({
+          id: String(x.id),
+          tour_id: String(x.tour_id),
+          title: String(x.title ?? "").trim() || "Document",
+          storage_bucket: PDF_BUCKET,
+          storage_path: String(x.storage_path ?? "").trim(),
+          sort_order: Number(x.sort_order ?? 0),
+        }));
+        setDocs(cleanedDocs);
+      } else {
+        setDocs([]);
+      }
+
       setLoading(false);
     }
 
@@ -124,18 +153,6 @@ export default function MobileTourLandingPage() {
   const end = parseDate(tour?.end_date || derivedDates.end);
   const dateLabel = formatTourDates(start, end);
 
-  // ✅ Match /more behavior: strip leading slashes and fix common "tours/tours/<tourId>" mismatch
-  function normalizeStoragePath(p: string) {
-    const path = String(p ?? "").trim().replace(/^\/+/, "");
-    if (!path) return "";
-
-    if (path.startsWith(`tours/${tourId}/`)) {
-      return `tours/tours/${tourId}/${path.slice(`tours/${tourId}/`.length)}`;
-    }
-
-    return path;
-  }
-
   async function openDocByIndex(idx: number) {
     const doc = docs[idx];
     if (!doc) {
@@ -144,28 +161,31 @@ export default function MobileTourLandingPage() {
     }
 
     const rawPath = String(doc.storage_path ?? "").trim();
-    const path = normalizeStoragePath(rawPath);
+    const path = normalizeStoragePath(rawPath, tourId);
 
     if (!path) {
-      alert("This document has no storage path.");
+      alert("Document not available for this tour.");
       return;
     }
 
-    // ✅ Force bucket to tours-pdfs (ignore doc.storage_bucket)
-    const { data, error } = await supabase.storage.from(PDF_BUCKET).createSignedUrl(path, 60 * 10);
+    // ✅ Buckets are public, so public URL is simplest + avoids signed-url/bucket confusion
+    // If public URL doesn't exist (file missing), we fall back to signed URL attempt.
+    const publicRes = supabase.storage.from(PDF_BUCKET).getPublicUrl(path);
+    const publicUrl = publicRes?.data?.publicUrl;
 
-    if (error) {
-      alert(`Unable to open document.\n\n${error.message}\n\nBucket: ${PDF_BUCKET}\nPath: ${path}`);
+    if (publicUrl) {
+      window.open(publicUrl, "_blank", "noopener,noreferrer");
       return;
     }
 
-    const url = data?.signedUrl;
-    if (!url) {
-      alert(`No URL returned.\n\nBucket: ${PDF_BUCKET}\nPath: ${path}`);
+    // Fallback: signed URL
+    const { data, error } = await supabase.storage.from(PDF_BUCKET).createSignedUrl(path, 600);
+    if (error || !data?.signedUrl) {
+      alert(error?.message || "Unable to open document.");
       return;
     }
 
-    window.open(url, "_blank", "noopener,noreferrer");
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   }
 
   const baseBtn = "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
@@ -200,23 +220,14 @@ export default function MobileTourLandingPage() {
 
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
         <div className="grid grid-cols-3 gap-2">
-          <button
-            className={`${baseBtn} ${rowColors[0]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}
-          >
-            Daily
-            <br />
-            Tee times
+          <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>
+            Daily<br />Tee times
           </button>
           <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>
-            Daily
-            <br />
-            Results
+            Daily<br />Results
           </button>
           <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>
-            Score
-            <br />
-            Entry
+            Score<br />Entry
           </button>
 
           <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>
@@ -230,30 +241,20 @@ export default function MobileTourLandingPage() {
           </button>
 
           <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>
-            Matchplay
-            <br />
-            Format
+            Matchplay<br />Format
           </button>
           <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>
-            Matchplay
-            <br />
-            Results
+            Matchplay<br />Results
           </button>
           <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>
-            Matchplay
-            <br />
-            Leaderboard
+            Matchplay<br />Leaderboard
           </button>
 
           <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>
-            Tour
-            <br />
-            Details
+            Tour<br />Details
           </button>
           <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>
-            Tour
-            <br />
-            Admin
+            Tour<br />Admin
           </button>
           <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>
             Rehandicapping
@@ -270,20 +271,17 @@ export default function MobileTourLandingPage() {
           </button>
 
           <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openDocByIndex(3)}>
-            Player
-            <br />
-            Profiles
+            Player<br />Profiles
           </button>
           <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openDocByIndex(4)}>
             Comps etc
           </button>
+
           <button
             className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
             onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
           >
-            App
-            <br />
-            User Guide
+            App<br />User Guide
           </button>
         </div>
 
