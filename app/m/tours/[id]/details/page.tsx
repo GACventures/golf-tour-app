@@ -298,14 +298,36 @@ export default function MobileTourDetailsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900">
-      {/* Header */}
-      <div className="sticky top-0 z-10 border-b bg-white">
-        <div className="h-12 px-4 flex items-center">
-          <button onClick={() => router.back()} className="mr-3 text-xl" aria-label="Back">
-            ‹
+      {/* Header (standard 3-band) */}
+      <div className="sticky top-0 z-10 bg-white/95 backdrop-blur">
+        {/* Band 1: Tour name + Back */}
+        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-900">{tour?.name ?? "Tour"}</div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm active:bg-slate-50"
+          >
+            Back
           </button>
-          <div className="font-semibold">Tour details</div>
         </div>
+
+        {/* Divider 1 */}
+        <div className="border-b border-slate-200" />
+
+        {/* Band 2: Page title */}
+        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-base font-semibold text-slate-900">Tour details</div>
+          </div>
+          <div />
+        </div>
+
+        {/* Divider 2 */}
+        <div className="border-b border-slate-200" />
       </div>
 
       <main className="max-w-md mx-auto px-4 py-4 space-y-6">
@@ -424,9 +446,7 @@ export default function MobileTourDetailsPage() {
               <div className="font-semibold mb-2">{rehandicapHeading}</div>
 
               {rehandicapEnabled ? (
-                <div className="text-sm text-gray-700">
-                  {rehandicapSummary ? rehandicapSummary : "(No summary provided)"}
-                </div>
+                <div className="text-sm text-gray-700">{rehandicapSummary ? rehandicapSummary : "(No summary provided)"}</div>
               ) : null}
             </section>
           </>
