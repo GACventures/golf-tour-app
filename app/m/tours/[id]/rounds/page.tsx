@@ -8,19 +8,29 @@ type RoundRow = {
   id: string;
   tour_id: string;
   course_id: string | null;
+
   round_no?: number | null;
+
   round_date?: string | null;
   played_on?: string | null;
   created_at: string | null;
+
   name?: string | null;
   courses?: { name: string } | { name: string }[] | null;
 };
+
+type Mode = "tee-times" | "score" | "results";
 
 function getCourseName(r: RoundRow) {
   const c: any = r.courses;
   if (!c) return "Course";
   if (Array.isArray(c)) return c?.[0]?.name ?? "Course";
   return c?.name ?? "Course";
+}
+
+function normalizeMode(raw: string | null): Mode {
+  if (raw === "tee-times" || raw === "score" || raw === "results") return raw;
+  return "score";
 }
 
 function pickBestRoundDateISO(r: RoundRow): string | null {
@@ -50,13 +60,22 @@ function fmtAuMelbourneDate(d: Date | null): string {
   return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`.replace(/\s+/g, " ");
 }
 
+function isMissingColumnError(msg: string, column: string) {
+  const m = msg.toLowerCase();
+  const c = column.toLowerCase();
+  return (
+    m.includes("does not exist") &&
+    (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `) || m.includes(`_${c}`))
+  );
+}
+
 export default function MobileRoundsHubPage() {
   const params = useParams<{ id: string }>();
   const tourId = params?.id ?? "";
   const router = useRouter();
   const sp = useSearchParams();
 
-  const mode = sp.get("mode") ?? "score";
+  const mode = normalizeMode(sp.get("mode"));
 
   const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,26 +84,66 @@ export default function MobileRoundsHubPage() {
   useEffect(() => {
     let alive = true;
 
+    async function fetchRounds(selectCols: string) {
+      return supabase
+        .from("rounds")
+        .select(selectCols)
+        .eq("tour_id", tourId)
+        .order("round_no", { ascending: true })
+        .order("created_at", { ascending: true });
+    }
+
     async function loadRounds() {
       setLoading(true);
       setErrorMsg("");
 
-      const { data, error } = await supabase
-        .from("rounds")
-        .select("id,tour_id,course_id,created_at,name,round_no,round_date,played_on,courses(name)")
-        .eq("tour_id", tourId)
-        .order("round_no", { ascending: true })
-        .order("created_at", { ascending: true });
+      const baseCols = "id,tour_id,course_id,created_at,name,round_no,courses(name)";
+      const cols1 = `${baseCols},round_date,played_on`;
+      const cols2 = `${baseCols},played_on`;
 
+      let rows: RoundRow[] = [];
+
+      const r1 = await fetchRounds(cols1);
       if (!alive) return;
 
-      if (error) {
-        setErrorMsg(error.message);
-        setRounds([]);
-      } else {
-        setRounds((data ?? []) as RoundRow[]);
+      if (!r1.error) {
+        rows = (r1.data ?? []) as unknown as RoundRow[];
+        setRounds(rows);
+        setLoading(false);
+        return;
       }
 
+      if (isMissingColumnError(r1.error.message, "round_date")) {
+        const r2 = await fetchRounds(cols2);
+        if (!alive) return;
+
+        if (!r2.error) {
+          rows = (r2.data ?? []) as unknown as RoundRow[];
+          setRounds(rows);
+          setLoading(false);
+          return;
+        }
+
+        if (isMissingColumnError(r2.error.message, "played_on")) {
+          const r3 = await fetchRounds(baseCols);
+          if (!alive) return;
+
+          if (!r3.error) {
+            rows = (r3.data ?? []) as unknown as RoundRow[];
+            setRounds(rows);
+            setLoading(false);
+            return;
+          }
+
+          setErrorMsg(r3.error.message);
+        } else {
+          setErrorMsg(r2.error.message);
+        }
+      } else {
+        setErrorMsg(r1.error.message);
+      }
+
+      setRounds([]);
       setLoading(false);
     }
 
@@ -120,22 +179,11 @@ export default function MobileRoundsHubPage() {
     return arr;
   }, [rounds]);
 
-  const pageTitle =
-    mode === "tee-times"
-      ? "Daily tee times"
-      : mode === "results"
-      ? "Daily results"
-      : "Score entry";
+  const pageTitle = mode === "tee-times" ? "Daily tee times" : mode === "results" ? "Daily results" : "Score entry";
 
   function openRound(roundId: string) {
     const base = `/m/tours/${tourId}/rounds/${roundId}`;
-    const href =
-      mode === "tee-times"
-        ? `${base}/tee-times`
-        : mode === "results"
-        ? `${base}/results`
-        : `${base}/scoring`;
-
+    const href = mode === "tee-times" ? `${base}/tee-times` : mode === "results" ? `${base}/results` : `${base}/scoring`;
     router.push(href);
   }
 
@@ -186,9 +234,7 @@ export default function MobileRoundsHubPage() {
           </div>
         )}
 
-        <div className="mt-3 text-[11px] text-gray-400">
-          Dates shown in Australia/Melbourne.
-        </div>
+        <div className="mt-3 text-[11px] text-gray-400">Dates shown in Australia/Melbourne.</div>
       </div>
     </div>
   );
