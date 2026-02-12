@@ -97,7 +97,6 @@ function parseDateForDisplay(s: string | null): Date | null {
 
 function fmtDate(d: Date | null): string {
   if (!d) return "";
-  // No explicit timezone mention/handling in UI (display-only).
   return new Intl.DateTimeFormat("en-AU", {
     weekday: "short",
     day: "2-digit",
@@ -113,9 +112,8 @@ function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
   return Number.isFinite(n) ? String(n) : "";
 }
 
-// Stableford (net) per hole
 function netStablefordPointsForHole(params: {
-  rawScore: string; // "" | "P" | "number"
+  rawScore: string;
   par: number;
   strokeIndex: number;
   playingHandicap: number;
@@ -147,17 +145,15 @@ function formatLabel(f: SettingsRow["format"]) {
 }
 
 type HoleOutcome = "A" | "B" | "HALVED" | "NO_DATA";
-
 type MatchStop = { stopHoleExclusive: number; reason: "NO_DATA" | "CLINCHED" | null; decidedAt: number | null };
 
 function computeStopAndRunning(holeOutcomes: HoleOutcome[]) {
-  let diff = 0; // + => A leading; - => B leading
+  let diff = 0;
   let decidedAt: number | null = null;
 
   for (let h = 1; h <= 18; h++) {
     const w = holeOutcomes[h - 1] ?? "NO_DATA";
     if (w === "NO_DATA") {
-      // stop at first missing-data hole
       return { stopHoleExclusive: h, reason: "NO_DATA" as const, decidedAt: null };
     }
 
@@ -167,7 +163,6 @@ function computeStopAndRunning(holeOutcomes: HoleOutcome[]) {
     const holesRemaining = 18 - h;
     if (Math.abs(diff) > holesRemaining) {
       decidedAt = h;
-      // stop after clinch hole
       return { stopHoleExclusive: h + 1, reason: "CLINCHED" as const, decidedAt };
     }
   }
@@ -175,7 +170,6 @@ function computeStopAndRunning(holeOutcomes: HoleOutcome[]) {
   return { stopHoleExclusive: 19, reason: null, decidedAt: null };
 }
 
-// Used for per-row status strings (kept as-is except for display trimming in the table)
 function liveStatusText(diff: number, thru: number) {
   if (thru <= 0) return "Not started";
   if (diff === 0) return `All Square (thru ${thru})`;
@@ -196,11 +190,9 @@ function finalText(diff: number, decidedAt: number | null) {
   return `${winner} wins ${up} up`;
 }
 
-// Display-only helper: remove "(thru X...)" / "(after X...)" suffixes from status strings
 function stripThruSuffix(s: string) {
   const raw = String(s ?? "").trim();
   if (!raw) return "";
-  // remove trailing parenthetical that contains "thru" or "after" + a number
   return raw.replace(/\s*\((?:thru|after)\s*\d+[^)]*\)\s*$/i, "").trim();
 }
 
@@ -212,8 +204,6 @@ function renderLiveSummary(args: { diff: number; thru: number; leftLabel: string
 
   const leaderLabel = diff > 0 ? leftLabel : rightLabel;
   const up = Math.abs(diff);
-
-  // wording requested: "2 up through 5"
   return `${leaderLabel} is ${up} up through ${thru}`;
 }
 
@@ -270,7 +260,6 @@ export default function MatchDetailPage() {
       setErrorMsg("");
 
       try {
-        // Round meta (column fallback)
         const baseCols = "id,tour_id,course_id,round_no,created_at,courses(name)";
         const cols1 = `${baseCols},round_date,played_on`;
         const cols2 = `${baseCols},played_on`;
@@ -298,7 +287,6 @@ export default function MatchDetailPage() {
           rRow = r1.data;
         }
 
-        // Settings for this round
         const { data: sRow, error: sErr } = await supabase
           .from("match_round_settings")
           .select("id,tour_id,round_id,group_a_id,group_b_id,format,double_points")
@@ -315,7 +303,6 @@ export default function MatchDetailPage() {
           return;
         }
 
-        // Group names
         const { data: gRows, error: gErr } = await supabase
           .from("tour_groups")
           .select("id,name")
@@ -325,7 +312,6 @@ export default function MatchDetailPage() {
         const gA = (gRows ?? []).find((g: any) => String(g.id) === set.group_a_id) ?? null;
         const gB = (gRows ?? []).find((g: any) => String(g.id) === set.group_b_id) ?? null;
 
-        // Match row
         const { data: mRow, error: mErr } = await supabase
           .from("match_round_matches")
           .select("id,match_no,settings_id,match_round_match_players(side,slot,player_id)")
@@ -344,7 +330,6 @@ export default function MatchDetailPage() {
 
         const playerIds = Array.from(new Set([A1, A2, B1, B2].map((x) => String(x || "").trim()).filter(Boolean)));
 
-        // Players info
         const { data: pRows, error: pErr } = await supabase.from("players").select("id,name,gender").in("id", playerIds);
         if (pErr) throw pErr;
 
@@ -353,7 +338,6 @@ export default function MatchDetailPage() {
           pMap.set(String(p.id), { id: String(p.id), name: safeText(p.name, "(unnamed)"), gender: p.gender ?? null });
         });
 
-        // Round players (handicap + playing)
         const { data: rpRows, error: rpErr } = await supabase
           .from("round_players")
           .select("player_id,playing,playing_handicap")
@@ -370,7 +354,6 @@ export default function MatchDetailPage() {
           });
         });
 
-        // Scores
         let sRows: ScoreRow[] = [];
         if (playerIds.length > 0) {
           const { data: scRows, error: scErr } = await supabase
@@ -388,7 +371,6 @@ export default function MatchDetailPage() {
           }));
         }
 
-        // If round_players.playing not set but scores exist, treat as playing (for match calc)
         const hasScore = new Set<string>();
         sRows.forEach((s) => hasScore.add(s.player_id));
         for (const pid of playerIds) {
@@ -400,7 +382,6 @@ export default function MatchDetailPage() {
           }
         }
 
-        // Pars
         const courseId = (rRow as any)?.course_id ?? null;
         let parsMap = new Map<Tee, Map<number, { par: number; si: number }>>();
         if (courseId) {
@@ -515,7 +496,6 @@ export default function MatchDetailPage() {
 
     const isBB = settings.format === "BETTERBALL_MATCHPLAY";
 
-    // Determine per-hole outcome (A/B/HALVED/NO_DATA) using "computable" rule
     const outcomes: HoleOutcome[] = [];
     const aPtsArr: Array<number | null> = [];
     const bPtsArr: Array<number | null> = [];
@@ -551,10 +531,8 @@ export default function MatchDetailPage() {
       else outcomes.push("HALVED");
     }
 
-    // Stop logic (first NO_DATA OR clinch)
     const stop: MatchStop = computeStopAndRunning(outcomes);
 
-    // Build table rows, blanking everything at/after stopHoleExclusive
     const rows: Array<{
       hole: number;
       aPts: number | null;
@@ -578,7 +556,6 @@ export default function MatchDetailPage() {
       const aPts = aPtsArr[h - 1];
       const bPts = bPtsArr[h - 1];
 
-      // By definition pre-stop, w cannot be NO_DATA.
       if (w === "A") runningDiff += 1;
       else if (w === "B") runningDiff -= 1;
       thru = h;
@@ -610,7 +587,7 @@ export default function MatchDetailPage() {
   const matchNo = matchRow?.match_no ?? null;
 
   const contextLine = useMemo(() => {
-    return {`Match ${matchNo ?? ""}${headerLine ? ` · ${headerLine}` : ""}`.trim() || "Match"};
+    return `Match ${matchNo ?? ""}${headerLine ? ` · ${headerLine}` : ""}`.trim() || "Match";
   }, [matchNo, headerLine]);
 
   const topSummaryText = useMemo(() => {
@@ -620,7 +597,6 @@ export default function MatchDetailPage() {
     const rows = holeRows.rows;
     const stop = holeRows.stop;
 
-    // Find last non-null status row to infer thru & whether final
     let lastIdx = -1;
     for (let i = Math.min(rows.length, 18) - 1; i >= 0; i--) {
       if (rows[i]?.status) {
@@ -633,8 +609,6 @@ export default function MatchDetailPage() {
 
     const thru = Number(rows[lastIdx]?.hole) || 0;
 
-    // Recompute diff up to `thru` using the same outcome rules embedded in status generation:
-    // We can derive diff from the "Win" column data we already stored in rows (A/B/HALVED).
     let diff = 0;
     for (let i = 0; i <= lastIdx; i++) {
       const w = rows[i]?.winner;
@@ -709,7 +683,6 @@ export default function MatchDetailPage() {
           </div>
         ) : (
           <>
-            {/* Match summary */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b space-y-2">
                 <div className="text-sm font-semibold text-gray-900">
@@ -722,7 +695,6 @@ export default function MatchDetailPage() {
                 </div>
               </div>
 
-              {/* Sides (single-row each) */}
               <div className="p-4 space-y-2">
                 <div className="text-xs font-semibold text-gray-700">Sides</div>
 
@@ -739,13 +711,11 @@ export default function MatchDetailPage() {
               </div>
             </section>
 
-            {/* Hole-by-hole */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
               <div className="p-4 border-b">
                 <div className="text-sm font-semibold text-gray-900">Hole-by-hole</div>
               </div>
 
-              {/* Table */}
               <div className="grid grid-cols-12 bg-gray-50 border-b">
                 <div className="col-span-2 px-3 py-2 text-[11px] font-semibold text-gray-700">Hole</div>
                 <div className="col-span-2 px-3 py-2 text-[11px] font-semibold text-gray-700 bg-blue-50">A</div>
