@@ -609,6 +609,10 @@ export default function MatchDetailPage() {
 
   const matchNo = matchRow?.match_no ?? null;
 
+  const contextLine = useMemo(() => {
+    return {`Match ${matchNo ?? ""}${headerLine ? ` · ${headerLine}` : ""}`.trim() || "Match"};
+  }, [matchNo, headerLine]);
+
   const topSummaryText = useMemo(() => {
     if (!settings) return "";
     if (!holeRows?.rows) return "Not started";
@@ -664,22 +668,29 @@ export default function MatchDetailPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
-      {/* Top bar — consistent with tee-times style */}
-      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-base font-semibold">Matches – Results</div>
-            <div className="truncate text-sm text-gray-500">
-              {`Match ${matchNo ?? ""}${headerLine ? ` · ${headerLine}` : ""}`.trim() || "Match"}
+      {/* IMPORTANT:
+          Tour name + Home is provided globally by app/m/tours/[id]/layout.tsx.
+          Do NOT render a second Tour/Home header here.
+      */}
+      <div className="sticky top-14 z-10 bg-white/95 backdrop-blur">
+        {/* Title band */}
+        <div className="border-b border-slate-200">
+          <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-base font-semibold text-slate-900">Matchplay results</div>
             </div>
-          </div>
 
-          <Link
-            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm active:bg-gray-50"
-            href={`/m/tours/${tourId}/matches/results/${roundId}`}
-          >
-            Back
-          </Link>
+            <Link className="text-sm font-semibold text-slate-900" href={`/m/tours/${tourId}/matches/results/${roundId}`}>
+              Back
+            </Link>
+          </div>
+        </div>
+
+        {/* Context band */}
+        <div className="border-b border-slate-200 bg-slate-50">
+          <div className="mx-auto w-full max-w-md px-4 py-2">
+            <div className="truncate text-sm font-semibold text-slate-800">{contextLine}</div>
+          </div>
         </div>
       </div>
 
@@ -702,13 +713,11 @@ export default function MatchDetailPage() {
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b space-y-2">
                 <div className="text-sm font-semibold text-gray-900">
-                  Match summary:{" "}
-                  <span className="font-semibold text-gray-900">{topSummaryText || "Not started"}</span>
+                  Match summary: <span className="font-semibold text-gray-900">{topSummaryText || "Not started"}</span>
                 </div>
 
                 <div className="text-xs text-gray-600">
-                  Round format:{" "}
-                  <span className="font-semibold text-gray-900">{formatLabel(settings.format)}</span>
+                  Round format: <span className="font-semibold text-gray-900">{formatLabel(settings.format)}</span>
                   {settings.double_points ? <span className="ml-2 font-semibold">· Double points</span> : null}
                 </div>
               </div>
@@ -719,15 +728,11 @@ export default function MatchDetailPage() {
 
                 <div className="rounded-xl border border-gray-200 overflow-hidden">
                   <div className="px-3 py-2 text-sm">
-                    <span className="font-semibold text-gray-900">
-                      A: {safeText(groupA?.name, "Team A")}:
-                    </span>{" "}
+                    <span className="font-semibold text-gray-900">A: {safeText(groupA?.name, "Team A")}:</span>{" "}
                     <span className="font-semibold text-gray-900">{labels.aLabel}</span>
                   </div>
                   <div className="border-t border-gray-200 px-3 py-2 text-sm">
-                    <span className="font-semibold text-gray-900">
-                      B: {safeText(groupB?.name, "Team B")}:
-                    </span>{" "}
+                    <span className="font-semibold text-gray-900">B: {safeText(groupB?.name, "Team B")}:</span>{" "}
                     <span className="font-semibold text-gray-900">{labels.bLabel}</span>
                   </div>
                 </div>
@@ -751,9 +756,10 @@ export default function MatchDetailPage() {
 
               <div className="divide-y">
                 {holeRows?.rows?.map((r: any) => {
-                  const win = r.winner as ("A" | "B" | "HALVED" | null);
+                  const win = r.winner as "A" | "B" | "HALVED" | null;
 
-                  const winBg = win === "A" ? "bg-blue-50" : win === "B" ? "bg-amber-50" : win === "HALVED" ? "bg-gray-50" : "";
+                  const winBg =
+                    win === "A" ? "bg-blue-50" : win === "B" ? "bg-amber-50" : win === "HALVED" ? "bg-gray-50" : "";
                   const winText = win === "A" ? "A" : win === "B" ? "B" : win === "HALVED" ? "½" : "";
 
                   return (
