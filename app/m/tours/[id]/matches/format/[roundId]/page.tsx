@@ -320,9 +320,7 @@ export default function MatchesFormatRoundDetailPage() {
         setTeamGroups(teams);
 
         if (teams.length !== 2) {
-          setTeamsWarn(
-            `Matches require exactly 2 tour teams (tour_groups where scope='tour' and type='team'). Found ${teams.length}.`
-          );
+          setTeamsWarn(`Matches require exactly 2 tour teams (tour_groups where scope='tour' and type='team'). Found ${teams.length}.`);
         } else {
           setTeamsWarn("");
         }
@@ -504,8 +502,6 @@ export default function MatchesFormatRoundDetailPage() {
     setSaveMsg("");
     setMatchMsg("");
     setMatchErr("");
-    setTeeOverrideErr("");
-    setTeeOverrideMsg("");
 
     try {
       const aId = teamAGroup?.id ?? "";
@@ -553,7 +549,12 @@ export default function MatchesFormatRoundDetailPage() {
   }
 
   function setMatchCell(matchNo: number, key: keyof Omit<MatchSetupRow, "match_no">, value: string) {
-    setMatchSetup((prev) => prev.map((m) => (m.match_no !== matchNo ? m : { ...m, [key]: value })));
+    setMatchSetup((prev) =>
+      prev.map((m) => {
+        if (m.match_no !== matchNo) return m;
+        return { ...m, [key]: value };
+      })
+    );
   }
 
   const matchSetupDirty = useMemo(() => {
@@ -876,25 +877,12 @@ export default function MatchesFormatRoundDetailPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
-      {/* Tee-times style header (3-band) */}
+      {/* Header bands:
+          NOTE: The standard top row (Tour name + Home) + first horizontal line is handled elsewhere.
+          This page should start with "Matchplay format" + Back, then a line, then round meta.
+      */}
       <div className="sticky top-0 z-10 bg-white/95 backdrop-blur">
-        {/* Band 1: tour name + home */}
-        <div className="border-b border-slate-200">
-          <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-slate-900">Tour</div>
-            </div>
-
-            <Link
-              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm active:bg-slate-50"
-              href={`/m/tours/${tourId}`}
-            >
-              Home
-            </Link>
-          </div>
-        </div>
-
-        {/* Band 2: page title + back (UPDATED) */}
+        {/* Band 2: Matchplay format + back */}
         <div className="border-b border-slate-200">
           <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
@@ -1092,7 +1080,9 @@ export default function MatchesFormatRoundDetailPage() {
                         Not enough players to create matches for this format.
                       </div>
                     ) : matchLoading ? (
-                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading match setup…</div>
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                        Loading match setup…
+                      </div>
                     ) : (
                       <div className="space-y-3">
                         {teamA.length !== teamB.length ? (
@@ -1109,7 +1099,9 @@ export default function MatchesFormatRoundDetailPage() {
                             <div key={idx} className="rounded-2xl border border-gray-200 bg-white p-3">
                               <div className="flex items-center justify-between">
                                 <div className="text-sm font-semibold text-gray-900">Match {idx + 1}</div>
-                                <div className="text-[11px] text-gray-500">{existing.format === "INDIVIDUAL_MATCHPLAY" ? "1 v 1" : "2 v 2"}</div>
+                                <div className="text-[11px] text-gray-500">
+                                  {existing.format === "INDIVIDUAL_MATCHPLAY" ? "1 v 1" : "2 v 2"}
+                                </div>
                               </div>
 
                               <div className="mt-3 grid grid-cols-2 gap-3">
@@ -1276,9 +1268,7 @@ export default function MatchesFormatRoundDetailPage() {
                       </button>
                     </div>
 
-                    {teeOverrideErr ? (
-                      <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{teeOverrideErr}</div>
-                    ) : null}
+                    {teeOverrideErr ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{teeOverrideErr}</div> : null}
                     {teeOverrideMsg ? <div className="text-sm text-green-700">{teeOverrideMsg}</div> : null}
                   </>
                 )}
