@@ -38,6 +38,9 @@ const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
 const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
 const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
 
+// ✅ Use the same bucket as the /more page (ignore DB bucket)
+const PDF_BUCKET = "tours-pdfs";
+
 function parseDate(value: string | null): Date | null {
   if (!value) return null;
   const d = new Date(value);
@@ -121,6 +124,18 @@ export default function MobileTourLandingPage() {
   const end = parseDate(tour?.end_date || derivedDates.end);
   const dateLabel = formatTourDates(start, end);
 
+  // ✅ Match /more behavior: strip leading slashes and fix common "tours/tours/<tourId>" mismatch
+  function normalizeStoragePath(p: string) {
+    const path = String(p ?? "").trim().replace(/^\/+/, "");
+    if (!path) return "";
+
+    if (path.startsWith(`tours/${tourId}/`)) {
+      return `tours/tours/${tourId}/${path.slice(`tours/${tourId}/`.length)}`;
+    }
+
+    return path;
+  }
+
   async function openDocByIndex(idx: number) {
     const doc = docs[idx];
     if (!doc) {
@@ -128,20 +143,32 @@ export default function MobileTourLandingPage() {
       return;
     }
 
-    const { data, error } = await supabase.storage
-      .from(doc.storage_bucket)
-      .createSignedUrl(doc.storage_path, 600);
+    const rawPath = String(doc.storage_path ?? "").trim();
+    const path = normalizeStoragePath(rawPath);
 
-    if (error || !data?.signedUrl) {
-      alert("Unable to open document.");
+    if (!path) {
+      alert("This document has no storage path.");
       return;
     }
 
-    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+    // ✅ Force bucket to tours-pdfs (ignore doc.storage_bucket)
+    const { data, error } = await supabase.storage.from(PDF_BUCKET).createSignedUrl(path, 60 * 10);
+
+    if (error) {
+      alert(`Unable to open document.\n\n${error.message}\n\nBucket: ${PDF_BUCKET}\nPath: ${path}`);
+      return;
+    }
+
+    const url = data?.signedUrl;
+    if (!url) {
+      alert(`No URL returned.\n\nBucket: ${PDF_BUCKET}\nPath: ${path}`);
+      return;
+    }
+
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  const baseBtn =
-    "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
+  const baseBtn = "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
 
   const rowColors = [
     "bg-blue-100 text-gray-900",
@@ -173,29 +200,91 @@ export default function MobileTourLandingPage() {
 
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
         <div className="grid grid-cols-3 gap-2">
-          <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>Daily<br />Tee times</button>
-          <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>Daily<br />Results</button>
-          <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>Score<br />Entry</button>
+          <button
+            className={`${baseBtn} ${rowColors[0]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}
+          >
+            Daily
+            <br />
+            Tee times
+          </button>
+          <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>
+            Daily
+            <br />
+            Results
+          </button>
+          <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>
+            Score
+            <br />
+            Entry
+          </button>
 
-          <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>Leaderboards</button>
-          <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/competitions`)}>Competitions</button>
-          <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/stats`)}>Stats</button>
+          <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>
+            Leaderboards
+          </button>
+          <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/competitions`)}>
+            Competitions
+          </button>
+          <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/stats`)}>
+            Stats
+          </button>
 
-          <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>Matchplay<br />Format</button>
-          <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>Matchplay<br />Results</button>
-          <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>Matchplay<br />Leaderboard</button>
+          <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>
+            Matchplay
+            <br />
+            Format
+          </button>
+          <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>
+            Matchplay
+            <br />
+            Results
+          </button>
+          <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>
+            Matchplay
+            <br />
+            Leaderboard
+          </button>
 
-          <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>Tour<br />Details</button>
-          <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>Tour<br />Admin</button>
-          <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>Rehandicapping</button>
+          <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>
+            Tour
+            <br />
+            Details
+          </button>
+          <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>
+            Tour
+            <br />
+            Admin
+          </button>
+          <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>
+            Rehandicapping
+          </button>
 
-          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openDocByIndex(0)}>Itinerary</button>
-          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openDocByIndex(1)}>Accommodation</button>
-          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openDocByIndex(2)}>Dining</button>
+          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openDocByIndex(0)}>
+            Itinerary
+          </button>
+          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openDocByIndex(1)}>
+            Accommodation
+          </button>
+          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openDocByIndex(2)}>
+            Dining
+          </button>
 
-          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openDocByIndex(3)}>Player<br />Profiles</button>
-          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openDocByIndex(4)}>Comps etc</button>
-          <button className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center" onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}>App<br />User Guide</button>
+          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openDocByIndex(3)}>
+            Player
+            <br />
+            Profiles
+          </button>
+          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openDocByIndex(4)}>
+            Comps etc
+          </button>
+          <button
+            className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
+            onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
+          >
+            App
+            <br />
+            User Guide
+          </button>
         </div>
 
         <div className="pt-6 text-center">
