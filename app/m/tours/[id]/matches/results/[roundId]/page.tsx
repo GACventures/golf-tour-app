@@ -7,6 +7,8 @@ import { supabase } from "@/lib/supabaseClient";
 
 type Tee = "M" | "F";
 
+type TourRow = { id: string; name: string | null };
+
 type RoundRow = {
   id: string;
   tour_id: string;
@@ -214,6 +216,8 @@ export default function MatchesResultsRoundPage() {
   const tourId = String(params?.id ?? "").trim();
   const roundId = String(params?.roundId ?? "").trim();
 
+  const [tourName, setTourName] = useState<string>("");
+
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -230,6 +234,24 @@ export default function MatchesResultsRoundPage() {
 
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [tourPlayerCount, setTourPlayerCount] = useState<number>(0);
+
+  useEffect(() => {
+    if (!isLikelyUuid(tourId)) return;
+    let alive = true;
+
+    async function loadTourName() {
+      const { data, error } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
+      if (!alive) return;
+      if (error) return;
+      const t = data as TourRow;
+      setTourName(String(t?.name ?? "").trim());
+    }
+
+    void loadTourName();
+    return () => {
+      alive = false;
+    };
+  }, [tourId]);
 
   useEffect(() => {
     if (!isLikelyUuid(tourId) || !isLikelyUuid(roundId)) return;
@@ -608,11 +630,11 @@ export default function MatchesResultsRoundPage() {
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
       {/* Header (3-band) */}
       <div className="sticky top-0 z-10 bg-white/95 backdrop-blur">
-        {/* Band 1: tour + home (unchanged) */}
+        {/* Band 1: tour name + home */}
         <div className="border-b border-slate-200">
           <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-slate-900">Tour</div>
+              <div className="truncate text-sm font-semibold text-slate-900">{tourName || "Tour"}</div>
             </div>
 
             <Link
@@ -624,7 +646,7 @@ export default function MatchesResultsRoundPage() {
           </div>
         </div>
 
-        {/* Band 2: page title + back (updated) */}
+        {/* Band 2: title + back (with divider immediately under) */}
         <div className="border-b border-slate-200">
           <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
@@ -637,7 +659,7 @@ export default function MatchesResultsRoundPage() {
           </div>
         </div>
 
-        {/* Band 3: round meta (unchanged) */}
+        {/* Band 3: round meta */}
         <div className="border-b border-slate-200 bg-slate-50">
           <div className="mx-auto w-full max-w-md px-4 py-2">
             <div className="truncate text-sm font-semibold text-slate-800">{headerLine || "Round"}</div>
@@ -697,8 +719,8 @@ export default function MatchesResultsRoundPage() {
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Stableford results</div>
                   <div className="mt-1 text-xs text-gray-600">
-                    Winners are top <span className="font-semibold">{stablefordWinners.target}</span> by round Stableford
-                    total (ties at cutoff included).
+                    Winners are top <span className="font-semibold">{stablefordWinners.target}</span> by round Stableford total
+                    (ties at cutoff included).
                   </div>
                 </div>
 
@@ -732,16 +754,12 @@ export default function MatchesResultsRoundPage() {
                       <div className="mt-2 overflow-hidden rounded-2xl border border-gray-200">
                         <div className="grid grid-cols-12 bg-gray-50 border-b">
                           <div className="col-span-9 px-3 py-2 text-[11px] font-semibold text-gray-700">Player</div>
-                          <div className="col-span-3 px-3 py-2 text-right text-[11px] font-semibold text-gray-700">
-                            Total
-                          </div>
+                          <div className="col-span-3 px-3 py-2 text-right text-[11px] font-semibold text-gray-700">Total</div>
                         </div>
                         <div className="divide-y">
                           {stablefordTotals.map((r) => (
                             <div key={r.player_id} className="grid grid-cols-12">
-                              <div className="col-span-9 px-3 py-2 text-sm font-semibold text-gray-900 truncate">
-                                {r.name}
-                              </div>
+                              <div className="col-span-9 px-3 py-2 text-sm font-semibold text-gray-900 truncate">{r.name}</div>
                               <div className="col-span-3 px-3 py-2 text-right text-sm font-extrabold text-gray-900">
                                 {r.total}
                               </div>
