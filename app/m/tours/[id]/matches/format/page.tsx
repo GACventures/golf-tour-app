@@ -2,7 +2,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -54,9 +53,12 @@ function fmtAuMelbourneDate(d: Date | null): string {
 }
 
 function isMissingColumnError(msg: string, column: string) {
-  const m = msg.toLowerCase();
-  const c = column.toLowerCase();
-  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `) || m.includes(`_${c}`));
+  const m = String(msg ?? "").toLowerCase();
+  const c = String(column ?? "").toLowerCase();
+  return (
+    m.includes("does not exist") &&
+    (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `) || m.includes(`_${c}`))
+  );
 }
 
 export default function MatchesFormatRoundsPage() {
@@ -158,20 +160,12 @@ export default function MatchesFormatRoundsPage() {
   }
 
   return (
-    <div className="min-h-dvh bg-white text-gray-900 pb-10">
-      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-base font-semibold">Matches – Format</div>
-            <div className="truncate text-sm text-gray-500">Choose a round</div>
-          </div>
-
-          <Link
-            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm active:bg-gray-50"
-            href={`/m/tours/${tourId}/rounds`}
-          >
-            Back
-          </Link>
+    <div className="min-h-dvh bg-white text-gray-900 pb-24">
+      {/* ✅ Layout provides the top Tour header + first horizontal line.
+          Below: our Matchplay format row (right aligned) + second horizontal line. */}
+      <div className="border-b bg-white">
+        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-end">
+          <div className="text-base font-semibold text-gray-900">Matchplay format</div>
         </div>
       </div>
 
@@ -211,8 +205,6 @@ export default function MatchesFormatRoundsPage() {
             })}
           </div>
         )}
-
-        <div className="mt-3 text-[11px] text-gray-400">Dates shown in Australia/Melbourne.</div>
       </main>
     </div>
   );
