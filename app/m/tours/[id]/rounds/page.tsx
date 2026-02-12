@@ -1,4 +1,3 @@
-// app/m/tours/[id]/rounds/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -9,35 +8,19 @@ type RoundRow = {
   id: string;
   tour_id: string;
   course_id: string | null;
-
   round_no?: number | null;
-
   round_date?: string | null;
   played_on?: string | null;
   created_at: string | null;
-
   name?: string | null;
   courses?: { name: string } | { name: string }[] | null;
 };
-
-type Mode = "tee-times" | "score" | "results";
-type MatchesMode = "none" | "format" | "results" | "leaderboard";
 
 function getCourseName(r: RoundRow) {
   const c: any = r.courses;
   if (!c) return "Course";
   if (Array.isArray(c)) return c?.[0]?.name ?? "Course";
   return c?.name ?? "Course";
-}
-
-function normalizeMode(raw: string | null): Mode {
-  if (raw === "tee-times" || raw === "score" || raw === "results") return raw;
-  return "score";
-}
-
-function normalizeMatchesMode(raw: string | null): MatchesMode {
-  if (raw === "format" || raw === "results" || raw === "leaderboard") return raw;
-  return "none";
 }
 
 function pickBestRoundDateISO(r: RoundRow): string | null {
@@ -67,21 +50,13 @@ function fmtAuMelbourneDate(d: Date | null): string {
   return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`.replace(/\s+/g, " ");
 }
 
-function isMissingColumnError(msg: string, column: string) {
-  const m = msg.toLowerCase();
-  const c = column.toLowerCase();
-  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `) || m.includes(`_${c}`));
-}
-
 export default function MobileRoundsHubPage() {
   const params = useParams<{ id: string }>();
   const tourId = params?.id ?? "";
   const router = useRouter();
   const sp = useSearchParams();
 
-  const mode = normalizeMode(sp.get("mode"));
-  const matchesMode = normalizeMatchesMode(sp.get("matches"));
-  const primaryRowLocked = matchesMode !== "none";
+  const mode = sp.get("mode") ?? "score";
 
   const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -90,66 +65,26 @@ export default function MobileRoundsHubPage() {
   useEffect(() => {
     let alive = true;
 
-    async function fetchRounds(selectCols: string) {
-      return supabase
-        .from("rounds")
-        .select(selectCols)
-        .eq("tour_id", tourId)
-        .order("round_no", { ascending: true })
-        .order("created_at", { ascending: true });
-    }
-
     async function loadRounds() {
       setLoading(true);
       setErrorMsg("");
 
-      const baseCols = "id,tour_id,course_id,created_at,name,round_no,courses(name)";
-      const cols1 = `${baseCols},round_date,played_on`;
-      const cols2 = `${baseCols},played_on`;
+      const { data, error } = await supabase
+        .from("rounds")
+        .select("id,tour_id,course_id,created_at,name,round_no,round_date,played_on,courses(name)")
+        .eq("tour_id", tourId)
+        .order("round_no", { ascending: true })
+        .order("created_at", { ascending: true });
 
-      let rows: RoundRow[] = [];
-
-      const r1 = await fetchRounds(cols1);
       if (!alive) return;
 
-      if (!r1.error) {
-        rows = (r1.data ?? []) as unknown as RoundRow[];
-        setRounds(rows);
-        setLoading(false);
-        return;
-      }
-
-      if (isMissingColumnError(r1.error.message, "round_date")) {
-        const r2 = await fetchRounds(cols2);
-        if (!alive) return;
-
-        if (!r2.error) {
-          rows = (r2.data ?? []) as unknown as RoundRow[];
-          setRounds(rows);
-          setLoading(false);
-          return;
-        }
-
-        if (isMissingColumnError(r2.error.message, "played_on")) {
-          const r3 = await fetchRounds(baseCols);
-          if (!alive) return;
-
-          if (!r3.error) {
-            rows = (r3.data ?? []) as unknown as RoundRow[];
-            setRounds(rows);
-            setLoading(false);
-            return;
-          }
-
-          setErrorMsg(r3.error.message);
-        } else {
-          setErrorMsg(r2.error.message);
-        }
+      if (error) {
+        setErrorMsg(error.message);
+        setRounds([]);
       } else {
-        setErrorMsg(r1.error.message);
+        setRounds((data ?? []) as RoundRow[]);
       }
 
-      setRounds([]);
       setLoading(false);
     }
 
@@ -185,37 +120,14 @@ export default function MobileRoundsHubPage() {
     return arr;
   }, [rounds]);
 
-  function setMode(next: Mode) {
-    const usp = new URLSearchParams(sp.toString());
-    usp.set("mode", next);
-    usp.delete("matches");
-    router.replace(`/m/tours/${tourId}/rounds?${usp.toString()}`);
-  }
-
-  function setMatches(next: MatchesMode) {
-    if (next === "leaderboard") {
-      router.push(`/m/tours/${tourId}/matches/leaderboard`);
-      return;
-    }
-
-    // For Format/Results, go to dedicated pages that show rounds list.
-    if (next === "format") {
-      router.push(`/m/tours/${tourId}/matches/format`);
-      return;
-    }
-
-    if (next === "results") {
-      router.push(`/m/tours/${tourId}/matches/results`);
-      return;
-    }
-
-    const usp = new URLSearchParams(sp.toString());
-    usp.delete("matches");
-    router.replace(`/m/tours/${tourId}/rounds?${usp.toString()}`);
-  }
+  const pageTitle =
+    mode === "tee-times"
+      ? "Daily tee times"
+      : mode === "results"
+      ? "Daily results"
+      : "Score entry";
 
   function openRound(roundId: string) {
-    // Normal round navigation (score/tee-times/results)
     const base = `/m/tours/${tourId}/rounds/${roundId}`;
     const href =
       mode === "tee-times"
@@ -227,57 +139,16 @@ export default function MobileRoundsHubPage() {
     router.push(href);
   }
 
-  const pillBase = "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
-  const pillActive = "border-gray-900 bg-gray-900 text-white";
-  const pillIdle = "border-gray-200 bg-white text-gray-900";
-
   return (
     <div className="min-h-dvh bg-white text-gray-900">
+      {/* Header */}
       <div className="border-b bg-white">
         <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="text-base font-semibold">Rounds</div>
+          <div className="text-base font-semibold">{pageTitle}</div>
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-md px-4 pt-4 space-y-3">
-        <div className="flex gap-2">
-          <button
-            className={`${pillBase} ${!primaryRowLocked && mode === "score" ? pillActive : pillIdle}`}
-            onClick={() => setMode("score")}
-          >
-            Score Entry
-          </button>
-
-          <button
-            className={`${pillBase} ${!primaryRowLocked && mode === "tee-times" ? pillActive : pillIdle}`}
-            onClick={() => setMode("tee-times")}
-          >
-            Tee times
-          </button>
-
-          <button
-            className={`${pillBase} ${!primaryRowLocked && mode === "results" ? pillActive : pillIdle}`}
-            onClick={() => setMode("results")}
-          >
-            Results
-          </button>
-        </div>
-
-        <div className="flex gap-2">
-          <button className={`${pillBase} ${pillIdle}`} onClick={() => setMatches("format")}>
-            Matches – Format
-          </button>
-
-          <button className={`${pillBase} ${pillIdle}`} onClick={() => setMatches("results")}>
-            Matches – Results
-          </button>
-
-          <button className={`${pillBase} ${pillIdle}`} onClick={() => setMatches("leaderboard")}>
-            Matches – Leaderboard
-          </button>
-        </div>
-      </div>
-
+      {/* Content */}
       <div className="mx-auto w-full max-w-md px-4 pt-4 pb-28">
         {loading ? (
           <div className="space-y-3">
@@ -315,7 +186,9 @@ export default function MobileRoundsHubPage() {
           </div>
         )}
 
-        <div className="mt-3 text-[11px] text-gray-400">Dates shown in Australia/Melbourne.</div>
+        <div className="mt-3 text-[11px] text-gray-400">
+          Dates shown in Australia/Melbourne.
+        </div>
       </div>
     </div>
   );
