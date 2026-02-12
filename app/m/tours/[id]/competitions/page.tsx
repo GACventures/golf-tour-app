@@ -752,7 +752,7 @@ export default function MobileCompetitionsPage() {
       <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-sm font-semibold text-gray-900">Competitions</div>
-          {tour?.name ? <div className="text-xs text-gray-600">{tour.name}</div> : null}
+          
         </div>
       </div>
 
