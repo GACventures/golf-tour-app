@@ -164,10 +164,11 @@ export default function MatchesFormatRoundsPage() {
       {/* ✅ Layout provides the top Tour header + first horizontal line.
           Below: our Matchplay format row (right aligned) + second horizontal line. */}
       <div className="border-b bg-white">
-        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-end">
-          <div className="text-base font-semibold text-gray-900">Matchplay format</div>
-        </div>
-      </div>
+  <div className="mx-auto w-full max-w-md px-4 py-3">
+    <div className="text-base font-semibold text-gray-900">Matchplay format</div>
+  </div>
+</div>
+
 
       <main className="mx-auto w-full max-w-md px-4 py-4">
         {loading ? (
