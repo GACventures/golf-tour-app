@@ -1,3 +1,4 @@
+// app/m/tours/[id]/matches/format/[roundId]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -202,7 +203,7 @@ export default function MatchesFormatRoundDetailPage() {
 
   const roundTitle = useMemo(() => {
     const rn = round?.round_no;
-    const label = rn !=null ? `Round ${rn}` : "Round";
+    const label = rn != null ? `Round ${rn}` : "Round";
     const d = fmtAuMelbourneDate(parseDateForDisplay(pickBestRoundDateISO(round)));
     const course = getCourseName(round);
     const bits = [label, d || "", course || ""].filter(Boolean);
@@ -282,7 +283,6 @@ export default function MatchesFormatRoundDetailPage() {
         }
 
         // 2) Load TOUR TEAMS (must be exactly 2).
-        // We filter to scope="tour" and type="team" (same schema used elsewhere).
         const { data: gRows, error: gErr } = await supabase
           .from("tour_groups")
           .select("id,name,scope,type")
@@ -386,9 +386,7 @@ export default function MatchesFormatRoundDetailPage() {
 
         if (error) throw error;
 
-        const players: PlayerRow[] = (data ?? [])
-          .map((r: any) => normalizePlayerJoin(r.players))
-          .filter(Boolean) as any;
+        const players: PlayerRow[] = (data ?? []).map((r: any) => normalizePlayerJoin(r.players)).filter(Boolean) as any;
 
         if (!alive) return;
 
@@ -506,6 +504,8 @@ export default function MatchesFormatRoundDetailPage() {
     setSaveMsg("");
     setMatchMsg("");
     setMatchErr("");
+    setTeeOverrideErr("");
+    setTeeOverrideMsg("");
 
     try {
       const aId = teamAGroup?.id ?? "";
@@ -553,20 +553,14 @@ export default function MatchesFormatRoundDetailPage() {
   }
 
   function setMatchCell(matchNo: number, key: keyof Omit<MatchSetupRow, "match_no">, value: string) {
-    setMatchSetup((prev) =>
-      prev.map((m) => {
-        if (m.match_no !== matchNo) return m;
-        return { ...m, [key]: value };
-      })
-    );
+    setMatchSetup((prev) => prev.map((m) => (m.match_no !== matchNo ? m : { ...m, [key]: value })));
   }
 
   const matchSetupDirty = useMemo(() => {
     if (!matchSetupEnabled) return false;
     if (existing?.format === "INDIVIDUAL_STABLEFORD") return false;
 
-    const hasAny =
-      matchSetup.some((m) => m.A1 || m.B1 || m.A2 || m.B2) || (matchCount > 0 && loadedMatchCount !== matchCount);
+    const hasAny = matchSetup.some((m) => m.A1 || m.B1 || m.A2 || m.B2) || (matchCount > 0 && loadedMatchCount !== matchCount);
 
     return hasAny;
   }, [matchSetupEnabled, matchSetup, loadedMatchCount, matchCount, existing?.format]);
@@ -619,10 +613,7 @@ export default function MatchesFormatRoundDetailPage() {
         return;
       }
 
-      const { data: oldMatches, error: oldErr } = await supabase
-        .from("match_round_matches")
-        .select("id")
-        .eq("settings_id", existing.id);
+      const { data: oldMatches, error: oldErr } = await supabase.from("match_round_matches").select("id").eq("settings_id", existing.id);
       if (oldErr) throw oldErr;
 
       const oldIds = (oldMatches ?? []).map((r: any) => String(r.id)).filter(Boolean);
@@ -640,10 +631,7 @@ export default function MatchesFormatRoundDetailPage() {
         match_no: i + 1,
       }));
 
-      const { data: newMatches, error: insMErr } = await supabase
-        .from("match_round_matches")
-        .insert(toInsertMatches)
-        .select("id,match_no");
+      const { data: newMatches, error: insMErr } = await supabase.from("match_round_matches").insert(toInsertMatches).select("id,match_no");
       if (insMErr) throw insMErr;
 
       const idByNo = new Map<number, string>();
@@ -906,11 +894,11 @@ export default function MatchesFormatRoundDetailPage() {
           </div>
         </div>
 
-        {/* Band 2: page title + back */}
+        {/* Band 2: page title + back (UPDATED) */}
         <div className="border-b border-slate-200">
           <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-base font-semibold text-slate-900">Matches – Format</div>
+              <div className="text-base font-semibold text-slate-900">Matchplay format</div>
             </div>
 
             <Link
@@ -1104,9 +1092,7 @@ export default function MatchesFormatRoundDetailPage() {
                         Not enough players to create matches for this format.
                       </div>
                     ) : matchLoading ? (
-                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                        Loading match setup…
-                      </div>
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading match setup…</div>
                     ) : (
                       <div className="space-y-3">
                         {teamA.length !== teamB.length ? (
@@ -1123,9 +1109,7 @@ export default function MatchesFormatRoundDetailPage() {
                             <div key={idx} className="rounded-2xl border border-gray-200 bg-white p-3">
                               <div className="flex items-center justify-between">
                                 <div className="text-sm font-semibold text-gray-900">Match {idx + 1}</div>
-                                <div className="text-[11px] text-gray-500">
-                                  {existing.format === "INDIVIDUAL_MATCHPLAY" ? "1 v 1" : "2 v 2"}
-                                </div>
+                                <div className="text-[11px] text-gray-500">{existing.format === "INDIVIDUAL_MATCHPLAY" ? "1 v 1" : "2 v 2"}</div>
                               </div>
 
                               <div className="mt-3 grid grid-cols-2 gap-3">
@@ -1222,9 +1206,7 @@ export default function MatchesFormatRoundDetailPage() {
                       </button>
                     </div>
 
-                    {matchErr ? (
-                      <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{matchErr}</div>
-                    ) : null}
+                    {matchErr ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{matchErr}</div> : null}
                     {matchMsg ? <div className="text-sm text-green-700">{matchMsg}</div> : null}
                   </>
                 )}
