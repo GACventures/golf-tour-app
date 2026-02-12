@@ -18,7 +18,7 @@ type Tour = {
 type Round = {
   id: string;
   round_no: number | null;
-  played_on: string | null;
+  played_on: string | null; // preferred
   created_at: string | null;
   course_id?: string | null;
   courses?: { name: string } | { name: string }[] | null;
@@ -197,7 +197,10 @@ export default function MobileTourDetailsPage() {
 
         let members: TourGroupMemberRow[] = [];
         if (groupIds.length) {
-          const { data: mData, error: mErr } = await supabase.from("tour_group_members").select("group_id,player_id").in("group_id", groupIds);
+          const { data: mData, error: mErr } = await supabase
+            .from("tour_group_members")
+            .select("group_id,player_id")
+            .in("group_id", groupIds);
           if (mErr) throw mErr;
           members = (mData ?? []) as TourGroupMemberRow[];
         }
@@ -234,9 +237,7 @@ export default function MobileTourDetailsPage() {
     });
   }, [rounds]);
 
-  const { start: effStart, end: effEnd } = useMemo(() => {
-    return deriveTourStartEnd(tour, rounds);
-  }, [tour, rounds]);
+  const { start: effStart, end: effEnd } = useMemo(() => deriveTourStartEnd(tour, rounds), [tour, rounds]);
 
   const playerNameById = useMemo(() => {
     const m = new Map<string, string>();
@@ -287,11 +288,10 @@ export default function MobileTourDetailsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900">
-      {/* Header: ONLY the page title band, with a divider above and below */}
+      {/* Header: left-aligned title with ONE divider BELOW (layout already provides top divider) */}
       <div className="sticky top-0 z-10 bg-white/95 backdrop-blur">
-        <div className="border-b border-slate-200" />
         <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="text-base font-semibold text-slate-900 text-center">Tour details</div>
+          <div className="text-base font-semibold text-slate-900">Tour details</div>
         </div>
         <div className="border-b border-slate-200" />
       </div>
@@ -312,7 +312,6 @@ export default function MobileTourDetailsPage() {
 
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">{`Players – ${players.length}`}</div>
-
               {players.length > 0 ? (
                 <ul className="space-y-1 text-sm text-gray-600">
                   {players.map((p) => (
@@ -328,7 +327,6 @@ export default function MobileTourDetailsPage() {
 
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">{`Pairs – ${tourPairs.length}`}</div>
-
               {tourPairs.length > 0 ? (
                 <ul className="space-y-1 text-sm text-gray-600">
                   {tourPairs.map((g) => (
@@ -342,7 +340,6 @@ export default function MobileTourDetailsPage() {
 
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">{`Teams – ${tourTeams.length}`}</div>
-
               {tourTeams.length > 0 ? (
                 <ul className="space-y-2 text-sm text-gray-600">
                   {tourTeams.map((g) => (
@@ -359,18 +356,15 @@ export default function MobileTourDetailsPage() {
 
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">Leaderboard rules</div>
-
               <div className="text-sm text-gray-700 space-y-2">
                 <div>
                   <div className="font-semibold">Individual</div>
                   <div className="text-gray-600">Stableford total · {fmtRuleIndividual(eventSettings)}</div>
                 </div>
-
                 <div>
                   <div className="font-semibold">Pairs</div>
                   <div className="text-gray-600">Better Ball Stableford · {fmtRulePairs(eventSettings)}</div>
                 </div>
-
                 <div>
                   <div className="font-semibold">Teams</div>
                   <div className="text-gray-600">{fmtRuleTeams(eventSettings)}</div>
@@ -380,7 +374,6 @@ export default function MobileTourDetailsPage() {
 
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">{`Rounds – ${sortedRounds.length}`}</div>
-
               {sortedRounds.length > 0 ? (
                 <ul className="space-y-1 text-sm text-gray-600">
                   {sortedRounds.map((r, i) => {
@@ -403,7 +396,6 @@ export default function MobileTourDetailsPage() {
 
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">{rehandicapHeading}</div>
-
               {rehandicapEnabled ? (
                 <div className="text-sm text-gray-700">{rehandicapSummary ? rehandicapSummary : "(No summary provided)"}</div>
               ) : null}
