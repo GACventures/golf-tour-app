@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { netStablefordPointsForHole } from "@/lib/stableford";
@@ -46,14 +46,17 @@ type MobilePlayer = { id: string; name: string; gender?: string | null; startHan
 
 function formatDate(iso: string | null | undefined) {
   if (!iso) return "";
-  const d = new Date(iso);
+  const raw = String(iso).trim();
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+  const d = new Date(isDateOnly ? `${raw}T00:00:00.000Z` : raw);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-AU", {
+  return new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
     weekday: "short",
     day: "2-digit",
     month: "short",
     year: "numeric",
-  });
+  }).format(d);
 }
 
 function rawScoreFor(strokes: number | null, pickup?: boolean | null) {
@@ -70,7 +73,6 @@ function normalizeTee(v: any): Tee {
 function pickParSiFromRow(row: ParRow | undefined | null, tee: Tee) {
   if (!row) return { par: 0, si: 0 };
 
-  // If row is a "combined" row with par_m/par_f present
   const hasMF =
     row &&
     (row.par_m !== undefined ||
@@ -84,7 +86,6 @@ function pickParSiFromRow(row: ParRow | undefined | null, tee: Tee) {
     return { par: Number.isFinite(par) ? par : 0, si: Number.isFinite(si) ? si : 0 };
   }
 
-  // Otherwise use plain par/stroke_index
   const par = Number(row.par);
   const si = Number(row.stroke_index);
   return { par: Number.isFinite(par) ? par : 0, si: Number.isFinite(si) ? si : 0 };
@@ -137,7 +138,6 @@ async function loadPlayersForTour(tourId: string): Promise<MobilePlayer[]> {
       .filter((p: any) => !!p.id);
   }
 
-  // legacy fallback
   const { data: pData, error: pErr } = await supabase
     .from("players")
     .select("*")
@@ -168,14 +168,11 @@ function isMissingColumnError(msg: string, column: string) {
   return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
 }
 
-// ✅ Load pars in a tee-aware way (prefer pars.tee schema)
 async function loadParsForCourse(courseId: string) {
-  // Try modern schema first: tee-aware rows
   const attempt1 = await supabase.from("pars").select("course_id,hole_number,tee,par,stroke_index").eq("course_id", courseId);
 
   if (!attempt1.error) return (attempt1.data ?? []) as ParRow[];
 
-  // If tee column doesn't exist, fall back to legacy columns if present
   if (isMissingColumnError(attempt1.error.message, "tee")) {
     const attempt2 = await supabase
       .from("pars")
@@ -208,12 +205,7 @@ export default function MobileRoundPlayerResultPage() {
   const [pars, setPars] = useState<ParRow[]>([]);
 
   function goBack() {
-    router.back();
-    queueMicrotask(() => {
-      if (tourId && roundId) router.push(`/m/tours/${tourId}/rounds/${roundId}/results`);
-      else if (tourId) router.push(`/m/tours/${tourId}/rounds`);
-      else router.push(`/m`);
-    });
+    router.push(`/m/tours/${tourId}/rounds/${roundId}/results`);
   }
 
   useEffect(() => {
@@ -239,7 +231,6 @@ export default function MobileRoundPlayerResultPage() {
         const allPlayers = await loadPlayersForTour(tourId);
         const p = allPlayers.find((x) => x.id === playerId) ?? null;
 
-        // playing handicap for this round (if present)
         const { data: rpData, error: rpErr } = await supabase
           .from("round_players")
           .select("round_id,player_id,playing,playing_handicap")
@@ -249,9 +240,7 @@ export default function MobileRoundPlayerResultPage() {
         if (rpErr) throw rpErr;
 
         const startHcp = p?.startHandicap ?? 0;
-        const h = Number.isFinite(Number((rpData as any)?.playing_handicap))
-          ? Number((rpData as any).playing_handicap)
-          : startHcp;
+        const h = Number.isFinite(Number((rpData as any)?.playing_handicap)) ? Number((rpData as any).playing_handicap) : startHcp;
 
         const { data: sData, error: sErr } = await supabase
           .from("scores")
@@ -283,9 +272,6 @@ export default function MobileRoundPlayerResultPage() {
     };
   }, [tourId, roundId, playerId]);
 
-  // ✅ NEW: tee-aware par map:
-  // - if pars has tee rows, store (hole -> {M row, F row})
-  // - if legacy combined row, store hole -> row (and use pickParSiFromRow)
   const parRowsByHole = useMemo(() => {
     const byHole = new Map<number, { M?: ParRow; F?: ParRow; legacy?: ParRow }>();
 
@@ -305,7 +291,6 @@ export default function MobileRoundPlayerResultPage() {
         const tee = String((p as any)?.tee ?? "").toUpperCase() === "F" ? "F" : "M";
         (slot as any)[tee] = p;
       } else {
-        // legacy combined row (single row per hole)
         slot.legacy = p;
       }
     }
@@ -384,7 +369,6 @@ export default function MobileRoundPlayerResultPage() {
     };
   }, [parRowsByHole, scoreByHole, player?.gender, hcp]);
 
-  // ✅ Diagnostic values for holes 1,2,14 and both tees (when available)
   const diag = useMemo(() => {
     const holes = [1, 2, 14];
 
@@ -439,7 +423,6 @@ export default function MobileRoundPlayerResultPage() {
   function ScoreBox({ shade, label }: { shade: Shade; label: string | number }) {
     const isBlue = shade === "ace" || shade === "eagle" || shade === "birdie";
 
-    // keep scorebox colours unchanged
     const base = "min-w-[28px] px-1.5 py-0.5 rounded text-center text-sm font-extrabold";
 
     const className =
@@ -468,7 +451,7 @@ export default function MobileRoundPlayerResultPage() {
             <button
               type="button"
               onClick={goBack}
-              className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-sm font-semibold hover:bg-slate-200 active:bg-slate-300"
+              className="rounded-lg px-2 py-1 text-sm font-semibold text-gray-800 hover:bg-gray-100 active:bg-gray-200"
             >
               Back
             </button>
@@ -491,7 +474,6 @@ export default function MobileRoundPlayerResultPage() {
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">Loading…</div>
         ) : (
           <>
-            {/* ✅ Diagnostics (holes 1,2,14) */}
             <div className="mt-0 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
               <div className="font-semibold text-slate-900">Diagnostics</div>
               <div className="mt-1">
@@ -500,7 +482,7 @@ export default function MobileRoundPlayerResultPage() {
                 <span className="font-semibold">{computed.tee}</span>
               </div>
               <div className="mt-2 grid grid-cols-1 gap-1">
-                {diag.rows.map((r) => (
+                {diag.rows.map((r: any) => (
                   <div key={r.hole}>
                     Hole <span className="font-semibold">{r.hole}</span>:{" "}
                     <span className="font-semibold">
@@ -526,7 +508,6 @@ export default function MobileRoundPlayerResultPage() {
               </div>
             </div>
 
-            {/* Front 9 */}
             <div className="mt-4 rounded-2xl bg-white text-gray-900 overflow-hidden shadow-sm border border-slate-200">
               <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b border-slate-200 bg-slate-50 text-xs font-semibold">
                 {computed.front.map((h) => (
@@ -568,7 +549,6 @@ export default function MobileRoundPlayerResultPage() {
               </div>
             </div>
 
-            {/* Back 9 */}
             <div className="mt-4 rounded-2xl bg-white text-gray-900 overflow-hidden shadow-sm border border-slate-200">
               <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b border-slate-200 bg-slate-50 text-xs font-semibold">
                 {computed.back.map((h) => (
@@ -610,7 +590,6 @@ export default function MobileRoundPlayerResultPage() {
               </div>
             </div>
 
-            {/* Legend */}
             <div className="mt-4 flex flex-wrap gap-2">
               <div className="rounded-md px-3 py-2 text-sm font-bold border border-slate-300 bg-slate-50 text-slate-900">
                 Ace/Albatross{" "}
