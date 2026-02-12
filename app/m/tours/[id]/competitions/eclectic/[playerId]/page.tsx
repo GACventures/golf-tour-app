@@ -330,24 +330,24 @@ export default function MobileEclecticBreakdownPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      <<div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
-  <div className="mx-auto w-full max-w-md px-4 py-3">
-    <div className="flex items-center justify-between gap-3">
-      <div className="min-w-0 text-sm font-semibold text-gray-900 truncate">
-        Eclectic: {player?.name ?? "Player"}
+      {/* ✅ Updated header: single row with "Eclectic: Player" on left and "Back" on right */}
+      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
+        <div className="mx-auto w-full max-w-md px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0 truncate text-sm font-semibold text-gray-900">
+              Eclectic: {player?.name ?? "Player"}
+            </div>
+
+            <Link
+              href={`/m/tours/${tourId}/competitions`}
+              className="text-sm font-semibold text-gray-700 hover:text-gray-900"
+              aria-label="Back"
+            >
+              Back
+            </Link>
+          </div>
+        </div>
       </div>
-
-      <Link
-        href={`/m/tours/${tourId}/competitions`}
-        className="text-sm font-semibold text-gray-700 hover:text-gray-900"
-        aria-label="Back"
-      >
-        Back
-      </Link>
-    </div>
-  </div>
-</div>
-
 
       <main className="mx-auto w-full max-w-md px-4 py-4">
         {loading ? (
@@ -430,7 +430,6 @@ export default function MobileEclecticBreakdownPage() {
               </table>
             </div>
 
-            {/* ✅ Updated note */}
             <div className="mt-3 text-xs text-gray-500">
               For each hole, the round shown is the <span className="font-semibold">earliest</span> round where the
               player achieved their best points for that hole.
