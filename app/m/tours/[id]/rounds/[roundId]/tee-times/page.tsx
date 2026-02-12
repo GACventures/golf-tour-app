@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Tee = "M" | "F";
@@ -251,6 +251,8 @@ function safeStr(v: any, fallback: string) {
 
 export default function MobileRoundTeeTimesPage() {
   const params = useParams<{ id: string; roundId: string }>();
+  const router = useRouter();
+
   const tourId = String(params?.id ?? "").trim();
   const roundId = String(params?.roundId ?? "").trim();
 
@@ -467,7 +469,6 @@ export default function MobileRoundTeeTimesPage() {
         const bn = b.round_no ?? 999999;
         if (an !== bn) return an - bn;
 
-        // ✅ prefer played_on for tie-break ordering
         const ap = String(a.played_on ?? "");
         const bp = String(b.played_on ?? "");
         if (ap && bp && ap !== bp) return ap.localeCompare(bp);
@@ -703,6 +704,30 @@ export default function MobileRoundTeeTimesPage() {
     }
   }
 
+  const membersByGroup = useMemo(() => {
+    const map: Record<string, GroupPlayerRow[]> = {};
+    for (const m of members) {
+      if (!map[m.group_id]) map[m.group_id] = [];
+      map[m.group_id].push(m);
+    }
+    for (const gid of Object.keys(map)) {
+      map[gid].sort((a, b) => {
+        const as = a.seat ?? 9999;
+        const bs = b.seat ?? 9999;
+        if (as !== bs) return as - bs;
+        const an = safeStr(asSingle(a.players as any)?.name, "");
+        const bn = safeStr(asSingle(b.players as any)?.name, "");
+        if (an !== bn) return an.localeCompare(bn);
+        return String(a.player_id).localeCompare(String(b.player_id));
+      });
+    }
+    return map;
+  }, [members]);
+
+  function onBack() {
+    router.push(`/m/tours/${tourId}/rounds?mode=tee-times`);
+  }
+
   // ✅ Use played_on for “round date”, fallback to created_at if missing
   const roundDate = fmtDate(parseDate(round?.played_on ?? round?.created_at ?? null));
   const course = courseName(round);
@@ -711,7 +736,16 @@ export default function MobileRoundTeeTimesPage() {
     <div className="min-h-dvh bg-white text-gray-900">
       <div className="border-b bg-white">
         <div className="mx-auto max-w-md px-4 py-3">
-          <div className="text-base font-semibold">Tee times</div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-base font-semibold">Daily tee times</div>
+            <button
+              type="button"
+              onClick={onBack}
+              className="rounded-lg px-2 py-1 text-sm font-semibold text-gray-800 hover:bg-gray-100 active:bg-gray-200"
+            >
+              Back
+            </button>
+          </div>
         </div>
       </div>
 
