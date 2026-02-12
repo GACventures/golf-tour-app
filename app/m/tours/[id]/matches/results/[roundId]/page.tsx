@@ -630,41 +630,46 @@ export default function MatchesResultsRoundPage() {
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
       {/* Header (3-band) */}
       <div className="sticky top-0 z-10 bg-white/95 backdrop-blur">
-        {/* Band 1: tour name + home */}
-        <div className="border-b border-slate-200">
-          <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-slate-900">{tourName || "Tour"}</div>
-            </div>
-
-            <Link
-              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm active:bg-slate-50"
-              href={`/m/tours/${tourId}`}
-            >
-              Home
-            </Link>
+        {/* Band 1: Tour name + Home (ONLY ONCE, above the first divider) */}
+        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-900">{tourName || "Tour"}</div>
           </div>
+
+          <Link
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm active:bg-slate-50"
+            href={`/m/tours/${tourId}`}
+          >
+            Home
+          </Link>
         </div>
 
-        {/* Band 2: title + back (with divider immediately under) */}
-        <div className="border-b border-slate-200">
-          <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-base font-semibold text-slate-900">Matchplay results</div>
-            </div>
+        {/* Divider 1 */}
+        <div className="border-b border-slate-200" />
 
-            <Link className="text-sm font-semibold text-slate-900" href={`/m/tours/${tourId}/matches/results`}>
-              Back
-            </Link>
+        {/* Band 2: Title + Back */}
+        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-base font-semibold text-slate-900">Matchplay results</div>
           </div>
+
+          <Link className="text-sm font-semibold text-slate-900" href={`/m/tours/${tourId}/matches/results`}>
+            Back
+          </Link>
         </div>
+
+        {/* Divider 2 (must be immediately under title band) */}
+        <div className="border-b border-slate-200" />
 
         {/* Band 3: round meta */}
-        <div className="border-b border-slate-200 bg-slate-50">
+        <div className="bg-slate-50">
           <div className="mx-auto w-full max-w-md px-4 py-2">
             <div className="truncate text-sm font-semibold text-slate-800">{headerLine || "Round"}</div>
           </div>
         </div>
+
+        {/* Optional: keep a subtle bottom edge for the whole header */}
+        <div className="border-b border-slate-200" />
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 py-4 space-y-4">
