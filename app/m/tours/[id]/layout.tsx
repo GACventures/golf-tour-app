@@ -63,23 +63,15 @@ export default function TourLayout({ children }: { children: React.ReactNode }) 
     };
   }, [tourId]);
 
-  // Lock scroll on landing page only
-  useEffect(() => {
-    if (typeof document === "undefined") return;
+  // ✅ CHANGE #1: UNFIX landing page (remove scroll lock)
+  // (No body overflow manipulation)
 
-    const body = document.body;
-    const prevOverflow = body.style.overflow;
-
-    if (isLandingPage) body.style.overflow = "hidden";
-
-    return () => {
-      body.style.overflow = prevOverflow;
-    };
-  }, [isLandingPage]);
+  // Footer sizing so page content doesn't get hidden behind sticky footer
+  const FOOTER_PX = 76; // approx height incl border + padding (adjust if you change footer spacing)
 
   return (
-    <div className={isLandingPage ? "h-dvh overflow-hidden bg-white text-gray-900" : "min-h-dvh bg-white text-gray-900"}>
-      {/* Top bar (sticky) — hidden on landing page */}
+    <div className="min-h-dvh bg-white text-gray-900">
+      {/* Top bar (sticky) — hidden on landing page (kept from earlier requirement) */}
       {!isLandingPage ? (
         <div className="sticky top-0 z-20 border-b bg-white">
           <div className="mx-auto w-full max-w-md px-4 h-14 flex items-center justify-between gap-3">
@@ -95,19 +87,23 @@ export default function TourLayout({ children }: { children: React.ReactNode }) 
         </div>
       ) : null}
 
-      {/* Page content + footer (footer hidden on landing page) */}
-      <div className={!isLandingPage ? "min-h-dvh flex flex-col" : "h-dvh flex flex-col"}>
-        <div className={isLandingPage ? "flex-1 overflow-hidden" : "flex-1"}>{children}</div>
+      {/* ✅ CHANGE #2: lift footer visibility + ✅ CHANGE #4: sticky footer
+          We add padding-bottom so content never hides behind the fixed footer.
+      */}
+      <div style={!isLandingPage ? { paddingBottom: FOOTER_PX } : undefined}>{children}</div>
 
-        {!isLandingPage ? (
-          <footer className="mt-auto py-6">
-            <div className="mx-auto w-full max-w-md px-4 text-center">
+      {/* Footer hidden on landing page (kept from earlier requirement) */}
+      {!isLandingPage ? (
+        <footer className="fixed bottom-0 left-0 right-0 z-30 bg-white">
+          {/* ✅ CHANGE #3: horizontal line above footer */}
+          <div className="border-t border-slate-200">
+            <div className="mx-auto w-full max-w-md px-4 py-3 text-center">
               <div className="font-bold text-sm text-slate-900">Built by GAC Ventures</div>
               <div className="italic text-sm text-slate-700">Golf - Analytics - Competition</div>
             </div>
-          </footer>
-        ) : null}
-      </div>
+          </div>
+        </footer>
+      ) : null}
     </div>
   );
 }
