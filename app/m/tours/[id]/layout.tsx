@@ -290,10 +290,7 @@ export default function MatchesResultsRoundPage() {
           return;
         }
 
-        const { data: gRows, error: gErr } = await supabase
-          .from("tour_groups")
-          .select("id,name")
-          .in("id", [set.group_a_id, set.group_b_id]);
+        const { data: gRows, error: gErr } = await supabase.from("tour_groups").select("id,name").in("id", [set.group_a_id, set.group_b_id]);
         if (gErr) throw gErr;
 
         const gA = (gRows ?? []).find((g: any) => String(g.id) === set.group_a_id) ?? null;
@@ -684,8 +681,8 @@ export default function MatchesResultsRoundPage() {
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Stableford results</div>
                   <div className="mt-1 text-xs text-gray-600">
-                    Winners are top <span className="font-semibold">{stablefordWinners.target}</span> by round Stableford total
-                    (ties at cutoff included).
+                    Winners are top <span className="font-semibold">{stablefordWinners.target}</span> by round Stableford total (ties at cutoff
+                    included).
                   </div>
                 </div>
 
@@ -693,16 +690,11 @@ export default function MatchesResultsRoundPage() {
                   <div>
                     <div className="text-xs font-semibold text-gray-700">Winners</div>
                     {stablefordWinners.winners.length === 0 ? (
-                      <div className="mt-1 text-sm text-gray-700">
-                        No winners yet (no stableford totals could be calculated for this round).
-                      </div>
+                      <div className="mt-1 text-sm text-gray-700">No winners yet (no stableford totals could be calculated for this round).</div>
                     ) : (
                       <div className="mt-2 space-y-1">
                         {stablefordWinners.winners.map((w) => (
-                          <div
-                            key={w.player_id}
-                            className="flex items-center justify-between rounded-xl border border-gray-200 px-3 py-2"
-                          >
+                          <div key={w.player_id} className="flex items-center justify-between rounded-xl border border-gray-200 px-3 py-2">
                             <div className="text-sm font-semibold text-gray-900 truncate">{w.name}</div>
                             <div className="text-sm font-extrabold text-gray-900">{w.total}</div>
                           </div>
@@ -725,9 +717,7 @@ export default function MatchesResultsRoundPage() {
                           {stablefordTotals.map((r) => (
                             <div key={r.player_id} className="grid grid-cols-12">
                               <div className="col-span-9 px-3 py-2 text-sm font-semibold text-gray-900 truncate">{r.name}</div>
-                              <div className="col-span-3 px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                                {r.total}
-                              </div>
+                              <div className="col-span-3 px-3 py-2 text-right text-sm font-extrabold text-gray-900">{r.total}</div>
                             </div>
                           ))}
                         </div>
