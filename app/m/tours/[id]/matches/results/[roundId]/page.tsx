@@ -1,3 +1,4 @@
+// app/m/tours/[id]/matches/results/[roundId]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -6,8 +7,6 @@ import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Tee = "M" | "F";
-
-type TourRow = { id: string; name: string | null };
 
 type RoundRow = {
   id: string;
@@ -216,8 +215,6 @@ export default function MatchesResultsRoundPage() {
   const tourId = String(params?.id ?? "").trim();
   const roundId = String(params?.roundId ?? "").trim();
 
-  const [tourName, setTourName] = useState<string>("");
-
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -234,24 +231,6 @@ export default function MatchesResultsRoundPage() {
 
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [tourPlayerCount, setTourPlayerCount] = useState<number>(0);
-
-  useEffect(() => {
-    if (!isLikelyUuid(tourId)) return;
-    let alive = true;
-
-    async function loadTourName() {
-      const { data, error } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
-      if (!alive) return;
-      if (error) return;
-      const t = data as TourRow;
-      setTourName(String(t?.name ?? "").trim());
-    }
-
-    void loadTourName();
-    return () => {
-      alive = false;
-    };
-  }, [tourId]);
 
   useEffect(() => {
     if (!isLikelyUuid(tourId) || !isLikelyUuid(roundId)) return;
@@ -628,48 +607,30 @@ export default function MatchesResultsRoundPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
-      {/* Header (3-band) */}
-      <div className="sticky top-0 z-10 bg-white/95 backdrop-blur">
-        {/* Band 1: Tour name + Home (ONLY ONCE, above the first divider) */}
-        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-slate-900">{tourName || "Tour"}</div>
-          </div>
+      {/* IMPORTANT:
+          Tour name + Home is provided by app/m/tours/[id]/layout.tsx (global top bar).
+          This page header starts at the TITLE band to avoid duplicating Tour/Home.
+      */}
+      <div className="sticky top-14 z-10 bg-white/95 backdrop-blur">
+        {/* Title band */}
+        <div className="border-b border-slate-200">
+          <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-base font-semibold text-slate-900">Matchplay results</div>
+            </div>
 
-          <Link
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm active:bg-slate-50"
-            href={`/m/tours/${tourId}`}
-          >
-            Home
-          </Link>
+            <Link className="text-sm font-semibold text-slate-900" href={`/m/tours/${tourId}/matches/results`}>
+              Back
+            </Link>
+          </div>
         </div>
 
-        {/* Divider 1 */}
-        <div className="border-b border-slate-200" />
-
-        {/* Band 2: Title + Back */}
-        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-base font-semibold text-slate-900">Matchplay results</div>
-          </div>
-
-          <Link className="text-sm font-semibold text-slate-900" href={`/m/tours/${tourId}/matches/results`}>
-            Back
-          </Link>
-        </div>
-
-        {/* Divider 2 (must be immediately under title band) */}
-        <div className="border-b border-slate-200" />
-
-        {/* Band 3: round meta */}
-        <div className="bg-slate-50">
+        {/* Context band */}
+        <div className="border-b border-slate-200 bg-slate-50">
           <div className="mx-auto w-full max-w-md px-4 py-2">
             <div className="truncate text-sm font-semibold text-slate-800">{headerLine || "Round"}</div>
           </div>
         </div>
-
-        {/* Optional: keep a subtle bottom edge for the whole header */}
-        <div className="border-b border-slate-200" />
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 py-4 space-y-4">
@@ -739,10 +700,7 @@ export default function MatchesResultsRoundPage() {
                     ) : (
                       <div className="mt-2 space-y-1">
                         {stablefordWinners.winners.map((w) => (
-                          <div
-                            key={w.player_id}
-                            className="flex items-center justify-between rounded-xl border border-gray-200 px-3 py-2"
-                          >
+                          <div key={w.player_id} className="flex items-center justify-between rounded-xl border border-gray-200 px-3 py-2">
                             <div className="text-sm font-semibold text-gray-900 truncate">{w.name}</div>
                             <div className="text-sm font-extrabold text-gray-900">{w.total}</div>
                           </div>
@@ -765,9 +723,7 @@ export default function MatchesResultsRoundPage() {
                           {stablefordTotals.map((r) => (
                             <div key={r.player_id} className="grid grid-cols-12">
                               <div className="col-span-9 px-3 py-2 text-sm font-semibold text-gray-900 truncate">{r.name}</div>
-                              <div className="col-span-3 px-3 py-2 text-right text-sm font-extrabold text-gray-900">
-                                {r.total}
-                              </div>
+                              <div className="col-span-3 px-3 py-2 text-right text-sm font-extrabold text-gray-900">{r.total}</div>
                             </div>
                           ))}
                         </div>
