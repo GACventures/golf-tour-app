@@ -189,14 +189,12 @@ export default function MobileRoundsHubPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900">
-      {/* Header */}
       <div className="border-b bg-white">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold">{pageTitle}</div>
         </div>
       </div>
 
-      {/* Content */}
       <div className="mx-auto w-full max-w-md px-4 pt-4 pb-28">
         {loading ? (
           <div className="space-y-3">
@@ -233,8 +231,6 @@ export default function MobileRoundsHubPage() {
             })}
           </div>
         )}
-
-        <div className="mt-3 text-[11px] text-gray-400">Dates shown in Australia/Melbourne.</div>
       </div>
     </div>
   );
