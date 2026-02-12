@@ -232,10 +232,6 @@ function pickBestRoundIds(args: {
   return chosen;
 }
 
-// ✅ IMPORTANT: Supabase/PostgREST often caps at 1000 rows per request.
-// This helper fetches ALL score rows in pages.
-
-
 // -----------------------------
 // Page
 // -----------------------------
@@ -435,46 +431,45 @@ export default function MobileLeaderboardsPage() {
         }
 
         // ✅ scores — one round at a time (avoids pagination + 1000-row issues)
-if (roundIds.length > 0 && playerIds.length > 0) {
-  const allScores: ScoreRow[] = [];
+        if (roundIds.length > 0 && playerIds.length > 0) {
+          const allScores: ScoreRow[] = [];
 
-  for (const r of rr) {
-    const { data: sData, error: sErr } = await supabase
-      .from("scores")
-      .select("round_id,player_id,hole_number,strokes,pickup")
-      .eq("round_id", r.id)
-      .in("player_id", playerIds)
-      .order("player_id", { ascending: true })
-      .order("hole_number", { ascending: true });
+          for (const r of rr) {
+            const { data: sData, error: sErr } = await supabase
+              .from("scores")
+              .select("round_id,player_id,hole_number,strokes,pickup")
+              .eq("round_id", r.id)
+              .in("player_id", playerIds)
+              .order("player_id", { ascending: true })
+              .order("hole_number", { ascending: true });
 
-    if (sErr) throw sErr;
+            if (sErr) throw sErr;
 
-    const rows = (sData ?? []) as any[];
+            const rows = (sData ?? []) as any[];
 
-    // Safety check: if you ever hit 1000 rows in ONE round, something is wrong.
-    if (rows.length >= 1000) {
-      throw new Error(
-        `Scores fetch for round ${String(r.id)} returned ${rows.length} rows (>= 1000). This suggests a query/limit issue.`
-      );
-    }
+            // Safety check: if you ever hit 1000 rows in ONE round, something is wrong.
+            if (rows.length >= 1000) {
+              throw new Error(
+                `Scores fetch for round ${String(r.id)} returned ${rows.length} rows (>= 1000). This suggests a query/limit issue.`
+              );
+            }
 
-    allScores.push(
-      ...rows.map((x) => ({
-        round_id: String(x.round_id),
-        player_id: String(x.player_id),
-        hole_number: Number(x.hole_number),
-        strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
-        pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
-      }))
-    );
-  }
+            allScores.push(
+              ...rows.map((x) => ({
+                round_id: String(x.round_id),
+                player_id: String(x.player_id),
+                hole_number: Number(x.hole_number),
+                strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
+                pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
+              }))
+            );
+          }
 
-  if (!alive) return;
-  setScores(allScores);
-} else {
-  setScores([]);
-}
-
+          if (!alive) return;
+          setScores(allScores);
+        } else {
+          setScores([]);
+        }
 
         // pars (both tees)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
@@ -716,9 +711,7 @@ if (roundIds.length > 0 && playerIds.length > 0) {
     if (kind === "pairs") {
       if (pairRule.mode === "ALL") return "Pairs Better Ball · Total points across all rounds";
       const r = pairRule;
-      return r.finalRequired
-        ? `Pairs Better Ball · Best ${r.q} rounds (Final required)`
-        : `Pairs Better Ball · Best ${r.q} rounds`;
+      return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
     }
 
     return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 for each zero · All rounds`;
@@ -1145,7 +1138,10 @@ if (roundIds.length > 0 && playerIds.length > 0) {
             </button>
           </div>
 
-          <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">{description}</div>
+          {/* ✅ NEW: section label row (matches other pages' "Daily ..." header row concept) */}
+          <div className="mt-3 text-base font-semibold text-gray-900">Leaderboards</div>
+
+          <div className="mt-2 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">{description}</div>
 
           <div className="mt-3">
             <button
