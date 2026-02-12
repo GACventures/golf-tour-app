@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Tour = {
@@ -10,7 +10,6 @@ type Tour = {
   start_date: string | null;
   end_date: string | null;
 
-  // ✅ rehandicapping fields confirmed in schema
   rehandicapping_enabled: boolean | null;
   rehandicapping_rules_summary: string | null;
   rehandicapping_rule_key: string | null;
@@ -19,7 +18,7 @@ type Tour = {
 type Round = {
   id: string;
   round_no: number | null;
-  played_on: string | null; // preferred
+  played_on: string | null;
   created_at: string | null;
   course_id?: string | null;
   courses?: { name: string } | { name: string }[] | null;
@@ -65,7 +64,6 @@ function fmtDate(value: string | null) {
   });
 }
 
-// Desktop-aligned fallback: use tour.start/end if set, else derive from rounds.played_on
 function deriveTourStartEnd(tour: Tour | null, rounds: Round[]) {
   const tStart = (tour?.start_date ?? "").trim() || null;
   const tEnd = (tour?.end_date ?? "").trim() || null;
@@ -75,7 +73,7 @@ function deriveTourStartEnd(tour: Tour | null, rounds: Round[]) {
   const played = rounds
     .map((r) => (r.played_on ?? "").trim())
     .filter(Boolean)
-    .sort(); // ISO YYYY-MM-DD sorts lexicographically
+    .sort();
 
   if (!played.length) return { start: null, end: null, source: "none" as const };
 
@@ -129,7 +127,6 @@ function courseNameForRound(r: Round) {
 
 export default function MobileTourDetailsPage() {
   const params = useParams<{ id: string }>();
-  const router = useRouter();
   const tourId = params.id;
 
   const [loading, setLoading] = useState(true);
@@ -152,7 +149,6 @@ export default function MobileTourDetailsPage() {
       setError("");
 
       try {
-        // Tour (include rehandicapping fields)
         const { data: tData, error: tErr } = await supabase
           .from("tours")
           .select("id,name,start_date,end_date,rehandicapping_enabled,rehandicapping_rules_summary,rehandicapping_rule_key")
@@ -160,14 +156,12 @@ export default function MobileTourDetailsPage() {
           .single();
         if (tErr) throw tErr;
 
-        // Rounds (include course name for display)
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,round_no,played_on,created_at,course_id,courses(name)")
           .eq("tour_id", tourId);
         if (rErr) throw rErr;
 
-        // Event settings (leaderboard rules)
         const { data: sData, error: sErr } = await supabase
           .from("tour_grouping_settings")
           .select(
@@ -177,7 +171,6 @@ export default function MobileTourDetailsPage() {
           .maybeSingle();
         if (sErr) throw sErr;
 
-        // Players in tour
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("tour_id,player_id,players(id,name)")
@@ -189,7 +182,6 @@ export default function MobileTourDetailsPage() {
           .map((row: any) => normalizePlayerJoin(row.players))
           .filter(Boolean) as PlayerRow[];
 
-        // Pairs/Teams (tour scope)
         const { data: gData, error: gErr } = await supabase
           .from("tour_groups")
           .select("id,tour_id,scope,type,name,round_id,created_at")
@@ -205,15 +197,13 @@ export default function MobileTourDetailsPage() {
 
         let members: TourGroupMemberRow[] = [];
         if (groupIds.length) {
-          const { data: mData, error: mErr } = await supabase
-            .from("tour_group_members")
-            .select("group_id,player_id")
-            .in("group_id", groupIds);
+          const { data: mData, error: mErr } = await supabase.from("tour_group_members").select("group_id,player_id").in("group_id", groupIds);
           if (mErr) throw mErr;
           members = (mData ?? []) as TourGroupMemberRow[];
         }
 
         if (!alive) return;
+
         setTour(tData as Tour);
         setRounds((rData ?? []) as Round[]);
         setEventSettings((sData ?? null) as TourGroupingSettings | null);
@@ -229,7 +219,7 @@ export default function MobileTourDetailsPage() {
       }
     }
 
-    load();
+    void load();
     return () => {
       alive = false;
     };
@@ -291,42 +281,18 @@ export default function MobileTourDetailsPage() {
     return ids.map((pid) => playerNameById.get(pid) ?? pid).join(" / ");
   };
 
-  // ✅ Rehandicapping: actual truth from tours table
   const rehandicapEnabled = tour?.rehandicapping_enabled === true;
   const rehandicapSummary = (tour?.rehandicapping_rules_summary ?? "").trim();
   const rehandicapHeading = `Rehandicapping – ${rehandicapEnabled ? "Yes" : "No"}`;
 
   return (
     <div className="min-h-dvh bg-white text-gray-900">
-      {/* Header (standard 3-band) */}
+      {/* Header: ONLY the page title band, with a divider above and below */}
       <div className="sticky top-0 z-10 bg-white/95 backdrop-blur">
-        {/* Band 1: Tour name + Back */}
-        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-slate-900">{tour?.name ?? "Tour"}</div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => router.back()}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm active:bg-slate-50"
-          >
-            Back
-          </button>
-        </div>
-
-        {/* Divider 1 */}
         <div className="border-b border-slate-200" />
-
-        {/* Band 2: Page title */}
-        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-base font-semibold text-slate-900">Tour details</div>
-          </div>
-          <div />
+        <div className="mx-auto w-full max-w-md px-4 py-3">
+          <div className="text-base font-semibold text-slate-900 text-center">Tour details</div>
         </div>
-
-        {/* Divider 2 */}
         <div className="border-b border-slate-200" />
       </div>
 
@@ -337,7 +303,6 @@ export default function MobileTourDetailsPage() {
           <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>
         ) : (
           <>
-            {/* Tour summary */}
             <section className="rounded-xl border p-4">
               <div className="text-lg font-semibold">{tour?.name}</div>
               <div className="mt-1 text-sm text-gray-600">
@@ -345,7 +310,6 @@ export default function MobileTourDetailsPage() {
               </div>
             </section>
 
-            {/* Players */}
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">{`Players – ${players.length}`}</div>
 
@@ -362,7 +326,6 @@ export default function MobileTourDetailsPage() {
               )}
             </section>
 
-            {/* Pairs */}
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">{`Pairs – ${tourPairs.length}`}</div>
 
@@ -377,7 +340,6 @@ export default function MobileTourDetailsPage() {
               )}
             </section>
 
-            {/* Teams */}
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">{`Teams – ${tourTeams.length}`}</div>
 
@@ -395,7 +357,6 @@ export default function MobileTourDetailsPage() {
               )}
             </section>
 
-            {/* Leaderboard event rules */}
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">Leaderboard rules</div>
 
@@ -417,7 +378,6 @@ export default function MobileTourDetailsPage() {
               </div>
             </section>
 
-            {/* Rounds summary */}
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">{`Rounds – ${sortedRounds.length}`}</div>
 
@@ -441,7 +401,6 @@ export default function MobileTourDetailsPage() {
               )}
             </section>
 
-            {/* Rehandicapping */}
             <section className="rounded-xl border p-4">
               <div className="font-semibold mb-2">{rehandicapHeading}</div>
 
