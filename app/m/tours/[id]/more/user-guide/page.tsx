@@ -217,22 +217,14 @@ Manage starting handicaps, course par/SI, and rehandicapping rules.
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
+        <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">App User Guide</div>
-          <Link
-            href={`/m/tours/${tourId}/more`}
-            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900"
-          >
-            Back
-          </Link>
         </div>
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 py-4">
         <section className="rounded-2xl border border-gray-200 bg-white p-4">
-          <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
-            {guide}
-          </div>
+          <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{guide}</div>
         </section>
       </main>
 
