@@ -1,40 +1,42 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type TourRow = {
   id: string;
   name: string | null;
-  start_date: string | null; // YYYY-MM-DD
-  end_date: string | null; // YYYY-MM-DD
+  start_date: string | null;
+  end_date: string | null;
   image_url?: string | null;
 };
 
 type RoundRow = {
   id: string;
   tour_id: string;
-  played_on: string | null; // YYYY-MM-DD
+  played_on: string | null;
+};
+
+type TourDocRow = {
+  id: string;
+  tour_id: string;
+  title: string;
+  storage_bucket: string;
+  storage_path: string;
+  sort_order: number;
 };
 
 const DEFAULT_HERO = "/tours/tour-landing-hero-cartoon.webp";
 
-// ✅ Japan “Swing in Spring” tour (mobile landing hero override)
 const JAPAN_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
 const JAPAN_HERO = "/tours/japan-poster_mobile_1080w.webp";
 
-// ✅ Portugal tour (mobile landing hero override)
 const PORTUGAL_TOUR_ID = "b5e5b90d-0ae5-4be5-a3cd-3ef1c73cb6b5";
 const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
 
-// ✅ Kiwi Madness tour (mobile landing hero override) — match EXACT tour name
 const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
 const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
-
-function isKiwiMadnessTourName(name: string | null | undefined) {
-  return (name ?? "").trim() === KIWI_MADNESS_TOUR_NAME;
-}
 
 function parseDate(value: string | null): Date | null {
   if (!value) return null;
@@ -63,115 +65,149 @@ function formatTourDates(start: Date | null, end: Date | null) {
 
 export default function MobileTourLandingPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const tourId = params?.id ?? "";
 
   const [tour, setTour] = useState<TourRow | null>(null);
   const [rounds, setRounds] = useState<RoundRow[]>([]);
+  const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
     let alive = true;
 
-    async function loadTourAndRounds() {
+    async function loadAll() {
       setLoading(true);
       setErrorMsg("");
 
       try {
-        const [{ data: tData, error: tErr }, { data: rData, error: rErr }] = await Promise.all([
-          supabase.from("tours").select("id, name, start_date, end_date, image_url").eq("id", tourId).single(),
-          supabase.from("rounds").select("id, tour_id, played_on").eq("tour_id", tourId),
-        ]);
+        const [{ data: tData }, { data: rData }, { data: dData }] =
+          await Promise.all([
+            supabase
+              .from("tours")
+              .select("id,name,start_date,end_date,image_url")
+              .eq("id", tourId)
+              .single(),
+            supabase
+              .from("rounds")
+              .select("id,tour_id,played_on")
+              .eq("tour_id", tourId),
+            supabase
+              .from("tour_documents")
+              .select("id,tour_id,title,storage_bucket,storage_path,sort_order")
+              .eq("tour_id", tourId)
+              .order("sort_order", { ascending: true }),
+          ]);
 
         if (!alive) return;
-
-        if (tErr) throw new Error(tErr.message);
-        if (rErr) throw new Error(rErr.message);
 
         setTour(tData as TourRow);
         setRounds((rData ?? []) as RoundRow[]);
+        setDocs((dData ?? []) as TourDocRow[]);
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load tour.");
-        setTour(null);
-        setRounds([]);
       } finally {
         if (!alive) return;
         setLoading(false);
       }
     }
 
-    if (tourId) loadTourAndRounds();
-    else {
-      setErrorMsg("Missing tour id in route.");
-      setLoading(false);
-    }
-
+    if (tourId) loadAll();
     return () => {
       alive = false;
     };
   }, [tourId]);
 
-  const title = tour?.name?.trim() || "Tour";
-
-  // ✅ Hero selection priority:
-  // 1) Kiwi Madness (exact tour name): local hero override
-  // 2) Portugal (tour id): local hero override
-  // 3) Japan (tour id): local hero override
-  // 4) Otherwise: tour.image_url if present, else default
   const heroImage = useMemo(() => {
-    if (isKiwiMadnessTourName(tour?.name)) return KIWI_MADNESS_HERO;
+    if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
     if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
     if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
-
-    const t = (tour?.image_url ?? "").trim();
-    return t ? t : DEFAULT_HERO;
+    return tour?.image_url?.trim() || DEFAULT_HERO;
   }, [tourId, tour?.image_url, tour?.name]);
 
-  // Default dates from rounds.played_on if tour dates not set
-  const derived = useMemo(() => {
-    const played = rounds
-      .map((r) => (r.played_on ? String(r.played_on) : null))
-      .filter(Boolean) as string[];
-
-    if (!played.length) return { start: null as string | null, end: null as string | null };
-
-    played.sort(); // ISO date strings sort correctly
-    return { start: played[0] ?? null, end: played[played.length - 1] ?? null };
+  const derivedDates = useMemo(() => {
+    const played = rounds.map((r) => r.played_on).filter(Boolean) as string[];
+    if (!played.length) return { start: null, end: null };
+    played.sort();
+    return { start: played[0], end: played[played.length - 1] };
   }, [rounds]);
 
-  const effectiveStartStr = (tour?.start_date ?? "").trim() || derived.start;
-  const effectiveEndStr = (tour?.end_date ?? "").trim() || derived.end;
+  const start = parseDate(tour?.start_date || derivedDates.start);
+  const end = parseDate(tour?.end_date || derivedDates.end);
+  const dateLabel = formatTourDates(start, end);
 
-  const start = useMemo(() => parseDate(effectiveStartStr ?? null), [effectiveStartStr]);
-  const end = useMemo(() => parseDate(effectiveEndStr ?? null), [effectiveEndStr]);
-  const dateLabel = useMemo(() => formatTourDates(start, end), [start, end]);
+  async function openDocByIndex(idx: number) {
+    const doc = docs[idx];
+    if (!doc) {
+      alert("Document not available for this tour.");
+      return;
+    }
+
+    const { data, error } = await supabase.storage
+      .from(doc.storage_bucket)
+      .createSignedUrl(doc.storage_path, 600);
+
+    if (error || !data?.signedUrl) {
+      alert("Unable to open document.");
+      return;
+    }
+
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  }
+
+  const btn = "rounded-xl px-2 py-3 text-sm font-semibold text-center leading-tight";
+  const rowBlue = ["bg-blue-100", "bg-blue-300", "bg-blue-500 text-white"];
 
   return (
-    <div className="bg-black text-white">
-      {/* TOP TEXT AREA (moved above hero image) */}
-      <div className="px-4 py-4">
-        <div className="mx-auto max-w-md">
-          {loading ? (
-            <div className="space-y-2">
-              <div className="h-6 w-48 rounded bg-white/30" />
-              <div className="h-4 w-64 rounded bg-white/20" />
-            </div>
-          ) : errorMsg ? (
-            <div className="text-sm text-red-300">{errorMsg}</div>
-          ) : (
-            <>
-              <div className="text-2xl font-extrabold leading-tight">{title}</div>
-              <div className="mt-1 text-sm font-semibold text-white/80">{dateLabel || "Dates TBD"}</div>
-            </>
-          )}
-        </div>
+    <div className="min-h-dvh bg-black text-white">
+      <div className="px-4 py-4 max-w-md mx-auto">
+        {loading ? (
+          <div className="h-6 w-48 bg-white/30 rounded" />
+        ) : (
+          <>
+            <div className="text-2xl font-extrabold">{tour?.name || "Tour"}</div>
+            <div className="text-sm text-white/80">{dateLabel || "Dates TBD"}</div>
+          </>
+        )}
       </div>
 
-      {/* HERO IMAGE */}
-      <div className="relative h-[72vh] w-full overflow-hidden bg-black">
+      <div className="relative h-[30vh] bg-black">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={heroImage} alt="" className="h-full w-full object-contain bg-black" />
+        <img src={heroImage} alt="" className="w-full h-full object-contain" />
+      </div>
+
+      <div className="mx-auto max-w-md px-4 py-4 space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <button className={`${btn} ${rowBlue[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>Daily<br />Tee times</button>
+          <button className={`${btn} ${rowBlue[1]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>Daily<br />Results</button>
+          <button className={`${btn} ${rowBlue[2]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>Score<br />Entry</button>
+
+          <button className={`${btn} ${rowBlue[0]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>Leaderboards</button>
+          <button className={`${btn} ${rowBlue[1]}`} onClick={() => router.push(`/m/tours/${tourId}/competitions`)}>Competitions</button>
+          <button className={`${btn} ${rowBlue[2]}`} onClick={() => router.push(`/m/tours/${tourId}/stats`)}>Stats</button>
+
+          <button className={`${btn} ${rowBlue[0]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>Matchplay<br />Format</button>
+          <button className={`${btn} ${rowBlue[1]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>Matchplay<br />Results</button>
+          <button className={`${btn} ${rowBlue[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>Matchplay<br />Board</button>
+
+          <button className={`${btn} ${rowBlue[0]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>Tour<br />Details</button>
+          <button className={`${btn} ${rowBlue[1]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>Tour<br />Admin</button>
+          <button className={`${btn} ${rowBlue[2]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>Rehandicapping</button>
+
+          <button className={`${btn} ${rowBlue[0]}`} onClick={() => openDocByIndex(0)}>Itinerary</button>
+          <button className={`${btn} ${rowBlue[1]}`} onClick={() => openDocByIndex(1)}>Accommodation</button>
+          <button className={`${btn} ${rowBlue[2]}`} onClick={() => openDocByIndex(2)}>Dining</button>
+
+          <button className={`${btn} ${rowBlue[0]}`} onClick={() => openDocByIndex(3)}>Player<br />Profiles</button>
+          <button className={`${btn} ${rowBlue[1]}`} onClick={() => openDocByIndex(4)}>Comps etc</button>
+          <button className="rounded-xl px-2 py-3 text-sm font-semibold bg-gray-200 text-gray-800" onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}>App<br />User Guide</button>
+        </div>
+
+        <div className="pt-4 text-center text-xs text-gray-400">
+          Built by GAC Ventures
+        </div>
       </div>
     </div>
   );
