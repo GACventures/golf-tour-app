@@ -1,4 +1,3 @@
-// app/m/tours/[id]/matches/results/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -208,13 +207,8 @@ export default function MatchesResultsRoundsPage() {
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between">
-          <div className="text-base font-semibold">Matches – Results</div>
-          <Link
-            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm active:bg-gray-50"
-            href={`/m/tours/${tourId}/rounds?mode=results`}
-          >
-            Back
-          </Link>
+          <div className="text-base font-semibold">Matchplay results</div>
+          <div />
         </div>
       </div>
 
@@ -268,12 +262,9 @@ export default function MatchesResultsRoundsPage() {
             })}
           </div>
         )}
-
-        <div className="mt-3 text-[11px] text-gray-400">Dates shown in Australia/Melbourne.</div>
       </main>
 
       <MobileNav />
     </div>
   );
 }
-
