@@ -72,46 +72,29 @@ export default function MobileTourLandingPage() {
   const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
     let alive = true;
 
     async function loadAll() {
       setLoading(true);
-      setErrorMsg("");
 
-      try {
-        const [{ data: tData }, { data: rData }, { data: dData }] =
-          await Promise.all([
-            supabase
-              .from("tours")
-              .select("id,name,start_date,end_date,image_url")
-              .eq("id", tourId)
-              .single(),
-            supabase
-              .from("rounds")
-              .select("id,tour_id,played_on")
-              .eq("tour_id", tourId),
-            supabase
-              .from("tour_documents")
-              .select("id,tour_id,title,storage_bucket,storage_path,sort_order")
-              .eq("tour_id", tourId)
-              .order("sort_order", { ascending: true }),
-          ]);
+      const [{ data: t }, { data: r }, { data: d }] = await Promise.all([
+        supabase.from("tours").select("id,name,start_date,end_date,image_url").eq("id", tourId).single(),
+        supabase.from("rounds").select("id,tour_id,played_on").eq("tour_id", tourId),
+        supabase
+          .from("tour_documents")
+          .select("id,tour_id,title,storage_bucket,storage_path,sort_order")
+          .eq("tour_id", tourId)
+          .order("sort_order", { ascending: true }),
+      ]);
 
-        if (!alive) return;
+      if (!alive) return;
 
-        setTour(tData as TourRow);
-        setRounds((rData ?? []) as RoundRow[]);
-        setDocs((dData ?? []) as TourDocRow[]);
-      } catch (e: any) {
-        if (!alive) return;
-        setErrorMsg(e?.message ?? "Failed to load tour.");
-      } finally {
-        if (!alive) return;
-        setLoading(false);
-      }
+      setTour(t as TourRow);
+      setRounds((r ?? []) as RoundRow[]);
+      setDocs((d ?? []) as TourDocRow[]);
+      setLoading(false);
     }
 
     if (tourId) loadAll();
@@ -157,12 +140,21 @@ export default function MobileTourLandingPage() {
     window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   }
 
-  const btn = "rounded-xl px-2 py-3 text-sm font-semibold text-center leading-tight";
-  const rowBlue = ["bg-blue-100", "bg-blue-300", "bg-blue-500 text-white"];
+  const baseBtn =
+    "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
+
+  const rowColors = [
+    "bg-blue-100 text-gray-900",
+    "bg-blue-200 text-gray-900",
+    "bg-blue-300 text-gray-900",
+    "bg-blue-400 text-white",
+    "bg-blue-500 text-white",
+    "bg-blue-600 text-white",
+  ];
 
   return (
     <div className="min-h-dvh bg-black text-white">
-      <div className="px-4 py-4 max-w-md mx-auto">
+      <div className="px-4 pt-4 pb-3 max-w-md mx-auto">
         {loading ? (
           <div className="h-6 w-48 bg-white/30 rounded" />
         ) : (
@@ -173,40 +165,42 @@ export default function MobileTourLandingPage() {
         )}
       </div>
 
-      <div className="relative h-[30vh] bg-black">
+      {/* Landscape hero */}
+      <div className="relative h-[26vh] bg-black">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={heroImage} alt="" className="w-full h-full object-contain" />
+        <img src={heroImage} alt="" className="h-full w-full object-cover" />
       </div>
 
-      <div className="mx-auto max-w-md px-4 py-4 space-y-3">
+      <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
         <div className="grid grid-cols-3 gap-2">
-          <button className={`${btn} ${rowBlue[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>Daily<br />Tee times</button>
-          <button className={`${btn} ${rowBlue[1]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>Daily<br />Results</button>
-          <button className={`${btn} ${rowBlue[2]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>Score<br />Entry</button>
+          <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>Daily<br />Tee times</button>
+          <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>Daily<br />Results</button>
+          <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>Score<br />Entry</button>
 
-          <button className={`${btn} ${rowBlue[0]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>Leaderboards</button>
-          <button className={`${btn} ${rowBlue[1]}`} onClick={() => router.push(`/m/tours/${tourId}/competitions`)}>Competitions</button>
-          <button className={`${btn} ${rowBlue[2]}`} onClick={() => router.push(`/m/tours/${tourId}/stats`)}>Stats</button>
+          <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>Leaderboards</button>
+          <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/competitions`)}>Competitions</button>
+          <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/stats`)}>Stats</button>
 
-          <button className={`${btn} ${rowBlue[0]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>Matchplay<br />Format</button>
-          <button className={`${btn} ${rowBlue[1]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>Matchplay<br />Results</button>
-          <button className={`${btn} ${rowBlue[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>Matchplay<br />Board</button>
+          <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>Matchplay<br />Format</button>
+          <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>Matchplay<br />Results</button>
+          <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>Matchplay<br />Leaderboard</button>
 
-          <button className={`${btn} ${rowBlue[0]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>Tour<br />Details</button>
-          <button className={`${btn} ${rowBlue[1]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>Tour<br />Admin</button>
-          <button className={`${btn} ${rowBlue[2]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>Rehandicapping</button>
+          <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>Tour<br />Details</button>
+          <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>Tour<br />Admin</button>
+          <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>Rehandicapping</button>
 
-          <button className={`${btn} ${rowBlue[0]}`} onClick={() => openDocByIndex(0)}>Itinerary</button>
-          <button className={`${btn} ${rowBlue[1]}`} onClick={() => openDocByIndex(1)}>Accommodation</button>
-          <button className={`${btn} ${rowBlue[2]}`} onClick={() => openDocByIndex(2)}>Dining</button>
+          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openDocByIndex(0)}>Itinerary</button>
+          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openDocByIndex(1)}>Accommodation</button>
+          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openDocByIndex(2)}>Dining</button>
 
-          <button className={`${btn} ${rowBlue[0]}`} onClick={() => openDocByIndex(3)}>Player<br />Profiles</button>
-          <button className={`${btn} ${rowBlue[1]}`} onClick={() => openDocByIndex(4)}>Comps etc</button>
-          <button className="rounded-xl px-2 py-3 text-sm font-semibold bg-gray-200 text-gray-800" onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}>App<br />User Guide</button>
+          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openDocByIndex(3)}>Player<br />Profiles</button>
+          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openDocByIndex(4)}>Comps etc</button>
+          <button className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center" onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}>App<br />User Guide</button>
         </div>
 
-        <div className="pt-4 text-center text-xs text-gray-400">
-          Built by GAC Ventures
+        <div className="pt-6 text-center">
+          <div className="text-sm font-semibold text-gray-300">Built by GAC Ventures</div>
+          <div className="text-xs italic tracking-wide text-gray-400">Golf · Analytics · Competition</div>
         </div>
       </div>
     </div>
