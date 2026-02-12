@@ -711,7 +711,9 @@ export default function MobileLeaderboardsPage() {
     if (kind === "pairs") {
       if (pairRule.mode === "ALL") return "Pairs Better Ball · Total points across all rounds";
       const r = pairRule;
-      return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
+      return r.finalRequired
+        ? `Pairs Better Ball · Best ${r.q} rounds (Final required)`
+        : `Pairs Better Ball · Best ${r.q} rounds`;
     }
 
     return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 for each zero · All rounds`;
@@ -1100,115 +1102,131 @@ export default function MobileLeaderboardsPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      <div className="sticky top-0 z-50 isolate border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => setKind("individual")}
-              className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
-                kind === "individual"
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
-              }`}
-            >
-              Individual
-            </button>
-            <button
-              type="button"
-              onClick={() => setKind("pairs")}
-              className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
-                kind === "pairs"
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
-              }`}
-            >
-              Pairs
-            </button>
-            <button
-              type="button"
-              onClick={() => setKind("teams")}
-              className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
-                kind === "teams"
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
-              }`}
-            >
-              Teams
-            </button>
+      {/* Header block: Title row (with divider) then buttons row (with divider) */}
+      <div className="sticky top-0 z-50 isolate bg-white/95 backdrop-blur border-b">
+        {/* Title directly under the first/top line */}
+        <div className="border-b">
+          <div className="mx-auto w-full max-w-md px-4 py-3">
+            <div className="text-sm font-semibold text-gray-900">Leaderboard</div>
           </div>
+        </div>
 
-          {/* ✅ NEW: section label row (matches other pages' "Daily ..." header row concept) */}
-          <div className="mt-3 text-base font-semibold text-gray-900">Leaderboards</div>
+        {/* Buttons come AFTER a second horizontal line */}
+        <div>
+          <div className="mx-auto w-full max-w-md px-4 py-3">
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setKind("individual")}
+                className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
+                  kind === "individual"
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
+                }`}
+              >
+                Individual
+              </button>
+              <button
+                type="button"
+                onClick={() => setKind("pairs")}
+                className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
+                  kind === "pairs"
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
+                }`}
+              >
+                Pairs
+              </button>
+              <button
+                type="button"
+                onClick={() => setKind("teams")}
+                className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
+                  kind === "teams"
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
+                }`}
+              >
+                Teams
+              </button>
+            </div>
 
-          <div className="mt-2 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">{description}</div>
+            <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+              {description}
+            </div>
 
-          <div className="mt-3">
-            <button
-              type="button"
-              onClick={() => setShowDiagnostics((v) => !v)}
-              className="w-full rounded-2xl border border-gray-200 bg-white px-3 py-2 text-left text-xs font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
-              aria-label="Toggle diagnostics"
-            >
-              Diagnostics (holes 1, 2, 14) {showDiagnostics ? "▲" : "▼"}
-              <div className="mt-1 text-[11px] font-normal text-gray-600">
-                Confirms which par/SI the leaderboard is using for each round’s course (M and F tees).
-              </div>
-            </button>
-
-            {showDiagnostics ? (
-              <div className="mt-2 rounded-2xl border border-gray-200 bg-white p-3 text-[11px] text-gray-800">
-                <div className="mb-2 text-[11px] text-gray-600">
-                  Rounds: <span className="font-semibold text-gray-900">{sortedRounds.length}</span> · Players:{" "}
-                  <span className="font-semibold text-gray-900">{players.length}</span> · Scores:{" "}
-                  <span className="font-semibold text-gray-900">{scores.length}</span> · Pars:{" "}
-                  <span className="font-semibold text-gray-900">{pars.length}</span>
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => setShowDiagnostics((v) => !v)}
+                className="w-full rounded-2xl border border-gray-200 bg-white px-3 py-2 text-left text-xs font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
+                aria-label="Toggle diagnostics"
+              >
+                Diagnostics (holes 1, 2, 14) {showDiagnostics ? "▲" : "▼"}
+                <div className="mt-1 text-[11px] font-normal text-gray-600">
+                  Confirms which par/SI the leaderboard is using for each round’s course (M and F tees).
                 </div>
+              </button>
 
-                <div className="space-y-3">
-                  {diagnosticsRows.map((dr) => (
-                    <div key={dr.roundId} className="rounded-xl border border-gray-200 p-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="font-semibold text-gray-900">
-                            {dr.lab} · {dr.courseName}
+              {showDiagnostics ? (
+                <div className="mt-2 rounded-2xl border border-gray-200 bg-white p-3 text-[11px] text-gray-800">
+                  <div className="mb-2 text-[11px] text-gray-600">
+                    Rounds: <span className="font-semibold text-gray-900">{sortedRounds.length}</span> · Players:{" "}
+                    <span className="font-semibold text-gray-900">{players.length}</span> · Scores:{" "}
+                    <span className="font-semibold text-gray-900">{scores.length}</span> · Pars:{" "}
+                    <span className="font-semibold text-gray-900">{pars.length}</span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {diagnosticsRows.map((dr) => (
+                      <div key={dr.roundId} className="rounded-xl border border-gray-200 p-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="font-semibold text-gray-900">
+                              {dr.lab} · {dr.courseName}
+                            </div>
+                            <div className="mt-0.5 text-[10px] text-gray-600 break-all">course_id: {dr.courseId}</div>
                           </div>
-                          <div className="mt-0.5 text-[10px] text-gray-600 break-all">course_id: {dr.courseId}</div>
+                        </div>
+
+                        <div className="mt-2 grid grid-cols-1 gap-2">
+                          <div className="rounded-lg bg-gray-50 p-2">
+                            <div className="text-[10px] font-semibold text-gray-700">Men (M)</div>
+                            <div className="mt-1 flex flex-wrap gap-2">
+                              {dr.mVals.map((v) => (
+                                <div
+                                  key={`m-${dr.roundId}-${v.hole}`}
+                                  className="rounded-md border border-gray-200 bg-white px-2 py-1"
+                                >
+                                  <span className="font-semibold">H{v.hole}</span> · Par {v.par} · SI {v.si}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="rounded-lg bg-gray-50 p-2">
+                            <div className="text-[10px] font-semibold text-gray-700">Women (F)</div>
+                            <div className="mt-1 flex flex-wrap gap-2">
+                              {dr.fVals.map((v) => (
+                                <div
+                                  key={`f-${dr.roundId}-${v.hole}`}
+                                  className="rounded-md border border-gray-200 bg-white px-2 py-1"
+                                >
+                                  <span className="font-semibold">H{v.hole}</span> · Par {v.par} · SI {v.si}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="text-[10px] text-gray-600">
+                            If a value shows “—”, the leaderboard did not find a pars row for that hole/tee/course.
+                          </div>
                         </div>
                       </div>
-
-                      <div className="mt-2 grid grid-cols-1 gap-2">
-                        <div className="rounded-lg bg-gray-50 p-2">
-                          <div className="text-[10px] font-semibold text-gray-700">Men (M)</div>
-                          <div className="mt-1 flex flex-wrap gap-2">
-                            {dr.mVals.map((v) => (
-                              <div key={`m-${dr.roundId}-${v.hole}`} className="rounded-md border border-gray-200 bg-white px-2 py-1">
-                                <span className="font-semibold">H{v.hole}</span> · Par {v.par} · SI {v.si}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="rounded-lg bg-gray-50 p-2">
-                          <div className="text-[10px] font-semibold text-gray-700">Women (F)</div>
-                          <div className="mt-1 flex flex-wrap gap-2">
-                            {dr.fVals.map((v) => (
-                              <div key={`f-${dr.roundId}-${v.hole}`} className="rounded-md border border-gray-200 bg-white px-2 py-1">
-                                <span className="font-semibold">H{v.hole}</span> · Par {v.par} · SI {v.si}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="text-[10px] text-gray-600">
-                          If a value shows “—”, the leaderboard did not find a pars row for that hole/tee/course.
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </div>
         </div>
       </div>
