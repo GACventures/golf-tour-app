@@ -393,6 +393,7 @@ export default function MobileRoundTeeTimesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tourId, roundId]);
 
+  // ✅ SINGLE definition only (fixes the build error)
   const membersByGroup = useMemo(() => {
     const map: Record<string, GroupPlayerRow[]> = {};
     for (const m of members) {
@@ -412,6 +413,10 @@ export default function MobileRoundTeeTimesPage() {
     }
     return map;
   }, [members]);
+
+  function onBack() {
+    router.push(`/m/tours/${tourId}/rounds?mode=tee-times`);
+  }
 
   async function generateFinalRoundTeeTimes() {
     setGenError("");
@@ -469,6 +474,7 @@ export default function MobileRoundTeeTimesPage() {
         const bn = b.round_no ?? 999999;
         if (an !== bn) return an - bn;
 
+        // ✅ prefer played_on for tie-break ordering
         const ap = String(a.played_on ?? "");
         const bp = String(b.played_on ?? "");
         if (ap && bp && ap !== bp) return ap.localeCompare(bp);
@@ -702,30 +708,6 @@ export default function MobileRoundTeeTimesPage() {
     } finally {
       setGenerating(false);
     }
-  }
-
-  const membersByGroup = useMemo(() => {
-    const map: Record<string, GroupPlayerRow[]> = {};
-    for (const m of members) {
-      if (!map[m.group_id]) map[m.group_id] = [];
-      map[m.group_id].push(m);
-    }
-    for (const gid of Object.keys(map)) {
-      map[gid].sort((a, b) => {
-        const as = a.seat ?? 9999;
-        const bs = b.seat ?? 9999;
-        if (as !== bs) return as - bs;
-        const an = safeStr(asSingle(a.players as any)?.name, "");
-        const bn = safeStr(asSingle(b.players as any)?.name, "");
-        if (an !== bn) return an.localeCompare(bn);
-        return String(a.player_id).localeCompare(String(b.player_id));
-      });
-    }
-    return map;
-  }, [members]);
-
-  function onBack() {
-    router.push(`/m/tours/${tourId}/rounds?mode=tee-times`);
   }
 
   // ✅ Use played_on for “round date”, fallback to created_at if missing
