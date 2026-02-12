@@ -564,24 +564,21 @@ export default function MatchesResultsRoundPage() {
   }, [round]);
 
   const roundFormatLine = useMemo(() => {
-  if (!settings) return "";
-  return `Round format: ${formatLabel(settings.format)}${settings.double_points ? " · Double points" : ""}`;
-}, [settings]);
-
+    if (!settings) return "";
+    return `Round format: ${formatLabel(settings.format)}${settings.double_points ? " · Double points" : ""}`;
+  }, [settings]);
 
   function hardNavigateToMatch(matchId: string) {
     if (!matchId) return;
 
     const url = `/m/tours/${tourId}/matches/results/${roundId}/match/${matchId}`;
 
-    // Try SPA navigation first
     try {
       router.push(url);
     } catch {
       // ignore
     }
 
-    // Hard fallback (covers iOS oddities / blocked client navigation)
     if (typeof window !== "undefined") {
       const targetPath = new URL(url, window.location.origin).pathname;
       window.setTimeout(() => {
@@ -609,9 +606,9 @@ export default function MatchesResultsRoundPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
-      {/* Tee-times style header (3-band) */}
+      {/* Header (3-band) */}
       <div className="sticky top-0 z-10 bg-white/95 backdrop-blur">
-        {/* Band 1: tour + home */}
+        {/* Band 1: tour + home (unchanged) */}
         <div className="border-b border-slate-200">
           <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
@@ -627,23 +624,20 @@ export default function MatchesResultsRoundPage() {
           </div>
         </div>
 
-        {/* Band 2: page title + back */}
+        {/* Band 2: page title + back (updated) */}
         <div className="border-b border-slate-200">
           <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-base font-semibold text-slate-900">Matches – Results</div>
+              <div className="text-base font-semibold text-slate-900">Matchplay results</div>
             </div>
 
-            <Link
-              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm active:bg-slate-50"
-              href={`/m/tours/${tourId}/matches/results`}
-            >
+            <Link className="text-sm font-semibold text-slate-900" href={`/m/tours/${tourId}/matches/results`}>
               Back
             </Link>
           </div>
         </div>
 
-        {/* Band 3: round meta */}
+        {/* Band 3: round meta (unchanged) */}
         <div className="border-b border-slate-200 bg-slate-50">
           <div className="mx-auto w-full max-w-md px-4 py-2">
             <div className="truncate text-sm font-semibold text-slate-800">{headerLine || "Round"}</div>
@@ -703,7 +697,8 @@ export default function MatchesResultsRoundPage() {
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Stableford results</div>
                   <div className="mt-1 text-xs text-gray-600">
-                    Winners are top <span className="font-semibold">{stablefordWinners.target}</span> by round Stableford total (ties at cutoff included).
+                    Winners are top <span className="font-semibold">{stablefordWinners.target}</span> by round Stableford
+                    total (ties at cutoff included).
                   </div>
                 </div>
 
@@ -737,13 +732,19 @@ export default function MatchesResultsRoundPage() {
                       <div className="mt-2 overflow-hidden rounded-2xl border border-gray-200">
                         <div className="grid grid-cols-12 bg-gray-50 border-b">
                           <div className="col-span-9 px-3 py-2 text-[11px] font-semibold text-gray-700">Player</div>
-                          <div className="col-span-3 px-3 py-2 text-right text-[11px] font-semibold text-gray-700">Total</div>
+                          <div className="col-span-3 px-3 py-2 text-right text-[11px] font-semibold text-gray-700">
+                            Total
+                          </div>
                         </div>
                         <div className="divide-y">
                           {stablefordTotals.map((r) => (
-                           <div key={r.player_id} className="grid grid-cols-12">
-                              <div className="col-span-9 px-3 py-2 text-sm font-semibold text-gray-900 truncate">{r.name}</div>
-                              <div className="col-span-3 px-3 py-2 text-right text-sm font-extrabold text-gray-900">{r.total}</div>
+                            <div key={r.player_id} className="grid grid-cols-12">
+                              <div className="col-span-9 px-3 py-2 text-sm font-semibold text-gray-900 truncate">
+                                {r.name}
+                              </div>
+                              <div className="col-span-3 px-3 py-2 text-right text-sm font-extrabold text-gray-900">
+                                {r.total}
+                              </div>
                             </div>
                           ))}
                         </div>
