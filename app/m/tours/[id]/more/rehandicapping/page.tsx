@@ -1,3 +1,4 @@
+// app/m/tours/[id]/rehandicapping/page.tsx
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -266,11 +267,10 @@ export default function MobileTourRehandicappingPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Header */}
+      {/* Header (ONLY title; no tour name line) */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">Rehandicapping</div>
-          <div className="truncate text-sm text-gray-500">{tour?.name ?? ""}</div>
         </div>
       </div>
 

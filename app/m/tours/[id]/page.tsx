@@ -18,15 +18,6 @@ type RoundRow = {
   played_on: string | null;
 };
 
-type TourDocRow = {
-  id: string;
-  tour_id: string;
-  title: string;
-  storage_bucket: string;
-  storage_path: string;
-  sort_order: number;
-};
-
 const DEFAULT_HERO = "/tours/tour-landing-hero-cartoon.webp";
 
 const JAPAN_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
@@ -38,8 +29,25 @@ const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
 const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
 const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
 
-// ✅ single source of truth for bucket name
-const PDF_BUCKET = "tours-pdfs";
+/**
+ * ✅ START-FROM-SCRATCH PDF CONFIG
+ * 1) Create a brand-new PUBLIC bucket in Supabase Storage with this exact name:
+ */
+const PDF_BUCKET = "tours-pdfs-v2";
+
+/**
+ * 2) Only THIS tour is expected to have PDFs.
+ *    For every other tour, we show "Document not available for this tour."
+ */
+const TOUR_WITH_PDFS_ID = "5a80b049-396f-46ec-965e-810e738471b6";
+
+/**
+ * 3) Upload PDFs under:
+ *    tours/tours/<tourId>/<filename>.pdf
+ */
+function pdfPath(tourId: string, filename: string) {
+  return `tours/tours/${tourId}/${filename}`;
+}
 
 function parseDate(value: string | null): Date | null {
   if (!value) return null;
@@ -66,19 +74,6 @@ function formatTourDates(start: Date | null, end: Date | null) {
   return "";
 }
 
-function normalizeStoragePath(p: string, tourId: string) {
-  const path = String(p ?? "").trim().replace(/^\/+/, "");
-  if (!path) return "";
-
-  // If DB says: tours/<tourId>/file.pdf
-  // but storage is: tours/tours/<tourId>/file.pdf
-  if (path.startsWith(`tours/${tourId}/`)) {
-    return `tours/tours/${tourId}/${path.slice(`tours/${tourId}/`.length)}`;
-  }
-
-  return path;
-}
-
 export default function MobileTourLandingPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -86,7 +81,6 @@ export default function MobileTourLandingPage() {
 
   const [tour, setTour] = useState<TourRow | null>(null);
   const [rounds, setRounds] = useState<RoundRow[]>([]);
-  const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -95,37 +89,15 @@ export default function MobileTourLandingPage() {
     async function loadAll() {
       setLoading(true);
 
-      const [{ data: t, error: tErr }, { data: r, error: rErr }, { data: d, error: dErr }] = await Promise.all([
+      const [{ data: t }, { data: r }] = await Promise.all([
         supabase.from("tours").select("id,name,start_date,end_date,image_url").eq("id", tourId).single(),
         supabase.from("rounds").select("id,tour_id,played_on").eq("tour_id", tourId),
-        supabase
-          .from("tour_documents")
-          .select("id,tour_id,title,storage_bucket,storage_path,sort_order")
-          .eq("tour_id", tourId)
-          .order("sort_order", { ascending: true }),
       ]);
 
       if (!alive) return;
 
-      // Tour/rounds can still render even if docs query fails
-      if (!tErr) setTour(t as TourRow);
-      if (!rErr) setRounds((r ?? []) as RoundRow[]);
-
-      if (!dErr) {
-        // ✅ Force bucket to known constant regardless of DB contents
-        const cleanedDocs: TourDocRow[] = (d ?? []).map((x: any) => ({
-          id: String(x.id),
-          tour_id: String(x.tour_id),
-          title: String(x.title ?? "").trim() || "Document",
-          storage_bucket: PDF_BUCKET,
-          storage_path: String(x.storage_path ?? "").trim(),
-          sort_order: Number(x.sort_order ?? 0),
-        }));
-        setDocs(cleanedDocs);
-      } else {
-        setDocs([]);
-      }
-
+      setTour((t ?? null) as TourRow | null);
+      setRounds((r ?? []) as RoundRow[]);
       setLoading(false);
     }
 
@@ -153,42 +125,27 @@ export default function MobileTourLandingPage() {
   const end = parseDate(tour?.end_date || derivedDates.end);
   const dateLabel = formatTourDates(start, end);
 
-  async function openDocByIndex(idx: number) {
-    const doc = docs[idx];
-    if (!doc) {
+  function openPdf(filename: string) {
+    // Only one tour has PDFs (by design for this reset)
+    if (!tourId || tourId !== TOUR_WITH_PDFS_ID) {
       alert("Document not available for this tour.");
       return;
     }
 
-    const rawPath = String(doc.storage_path ?? "").trim();
-    const path = normalizeStoragePath(rawPath, tourId);
+    const path = pdfPath(tourId, filename);
+    const { data } = supabase.storage.from(PDF_BUCKET).getPublicUrl(path);
+    const url = data?.publicUrl;
 
-    if (!path) {
-      alert("Document not available for this tour.");
+    if (!url) {
+      alert("Unable to open document.");
       return;
     }
 
-    // ✅ Buckets are public, so public URL is simplest + avoids signed-url/bucket confusion
-    // If public URL doesn't exist (file missing), we fall back to signed URL attempt.
-    const publicRes = supabase.storage.from(PDF_BUCKET).getPublicUrl(path);
-    const publicUrl = publicRes?.data?.publicUrl;
-
-    if (publicUrl) {
-      window.open(publicUrl, "_blank", "noopener,noreferrer");
-      return;
-    }
-
-    // Fallback: signed URL
-    const { data, error } = await supabase.storage.from(PDF_BUCKET).createSignedUrl(path, 600);
-    if (error || !data?.signedUrl) {
-      alert(error?.message || "Unable to open document.");
-      return;
-    }
-
-    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  const baseBtn = "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
+  const baseBtn =
+    "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
 
   const rowColors = [
     "bg-blue-100 text-gray-900",
@@ -212,7 +169,6 @@ export default function MobileTourLandingPage() {
         )}
       </div>
 
-      {/* Landscape hero */}
       <div className="relative h-[26vh] bg-black">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={heroImage} alt="" className="h-full w-full object-cover" />
@@ -260,20 +216,21 @@ export default function MobileTourLandingPage() {
             Rehandicapping
           </button>
 
-          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openDocByIndex(0)}>
+          {/* Buttons 13–17 (fresh start) */}
+          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openPdf("itinerary.pdf")}>
             Itinerary
           </button>
-          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openDocByIndex(1)}>
+          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openPdf("accommodation.pdf")}>
             Accommodation
           </button>
-          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openDocByIndex(2)}>
+          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openPdf("dining.pdf")}>
             Dining
           </button>
 
-          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openDocByIndex(3)}>
+          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openPdf("profiles.pdf")}>
             Player<br />Profiles
           </button>
-          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openDocByIndex(4)}>
+          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openPdf("comps.pdf")}>
             Comps etc
           </button>
 
