@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-// PDF.js (build-safe worker served from /public)
+// PDF.js (worker served from /public)
 import * as pdfjsLib from "pdfjs-dist";
 (pdfjsLib as any).GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
@@ -55,17 +55,21 @@ const PDF_FILES = [
 ] as const;
 
 /**
- * ✅ TUNING KNOBS (your requested changes)
- * - Zoom jumps are now MUCH larger per tap (multiplicative).
- * - Drag-to-pan is now "faster" (movement multiplier).
+ * ✅ TUNING (your request)
+ * - 2 taps max to readable: zoom doubles each tap (1 → 2 → 4)
+ * - Pan much faster: stronger pan multiplier
+ * - Momentum/inertia on release
  */
-const ZOOM_IN_MULTIPLIER = 1.6;   // much stronger zoom per tap
+const ZOOM_IN_MULTIPLIER = 2.0; // 1.0 -> 2.0 -> 4.0
 const ZOOM_OUT_MULTIPLIER = 1 / ZOOM_IN_MULTIPLIER;
 const MIN_ZOOM = 0.6;
-const MAX_ZOOM = 4.0;
+const MAX_ZOOM = 6.0;
 
-const PAN_SPEED = 2.5;           // much faster drag movement
+const PAN_SPEED = 3.5; // faster per swipe
 
+// Inertia tuning
+const INERTIA_FRICTION = 0.92; // closer to 1 = longer glide
+const INERTIA_STOP_SPEED = 20; // px/sec threshold to stop
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -115,18 +119,34 @@ export default function MobileTourLandingPage() {
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Viewport for pan (we pan by updating scrollLeft/scrollTop)
+  // Viewport for pan (we pan via scrollLeft/scrollTop)
   const viewportRef = useRef<HTMLDivElement | null>(null);
 
-  // Drag state refs (no React state = no jank)
+  // Drag state
   const isDraggingRef = useRef(false);
   const dragStartXRef = useRef(0);
   const dragStartYRef = useRef(0);
   const dragStartScrollLeftRef = useRef(0);
   const dragStartScrollTopRef = useRef(0);
 
-  // Preserve scroll position proportionally when zoom changes / rerender happens
+  // Velocity tracking for inertia (px/sec)
+  const lastMoveTimeRef = useRef<number>(0);
+  const lastMoveXRef = useRef<number>(0);
+  const lastMoveYRef = useRef<number>(0);
+  const velocityXRef = useRef<number>(0);
+  const velocityYRef = useRef<number>(0);
+
+  const inertiaRafRef = useRef<number | null>(null);
+
+  // Preserve scroll position proportionally when zoom changes
   const scrollRatioRef = useRef<{ x: number; y: number } | null>(null);
+
+  const stopInertia = useCallback(() => {
+    if (inertiaRafRef.current != null) {
+      cancelAnimationFrame(inertiaRafRef.current);
+      inertiaRafRef.current = null;
+    }
+  }, []);
 
   const captureScrollRatio = useCallback(() => {
     const vp = viewportRef.current;
@@ -154,6 +174,7 @@ export default function MobileTourLandingPage() {
   }, []);
 
   const closeViewer = useCallback(() => {
+    stopInertia();
     setViewerSrc(null);
     setZoom(1.0);
     scrollRatioRef.current = null;
@@ -162,7 +183,7 @@ export default function MobileTourLandingPage() {
       const ctx = canvasRef.current.getContext("2d");
       if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
     }
-  }, []);
+  }, [stopInertia]);
 
   useEffect(() => {
     let alive = true;
@@ -223,7 +244,7 @@ export default function MobileTourLandingPage() {
     async function loadAndRender() {
       if (!viewerSrc || !canvasRef.current) return;
 
-      // Save current pan position before we resize the canvas
+      // Save current pan position before resize
       captureScrollRatio();
 
       setRendering(true);
@@ -248,7 +269,6 @@ export default function MobileTourLandingPage() {
         const renderTask = page.render({ canvasContext: ctx, viewport });
         await renderTask.promise;
 
-        // Restore pan after render (prevents “jump back” feeling)
         requestAnimationFrame(() => {
           restoreScrollRatio();
         });
@@ -293,13 +313,13 @@ export default function MobileTourLandingPage() {
         const fallbackTitle = filename.replace(".pdf", "");
         const title = docs?.[idx]?.title?.trim() || fallbackTitle;
 
-        // Reset pan+zoom cleanly on open
+        stopInertia();
         scrollRatioRef.current = { x: 0, y: 0 };
+
         setViewerTitle(title);
         setZoom(1.0);
         setViewerSrc(routeUrl);
 
-        // Start at top-left
         requestAnimationFrame(() => {
           const vp = viewportRef.current;
           if (vp) {
@@ -313,26 +333,76 @@ export default function MobileTourLandingPage() {
         setOpeningDocIdx(null);
       }
     },
-    [tourId, docs]
+    [tourId, docs, stopInertia]
   );
 
-  // Drag-to-pan handlers (with speed multiplier)
-  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+  // Inertia loop
+  const startInertia = useCallback(() => {
     const vp = viewportRef.current;
     if (!vp) return;
 
-    isDraggingRef.current = true;
-    dragStartXRef.current = e.clientX;
-    dragStartYRef.current = e.clientY;
-    dragStartScrollLeftRef.current = vp.scrollLeft;
-    dragStartScrollTopRef.current = vp.scrollTop;
+    stopInertia();
 
-    try {
-      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-    } catch {}
+    let lastT = performance.now();
 
-    e.preventDefault();
-  }, []);
+    const tick = (t: number) => {
+      const dt = Math.max(0.001, (t - lastT) / 1000);
+      lastT = t;
+
+      // Apply velocity (px/sec)
+      const vx = velocityXRef.current;
+      const vy = velocityYRef.current;
+
+      // Stop if very slow
+      const speed = Math.hypot(vx, vy);
+      if (speed < INERTIA_STOP_SPEED) {
+        inertiaRafRef.current = null;
+        captureScrollRatio();
+        return;
+      }
+
+      vp.scrollLeft -= vx * dt;
+      vp.scrollTop -= vy * dt;
+
+      // Friction
+      velocityXRef.current = vx * INERTIA_FRICTION;
+      velocityYRef.current = vy * INERTIA_FRICTION;
+
+      inertiaRafRef.current = requestAnimationFrame(tick);
+    };
+
+    inertiaRafRef.current = requestAnimationFrame(tick);
+  }, [stopInertia, captureScrollRatio]);
+
+  // Drag-to-pan handlers
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const vp = viewportRef.current;
+      if (!vp) return;
+
+      stopInertia();
+
+      isDraggingRef.current = true;
+      dragStartXRef.current = e.clientX;
+      dragStartYRef.current = e.clientY;
+      dragStartScrollLeftRef.current = vp.scrollLeft;
+      dragStartScrollTopRef.current = vp.scrollTop;
+
+      const now = performance.now();
+      lastMoveTimeRef.current = now;
+      lastMoveXRef.current = e.clientX;
+      lastMoveYRef.current = e.clientY;
+      velocityXRef.current = 0;
+      velocityYRef.current = 0;
+
+      try {
+        (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+      } catch {}
+
+      e.preventDefault();
+    },
+    [stopInertia]
+  );
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!isDraggingRef.current) return;
@@ -342,9 +412,23 @@ export default function MobileTourLandingPage() {
     const dx = e.clientX - dragStartXRef.current;
     const dy = e.clientY - dragStartYRef.current;
 
-    // ✅ Faster panning (moves further per swipe)
+    // Faster panning
     vp.scrollLeft = dragStartScrollLeftRef.current - dx * PAN_SPEED;
     vp.scrollTop = dragStartScrollTopRef.current - dy * PAN_SPEED;
+
+    // Velocity estimate (px/sec) from last move
+    const now = performance.now();
+    const dtMs = Math.max(1, now - lastMoveTimeRef.current);
+    const stepX = e.clientX - lastMoveXRef.current;
+    const stepY = e.clientY - lastMoveYRef.current;
+
+    // Convert finger motion to scroll velocity (invert + apply PAN_SPEED)
+    velocityXRef.current = (stepX * PAN_SPEED * 1000) / dtMs;
+    velocityYRef.current = (stepY * PAN_SPEED * 1000) / dtMs;
+
+    lastMoveTimeRef.current = now;
+    lastMoveXRef.current = e.clientX;
+    lastMoveYRef.current = e.clientY;
 
     e.preventDefault();
   }, []);
@@ -358,9 +442,10 @@ export default function MobileTourLandingPage() {
         (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
       } catch {}
 
-      captureScrollRatio();
+      // Start inertia after release
+      startInertia();
     },
-    [captureScrollRatio]
+    [startInertia]
   );
 
   const baseBtn =
@@ -375,7 +460,7 @@ export default function MobileTourLandingPage() {
     "bg-blue-600 text-white",
   ];
 
-  // ✅ Bigger zoom jumps per tap (multiplicative)
+  // Bigger zoom jumps per tap
   const zoomOut = useCallback(() => {
     captureScrollRatio();
     setZoom((z) => clamp(Number((z * ZOOM_OUT_MULTIPLIER).toFixed(3)), MIN_ZOOM, MAX_ZOOM));
@@ -480,7 +565,7 @@ export default function MobileTourLandingPage() {
         </div>
       </div>
 
-      {/* PDF.js overlay with zoom + drag-to-pan */}
+      {/* PDF overlay with zoom + fast pan + inertia */}
       {viewerSrc && (
         <div className="fixed inset-0 z-50 bg-black">
           <div className="flex items-center justify-between px-4 py-3 bg-black/90">
