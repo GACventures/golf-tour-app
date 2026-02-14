@@ -86,16 +86,13 @@ export default function MobileTourLandingPage() {
   const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // ✅ PDF viewer state (in-tab overlay, no navigation, no new routes)
+  // ✅ In-page PDF overlay state (NO fetch, NO blob, NO new tab, NO new page)
   const [openingDocIdx, setOpeningDocIdx] = useState<number | null>(null);
-  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const [viewerTitle, setViewerTitle] = useState<string>("Document");
 
   const closeViewer = useCallback(() => {
-    setViewerUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return null;
-    });
+    setViewerSrc(null);
   }, []);
 
   useEffect(() => {
@@ -150,8 +147,8 @@ export default function MobileTourLandingPage() {
   const end = parseDate(tour?.end_date || derivedDates.end);
   const dateLabel = formatTourDates(start, end);
 
-  // ✅ Buttons 13–17 open via same-origin proxy route that you already created:
-  // /m/tours/[id]/pdf/[filename]
+  // ✅ Buttons 13–17: show the same-origin proxy route INSIDE an overlay.
+  // This prevents navigation, avoids blob/CSP weirdness, and avoids new tabs.
   const openDocByIndex = useCallback(
     async (idx: number) => {
       if (tourId !== PDF_TOUR_ID) {
@@ -168,39 +165,21 @@ export default function MobileTourLandingPage() {
       setOpeningDocIdx(idx);
 
       try {
-        const res = await fetch(`/m/tours/${tourId}/pdf/${encodeURIComponent(filename)}`, {
-          method: "GET",
-          cache: "no-store",
-        });
-
-        if (!res.ok) {
+        // Optional existence check (HEAD) against same-origin route
+        const routeUrl = `/m/tours/${tourId}/pdf/${encodeURIComponent(filename)}`;
+        const head = await fetch(routeUrl, { method: "HEAD", cache: "no-store" });
+        if (!head.ok) {
           alert(NOT_AVAILABLE_MESSAGE);
           return;
         }
 
-        const blob = await res.blob();
-        const type = (blob.type || "").toLowerCase();
-
-        // Guard against HTML/error responses
-        if (!type.includes("pdf")) {
-          alert(NOT_AVAILABLE_MESSAGE);
-          return;
-        }
-
-        // Revoke prior blob URL
-        setViewerUrl((prev) => {
-          if (prev) URL.revokeObjectURL(prev);
-          return prev;
-        });
-
-        const url = URL.createObjectURL(blob);
-
-        // Use DB title if present, else sensible fallback
-        const fallbackTitle = filename.replace(".pdf", "");
-        const title = docs?.[idx]?.title?.trim() || fallbackTitle;
+        const title =
+          docs?.[idx]?.title?.trim() ||
+          (filename.replace(".pdf", "").charAt(0).toUpperCase() +
+            filename.replace(".pdf", "").slice(1));
 
         setViewerTitle(title);
-        setViewerUrl(url);
+        setViewerSrc(routeUrl);
       } catch {
         alert(NOT_AVAILABLE_MESSAGE);
       } finally {
@@ -244,18 +223,21 @@ export default function MobileTourLandingPage() {
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
         <div className="grid grid-cols-3 gap-2">
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[0]}`}
             onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}
           >
             Daily<br />Tee times
           </button>
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[0]}`}
             onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}
           >
             Daily<br />Results
           </button>
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[0]}`}
             onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}
           >
@@ -263,18 +245,21 @@ export default function MobileTourLandingPage() {
           </button>
 
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[1]}`}
             onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}
           >
             Leaderboards
           </button>
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[1]}`}
             onClick={() => router.push(`/m/tours/${tourId}/competitions`)}
           >
             Competitions
           </button>
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[1]}`}
             onClick={() => router.push(`/m/tours/${tourId}/stats`)}
           >
@@ -282,18 +267,21 @@ export default function MobileTourLandingPage() {
           </button>
 
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[2]}`}
             onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}
           >
             Matchplay<br />Format
           </button>
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[2]}`}
             onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}
           >
             Matchplay<br />Results
           </button>
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[2]}`}
             onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}
           >
@@ -301,18 +289,21 @@ export default function MobileTourLandingPage() {
           </button>
 
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[3]}`}
             onClick={() => router.push(`/m/tours/${tourId}/details`)}
           >
             Tour<br />Details
           </button>
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[3]}`}
             onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}
           >
             Tour<br />Admin
           </button>
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[3]}`}
             onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}
           >
@@ -321,18 +312,21 @@ export default function MobileTourLandingPage() {
 
           {/* 13–17 (PDFs) */}
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(0)}
           >
             {openingDocIdx === 0 ? "Opening…" : "Itinerary"}
           </button>
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(1)}
           >
             {openingDocIdx === 1 ? "Opening…" : "Accommodation"}
           </button>
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(2)}
           >
@@ -340,6 +334,7 @@ export default function MobileTourLandingPage() {
           </button>
 
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(3)}
           >
@@ -352,6 +347,7 @@ export default function MobileTourLandingPage() {
             )}
           </button>
           <button
+            type="button"
             className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(4)}
           >
@@ -359,6 +355,7 @@ export default function MobileTourLandingPage() {
           </button>
 
           <button
+            type="button"
             className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
             onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
           >
@@ -374,8 +371,8 @@ export default function MobileTourLandingPage() {
         </div>
       </div>
 
-      {/* ✅ Full-screen in-tab PDF viewer (embed first for better zoom, iframe fallback) */}
-      {viewerUrl && (
+      {/* ✅ Full-screen in-tab PDF overlay (same-origin src) */}
+      {viewerSrc && (
         <div className="fixed inset-0 z-50 bg-black">
           <div className="flex items-center justify-between px-4 py-3 bg-black/90">
             <div className="text-white text-sm font-semibold truncate">{viewerTitle}</div>
@@ -389,9 +386,10 @@ export default function MobileTourLandingPage() {
           </div>
 
           <div className="w-full h-[calc(100dvh-52px)] bg-white">
-            <embed src={viewerUrl} type="application/pdf" className="w-full h-full" />
-            {/* fallback (some browsers ignore embed) */}
-            <iframe title={viewerTitle} src={viewerUrl} className="hidden" />
+            {/* embed first for better native controls where supported */}
+            <embed src={viewerSrc} type="application/pdf" className="w-full h-full" />
+            {/* iframe fallback */}
+            <iframe title={viewerTitle} src={viewerSrc} className="hidden" />
           </div>
         </div>
       )}
