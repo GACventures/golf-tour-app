@@ -1,11 +1,9 @@
 "use client";
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useState } from "react";
 import { useParams } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 
 const PDF_TOUR_ID = "5a80b049-396f-46ec-965e-810e738471b6";
-const BUCKET = "tours-pdfs-v2";
 const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
 
 type PdfKey = "itinerary" | "accommodation" | "dining" | "profiles" | "comps";
@@ -22,34 +20,25 @@ const PDF_BUTTONS: Array<{
   { key: "comps", label: "Comps etc", filename: "comps.pdf" },
 ];
 
-function getSupabaseBrowserClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anon) {
-    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  }
-  return createClient(url, anon);
-}
-
 export default function MobileTourLandingPage() {
   const params = useParams<{ id: string }>();
-  const tourId = params?.id ?? "";
+  const tourId = (params?.id ?? "").trim();
 
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [openingKey, setOpeningKey] = useState<PdfKey | null>(null);
 
-  // When we have a valid URL, we show a full-screen "tap to open" overlay.
-  // This avoids popup blockers because the final navigation is a direct user tap.
-  const [docUrl, setDocUrl] = useState<string | null>(null);
-  const [docLabel, setDocLabel] = useState<string>("Document");
+  // Full-screen in-app PDF viewer state (opens automatically in this tab)
+  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+  const [viewerTitle, setViewerTitle] = useState<string>("Document");
 
-  const closeOverlay = useCallback(() => {
-    setDocUrl(null);
+  const closeViewer = useCallback(() => {
+    setViewerUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
   }, []);
 
   const openPdf = useCallback(
     async (filename: string, key: PdfKey, label: string) => {
-      // Rule 1: only one tour has PDFs
       if (tourId !== PDF_TOUR_ID) {
         alert(NOT_AVAILABLE_MESSAGE);
         return;
@@ -58,37 +47,42 @@ export default function MobileTourLandingPage() {
       setOpeningKey(key);
 
       try {
-        const path = `tours/tours/${tourId}/${filename}`;
+        // Fetch from SAME-ORIGIN proxy route (your Vercel domain)
+        const res = await fetch(
+          `/m/tours/${tourId}/pdf/${encodeURIComponent(filename)}`,
+          { method: "GET", cache: "no-store" }
+        );
 
-        // Required: getPublicUrl (no signed URLs)
-        const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
-        const publicUrl = data?.publicUrl;
-
-        if (!publicUrl) {
+        if (!res.ok) {
           alert(NOT_AVAILABLE_MESSAGE);
           return;
         }
 
-        // Required: if file does not exist -> alert
-        const head = await fetch(publicUrl, { method: "HEAD", cache: "no-store" });
-        if (!head.ok) {
+        const blob = await res.blob();
+
+        // Must be a PDF (avoid rendering an error page as a blob)
+        const type = (blob.type || "").toLowerCase();
+        if (!type.includes("pdf")) {
           alert(NOT_AVAILABLE_MESSAGE);
           return;
         }
 
-        // Show overlay; user taps an actual link (most reliable on mobile).
-        setDocLabel(label);
-        setDocUrl(publicUrl);
+        // Clean up any prior blob URL to avoid leaks
+        setViewerUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return prev;
+        });
 
-        // Also attempt immediate open (works in some environments)
-        window.open(publicUrl, "_blank", "noopener,noreferrer");
+        const url = URL.createObjectURL(blob);
+        setViewerTitle(label);
+        setViewerUrl(url);
       } catch {
         alert(NOT_AVAILABLE_MESSAGE);
       } finally {
         setOpeningKey(null);
       }
     },
-    [supabase, tourId]
+    [tourId]
   );
 
   return (
@@ -126,47 +120,25 @@ export default function MobileTourLandingPage() {
         })}
       </section>
 
-      {/* Full-screen overlay with a real link the user taps */}
-      {docUrl && (
-        <div className="fixed inset-0 z-50 bg-black/95">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-            <div className="text-white text-sm font-semibold truncate">{docLabel}</div>
+      {/* Auto-open in this tab: full-screen PDF viewer */}
+      {viewerUrl && (
+        <div className="fixed inset-0 z-50 bg-black">
+          <div className="flex items-center justify-between px-4 py-3 bg-black/90">
+            <div className="text-white text-sm font-semibold truncate">{viewerTitle}</div>
             <button
               type="button"
-              onClick={closeOverlay}
+              onClick={closeViewer}
               className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
             >
               Close
             </button>
           </div>
 
-          <div className="px-4 py-6">
-            <p className="text-white/80 text-sm mb-4">
-              Tap below to open the document.
-            </p>
-
-            {/* This is the key: user-initiated navigation */}
-            <a
-              href={docUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block w-full text-center rounded-2xl bg-white text-black font-semibold py-4"
-            >
-              Open {docLabel}
-            </a>
-
-            {/* Same-tab fallback (some in-app browsers block new tabs) */}
-            <a
-              href={docUrl}
-              className="block w-full text-center rounded-2xl border border-white/20 text-white font-semibold py-4 mt-3"
-            >
-              Open in this tab
-            </a>
-
-            <p className="text-white/60 text-xs mt-4 break-all">
-              {docUrl}
-            </p>
-          </div>
+          <iframe
+            title={viewerTitle}
+            src={viewerUrl}
+            className="w-full h-[calc(100dvh-52px)] bg-white"
+          />
         </div>
       )}
     </main>
