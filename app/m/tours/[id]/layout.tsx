@@ -27,6 +27,24 @@ export default function TourLayout({ children }: { children: React.ReactNode }) 
     return pathname === base || pathname === `${base}/`;
   }, [pathname, tourId]);
 
+  // ✅ Option A: exclude layout chrome for score entry page only
+  const isScoreEntryPage = useMemo(() => {
+    if (!tourId) return false;
+    const base = `/m/tours/${tourId}/rounds/`;
+    if (!pathname.startsWith(base)) return false;
+
+    // Expected: /m/tours/{tourId}/rounds/{roundId}/scoring/score
+    // So: take the remainder after ".../rounds/"
+    const rest = pathname.slice(base.length); // "{roundId}/scoring/score" (possibly with trailing slash)
+    const parts = rest.split("/").filter(Boolean);
+
+    if (parts.length !== 3) return false;
+    const [roundId, a, b] = parts;
+
+    if (!roundId || !isLikelyUuid(roundId)) return false;
+    return a === "scoring" && b === "score";
+  }, [pathname, tourId]);
+
   const [tourName, setTourName] = useState<string>("Tour");
   const [loadErr, setLoadErr] = useState<string>("");
 
@@ -63,15 +81,17 @@ export default function TourLayout({ children }: { children: React.ReactNode }) 
     };
   }, [tourId]);
 
-  // ✅ CHANGE #1: UNFIX landing page (remove scroll lock)
-  // (No body overflow manipulation)
+  // ✅ If score entry page: render ONLY children (no header/footer/padding)
+  if (isScoreEntryPage) {
+    return <>{children}</>;
+  }
 
   // Footer sizing so page content doesn't get hidden behind sticky footer
-  const FOOTER_PX = 76; // approx height incl border + padding (adjust if you change footer spacing)
+  const FOOTER_PX = 76; // approx height incl border + padding
 
   return (
     <div className="min-h-dvh bg-white text-gray-900">
-      {/* Top bar (sticky) — hidden on landing page (kept from earlier requirement) */}
+      {/* Top bar (sticky) — hidden on landing page */}
       {!isLandingPage ? (
         <div className="sticky top-0 z-20 border-b bg-white">
           <div className="mx-auto w-full max-w-md px-4 h-14 flex items-center justify-between gap-3">
@@ -87,15 +107,12 @@ export default function TourLayout({ children }: { children: React.ReactNode }) 
         </div>
       ) : null}
 
-      {/* ✅ CHANGE #2: lift footer visibility + ✅ CHANGE #4: sticky footer
-          We add padding-bottom so content never hides behind the fixed footer.
-      */}
+      {/* Pad so content never hides behind the fixed footer */}
       <div style={!isLandingPage ? { paddingBottom: FOOTER_PX } : undefined}>{children}</div>
 
-      {/* Footer hidden on landing page (kept from earlier requirement) */}
+      {/* Footer hidden on landing page */}
       {!isLandingPage ? (
         <footer className="fixed bottom-0 left-0 right-0 z-30 bg-white">
-          {/* ✅ CHANGE #3: horizontal line above footer */}
           <div className="border-t border-slate-200">
             <div className="mx-auto w-full max-w-md px-4 py-3 text-center">
               <div className="font-bold text-sm text-slate-900">Built by GAC Ventures</div>

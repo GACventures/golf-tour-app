@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+// ...rest of your existing route handler code...
+
+
 const PDF_TOUR_ID = "5a80b049-396f-46ec-965e-810e738471b6";
 const BUCKET = "tours-pdfs-v2";
 
