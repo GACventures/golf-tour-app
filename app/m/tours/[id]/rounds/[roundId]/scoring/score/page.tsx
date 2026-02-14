@@ -764,6 +764,7 @@ export default function MobileScoreEntryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+
   function goBackToSelect() {
     const href = `/m/tours/${tourId}/rounds/${roundId}/scoring?meId=${encodeURIComponent(meId)}${
       buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""
@@ -772,6 +773,16 @@ export default function MobileScoreEntryPage() {
       router.push(href);
     }
   }
+function handleBack() {
+  // If user is on Summary tab, go back to Entry tab instead of leaving the page
+  if (tab === "summary") {
+    setTab("entry");
+    return;
+  }
+
+  // Otherwise (Entry tab), use the existing behaviour
+  goBackToSelect();
+}
 
   function openInPageSummaryFor(pid: string) {
     if (!pid) return;
@@ -1124,7 +1135,8 @@ export default function MobileScoreEntryPage() {
         <button
           type="button"
           className="flex items-center gap-2 text-lg font-bold text-slate-900"
-          onClick={goBackToSelect}
+          onClick={handleBack}
+
           aria-label="Back"
         >
           <span className="text-2xl leading-none">‹</span>
