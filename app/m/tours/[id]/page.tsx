@@ -33,6 +33,18 @@ function getSupabaseBrowserClient() {
   return createClient(url, anon);
 }
 
+function openPdfUrlMostReliable(url: string) {
+  // 1) Try new tab (works in many browsers)
+  const w = window.open(url, "_blank", "noopener,noreferrer");
+
+  // 2) If blocked / ignored (common in mobile WebViews), force same-tab navigation
+  // window.open returns null when blocked. Some WebViews return a Window but still don't navigate;
+  // same-tab assign is the deterministic fallback.
+  if (!w) {
+    window.location.assign(url);
+  }
+}
+
 export default function MobileTourLandingPage() {
   const params = useParams<{ id: string }>();
   const tourId = params?.id ?? "";
@@ -40,17 +52,9 @@ export default function MobileTourLandingPage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [openingKey, setOpeningKey] = useState<PdfKey | null>(null);
 
-  // In-app PDF viewer state (mobile reliable; avoids popup blockers)
-  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
-  const [viewerTitle, setViewerTitle] = useState<string>("Document");
-
-  const closeViewer = useCallback(() => {
-    setViewerUrl(null);
-  }, []);
-
   const openPdf = useCallback(
-    async (filename: string, key: PdfKey, title: string) => {
-      // Only one tour has PDFs for now
+    async (filename: string, key: PdfKey) => {
+      // Rule 1: only this tour has PDFs for now
       if (tourId !== PDF_TOUR_ID) {
         alert(NOT_AVAILABLE_MESSAGE);
         return;
@@ -59,7 +63,8 @@ export default function MobileTourLandingPage() {
       setOpeningKey(key);
 
       try {
-        // Required exact path
+        // Exact required path structure:
+        // tours/tours/<tourId>/<filename>.pdf
         const path = `tours/tours/${tourId}/${filename}`;
 
         // Required: public URL (no signed URLs)
@@ -71,16 +76,15 @@ export default function MobileTourLandingPage() {
           return;
         }
 
-        // Deterministic existence check (no list())
+        // Required: if file does not exist -> alert
         const head = await fetch(publicUrl, { method: "HEAD", cache: "no-store" });
         if (!head.ok) {
           alert(NOT_AVAILABLE_MESSAGE);
           return;
         }
 
-        // ✅ Show PDF inside the app (works on Vercel/mobile consistently)
-        setViewerTitle(title);
-        setViewerUrl(publicUrl);
+        // ✅ Most reliable open path for Vercel mobile (new-tab first, same-tab fallback)
+        openPdfUrlMostReliable(publicUrl);
       } catch {
         alert(NOT_AVAILABLE_MESSAGE);
       } finally {
@@ -100,7 +104,7 @@ export default function MobileTourLandingPage() {
       <section className="mb-4 rounded-xl border p-3">
         <p className="text-sm font-medium">Documents (Buttons 13–17)</p>
         <p className="text-xs opacity-70 mt-1">
-          Only tour {PDF_TOUR_ID} has PDFs. All other tours show an alert.
+          Opens PDFs only for the hard-coded PDF tour. All other tours show an alert.
         </p>
       </section>
 
@@ -112,7 +116,7 @@ export default function MobileTourLandingPage() {
             <button
               key={b.key}
               type="button"
-              onClick={() => openPdf(b.filename, b.key, b.label)}
+              onClick={() => openPdf(b.filename, b.key)}
               disabled={isOpening}
               className="rounded-2xl border px-4 py-4 text-left active:scale-[0.99] disabled:opacity-60"
             >
@@ -124,29 +128,6 @@ export default function MobileTourLandingPage() {
           );
         })}
       </section>
-
-      {/* Full-screen mobile PDF viewer overlay */}
-      {viewerUrl && (
-        <div className="fixed inset-0 z-50 bg-black">
-          <div className="flex items-center justify-between px-4 py-3 bg-black/90">
-            <div className="text-white text-sm font-semibold truncate">{viewerTitle}</div>
-            <button
-              type="button"
-              onClick={closeViewer}
-              className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
-            >
-              Close
-            </button>
-          </div>
-
-          {/* iOS Safari / mobile friendly: iframe viewer */}
-          <iframe
-            title={viewerTitle}
-            src={viewerUrl}
-            className="w-full h-[calc(100dvh-52px)] bg-white"
-          />
-        </div>
-      )}
     </main>
   );
 }
