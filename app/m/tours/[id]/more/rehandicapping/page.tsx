@@ -117,7 +117,7 @@ export default function MobileTourMoreRehandicappingPage() {
   const [tourPlayers, setTourPlayers] = useState<TourPlayerJoinRow[]>([]);
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
 
-  // Automatic toggle UI state (same behavior as old admin)
+  // Automatic toggle UI state
   const [autoSaving, setAutoSaving] = useState(false);
   const [autoError, setAutoError] = useState("");
   const [autoMsg, setAutoMsg] = useState("");
@@ -303,7 +303,6 @@ export default function MobileTourMoreRehandicappingPage() {
     return (tour.rehandicapping_enabled === true) !== (autoEnabledInput === true);
   }, [tour, autoEnabledInput]);
 
-  const ruleHeaderSuffix = autoEnabled ? " (plain-english-v1)" : "";
   const ruleText = autoEnabled ? PLAIN_ENGLISH_RULE_V1 : "No automatic rehandicapping.";
 
   async function saveAutomaticToggle() {
@@ -321,7 +320,7 @@ export default function MobileTourMoreRehandicappingPage() {
       const { error } = await supabase.from("tours").update({ rehandicapping_enabled: nextEnabled }).eq("id", tour.id);
       if (error) throw error;
 
-      // Keep existing automatic logic unchanged; just run it so the table reflects the new mode.
+      // Keep automatic logic unchanged; run it so the table reflects the new mode.
       const recalcRes = await recalcAndSaveTourHandicaps({ supabase, tourId: tour.id });
       if (!recalcRes.ok) throw new Error(recalcRes.error);
 
@@ -386,7 +385,6 @@ export default function MobileTourMoreRehandicappingPage() {
           playing,
           tee,
           playing_handicap: ph,
-          // ensure we remove old one-off semantics if they existed
           base_playing_handicap: null,
         };
       });
@@ -493,7 +491,7 @@ export default function MobileTourMoreRehandicappingPage() {
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b">
                 <div className="text-sm font-semibold text-gray-900">Automatic rehandicapping</div>
-                <div className="mt-1 text-xs text-gray-600">Controls whether automatic rehandicapping is applied and displayed for this tour.</div>
+                {/* CHANGE #1: removed the helper sentence under the heading */}
               </div>
 
               <div className="p-4 space-y-3">
@@ -549,7 +547,8 @@ export default function MobileTourMoreRehandicappingPage() {
 
             {/* 2) Rule */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
-              <div className="text-sm font-semibold text-gray-900">Rule{ruleHeaderSuffix}</div>
+              {/* CHANGE #2: heading text */}
+              <div className="text-sm font-semibold text-gray-900">Rehandicapping rule</div>
               <div className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{ruleText}</div>
 
               {autoEnabled ? (
@@ -643,8 +642,12 @@ export default function MobileTourMoreRehandicappingPage() {
                               <div className="rounded-2xl border border-gray-200 overflow-hidden">
                                 <div className="grid grid-cols-12 gap-0 border-b bg-gray-50">
                                   <div className="col-span-6 px-2 py-2 text-[11px] font-semibold text-gray-700">Player</div>
-                                  <div className="col-span-3 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">PH (selected)</div>
-                                  <div className="col-span-3 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">Start</div>
+                                  <div className="col-span-3 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">
+                                    PH (selected)
+                                  </div>
+                                  <div className="col-span-3 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">
+                                    Start
+                                  </div>
                                 </div>
 
                                 <div className="divide-y">
