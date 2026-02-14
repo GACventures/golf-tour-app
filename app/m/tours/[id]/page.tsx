@@ -1,8 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+
+// PDF.js (no React wrapper; deterministic)
+import * as pdfjsLib from "pdfjs-dist";
+import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs";
+
+(pdfjsLib as any).GlobalWorkerOptions.workerSrc = pdfWorker;
 
 type TourRow = {
   id: string;
@@ -38,11 +44,11 @@ const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
 const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
 const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
 
-// ✅ Only this tour has PDFs for now
+// Only this tour has PDFs for now
 const PDF_TOUR_ID = "5a80b049-396f-46ec-965e-810e738471b6";
 const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
 
-// ✅ Exact filenames for buttons 13–17
+// Exact filenames for buttons 13–17
 const PDF_FILES = [
   "itinerary.pdf",
   "accommodation.pdf",
@@ -86,13 +92,24 @@ export default function MobileTourLandingPage() {
   const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // ✅ In-page PDF overlay state (NO fetch, NO blob, NO new tab, NO new page)
+  // PDF viewer state
   const [openingDocIdx, setOpeningDocIdx] = useState<number | null>(null);
-  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const [viewerTitle, setViewerTitle] = useState<string>("Document");
+  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
+  const [zoom, setZoom] = useState<number>(1.0);
+  const [rendering, setRendering] = useState<boolean>(false);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pdfDocRef = useRef<any>(null);
 
   const closeViewer = useCallback(() => {
     setViewerSrc(null);
+    setZoom(1.0);
+    pdfDocRef.current = null;
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext("2d");
+      if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
   }, []);
 
   useEffect(() => {
@@ -147,8 +164,54 @@ export default function MobileTourLandingPage() {
   const end = parseDate(tour?.end_date || derivedDates.end);
   const dateLabel = formatTourDates(start, end);
 
-  // ✅ Buttons 13–17: show the same-origin proxy route INSIDE an overlay.
-  // This prevents navigation, avoids blob/CSP weirdness, and avoids new tabs.
+  // Load + render first page whenever viewerSrc or zoom changes
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAndRender() {
+      if (!viewerSrc || !canvasRef.current) return;
+
+      setRendering(true);
+
+      try {
+        // Load PDF from same-origin proxy route
+        const loadingTask = (pdfjsLib as any).getDocument(viewerSrc);
+        const pdf = await loadingTask.promise;
+        if (cancelled) return;
+
+        pdfDocRef.current = pdf;
+
+        const page = await pdf.getPage(1);
+        if (cancelled) return;
+
+        const viewport = page.getViewport({ scale: zoom });
+        const canvas = canvasRef.current!;
+        const ctx = canvas.getContext("2d")!;
+
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+
+        // Clear and render
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const renderTask = page.render({ canvasContext: ctx, viewport });
+        await renderTask.promise;
+      } catch {
+        alert(NOT_AVAILABLE_MESSAGE);
+        closeViewer();
+      } finally {
+        if (!cancelled) setRendering(false);
+      }
+    }
+
+    loadAndRender();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [viewerSrc, zoom, closeViewer]);
+
+  // Buttons 13–17: open via same-origin proxy route, then PDF.js renders it
   const openDocByIndex = useCallback(
     async (idx: number) => {
       if (tourId !== PDF_TOUR_ID) {
@@ -165,20 +228,20 @@ export default function MobileTourLandingPage() {
       setOpeningDocIdx(idx);
 
       try {
-        // Optional existence check (HEAD) against same-origin route
         const routeUrl = `/m/tours/${tourId}/pdf/${encodeURIComponent(filename)}`;
+
+        // Existence check against same-origin route
         const head = await fetch(routeUrl, { method: "HEAD", cache: "no-store" });
         if (!head.ok) {
           alert(NOT_AVAILABLE_MESSAGE);
           return;
         }
 
-        const title =
-          docs?.[idx]?.title?.trim() ||
-          (filename.replace(".pdf", "").charAt(0).toUpperCase() +
-            filename.replace(".pdf", "").slice(1));
+        const fallbackTitle = filename.replace(".pdf", "");
+        const title = docs?.[idx]?.title?.trim() || fallbackTitle;
 
         setViewerTitle(title);
+        setZoom(1.0);
         setViewerSrc(routeUrl);
       } catch {
         alert(NOT_AVAILABLE_MESSAGE);
@@ -222,135 +285,61 @@ export default function MobileTourLandingPage() {
 
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
         <div className="grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[0]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>
             Daily<br />Tee times
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[0]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>
             Daily<br />Results
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[0]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>
             Score<br />Entry
           </button>
 
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[1]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>
             Leaderboards
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[1]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/competitions`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/competitions`)}>
             Competitions
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[1]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/stats`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/stats`)}>
             Stats
           </button>
 
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[2]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>
             Matchplay<br />Format
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[2]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>
             Matchplay<br />Results
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[2]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>
             Matchplay<br />Leaderboard
           </button>
 
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[3]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/details`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>
             Tour<br />Details
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[3]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>
             Tour<br />Admin
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[3]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>
             Rehandicapping
           </button>
 
           {/* 13–17 (PDFs) */}
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(0)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(0)}>
             {openingDocIdx === 0 ? "Opening…" : "Itinerary"}
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(1)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(1)}>
             {openingDocIdx === 1 ? "Opening…" : "Accommodation"}
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(2)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(2)}>
             {openingDocIdx === 2 ? "Opening…" : "Dining"}
           </button>
 
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(3)}
-          >
-            {openingDocIdx === 3 ? (
-              "Opening…"
-            ) : (
-              <>
-                Player<br />Profiles
-              </>
-            )}
+          <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(3)}>
+            {openingDocIdx === 3 ? "Opening…" : <>Player<br />Profiles</>}
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(4)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(4)}>
             {openingDocIdx === 4 ? "Opening…" : "Comps etc"}
           </button>
 
@@ -371,25 +360,42 @@ export default function MobileTourLandingPage() {
         </div>
       </div>
 
-      {/* ✅ Full-screen in-tab PDF overlay (same-origin src) */}
+      {/* ✅ PDF.js overlay with deterministic zoom */}
       {viewerSrc && (
         <div className="fixed inset-0 z-50 bg-black">
           <div className="flex items-center justify-between px-4 py-3 bg-black/90">
             <div className="text-white text-sm font-semibold truncate">{viewerTitle}</div>
-            <button
-              type="button"
-              onClick={closeViewer}
-              className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
-            >
-              Close
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.max(0.6, Number((z - 0.2).toFixed(2))))}
+                className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
+                disabled={rendering}
+              >
+                −
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.min(3.0, Number((z + 0.2).toFixed(2))))}
+                className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
+                disabled={rendering}
+              >
+                +
+              </button>
+              <button
+                type="button"
+                onClick={closeViewer}
+                className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
+              >
+                Close
+              </button>
+            </div>
           </div>
 
-          <div className="w-full h-[calc(100dvh-52px)] bg-white">
-            {/* embed first for better native controls where supported */}
-            <embed src={viewerSrc} type="application/pdf" className="w-full h-full" />
-            {/* iframe fallback */}
-            <iframe title={viewerTitle} src={viewerSrc} className="hidden" />
+          <div className="w-full h-[calc(100dvh-52px)] bg-white overflow-auto">
+            <div className="min-h-full flex justify-center">
+              <canvas ref={canvasRef} className="block" />
+            </div>
           </div>
         </div>
       )}
