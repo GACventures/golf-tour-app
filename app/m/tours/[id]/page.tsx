@@ -59,12 +59,13 @@ const PDF_FILES = [
  * - Zoom jumps are now MUCH larger per tap (multiplicative).
  * - Drag-to-pan is now "faster" (movement multiplier).
  */
-const ZOOM_IN_MULTIPLIER = 1.45; // one tap = ~45% bigger
+const ZOOM_IN_MULTIPLIER = 1.6;   // much stronger zoom per tap
 const ZOOM_OUT_MULTIPLIER = 1 / ZOOM_IN_MULTIPLIER;
 const MIN_ZOOM = 0.6;
 const MAX_ZOOM = 4.0;
 
-const PAN_SPEED = 1.9; // swipe moves ~1.9x further than finger distance
+const PAN_SPEED = 2.5;           // much faster drag movement
+
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
