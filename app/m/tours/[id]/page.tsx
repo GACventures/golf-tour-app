@@ -6,7 +6,6 @@ import { supabase } from "@/lib/supabaseClient";
 
 // PDF.js (build-safe worker served from /public)
 import * as pdfjsLib from "pdfjs-dist";
-
 (pdfjsLib as any).GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
 type TourRow = {
@@ -90,6 +89,7 @@ export default function MobileTourLandingPage() {
   const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // PDF viewer state
   const [openingDocIdx, setOpeningDocIdx] = useState<number | null>(null);
   const [viewerTitle, setViewerTitle] = useState<string>("Document");
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
@@ -98,9 +98,49 @@ export default function MobileTourLandingPage() {
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  // Viewport for pan (we pan by updating scrollLeft/scrollTop)
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+
+  // Drag state refs (no React state = no jank)
+  const isDraggingRef = useRef(false);
+  const dragStartXRef = useRef(0);
+  const dragStartYRef = useRef(0);
+  const dragStartScrollLeftRef = useRef(0);
+  const dragStartScrollTopRef = useRef(0);
+
+  // Preserve scroll position proportionally when zoom changes / rerender happens
+  const scrollRatioRef = useRef<{ x: number; y: number } | null>(null);
+
+  const captureScrollRatio = useCallback(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    const maxX = Math.max(1, vp.scrollWidth - vp.clientWidth);
+    const maxY = Math.max(1, vp.scrollHeight - vp.clientHeight);
+
+    scrollRatioRef.current = {
+      x: vp.scrollLeft / maxX,
+      y: vp.scrollTop / maxY,
+    };
+  }, []);
+
+  const restoreScrollRatio = useCallback(() => {
+    const vp = viewportRef.current;
+    const ratio = scrollRatioRef.current;
+    if (!vp || !ratio) return;
+
+    const maxX = Math.max(0, vp.scrollWidth - vp.clientWidth);
+    const maxY = Math.max(0, vp.scrollHeight - vp.clientHeight);
+
+    vp.scrollLeft = ratio.x * maxX;
+    vp.scrollTop = ratio.y * maxY;
+  }, []);
+
   const closeViewer = useCallback(() => {
     setViewerSrc(null);
     setZoom(1.0);
+    scrollRatioRef.current = null;
+
     if (canvasRef.current) {
       const ctx = canvasRef.current.getContext("2d");
       if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
@@ -166,6 +206,9 @@ export default function MobileTourLandingPage() {
     async function loadAndRender() {
       if (!viewerSrc || !canvasRef.current) return;
 
+      // Save current pan position before we resize the canvas
+      captureScrollRatio();
+
       setRendering(true);
 
       try {
@@ -187,6 +230,11 @@ export default function MobileTourLandingPage() {
 
         const renderTask = page.render({ canvasContext: ctx, viewport });
         await renderTask.promise;
+
+        // Restore pan after render (prevents “jump back” feeling)
+        requestAnimationFrame(() => {
+          restoreScrollRatio();
+        });
       } catch {
         alert(NOT_AVAILABLE_MESSAGE);
         closeViewer();
@@ -200,7 +248,7 @@ export default function MobileTourLandingPage() {
     return () => {
       cancelled = true;
     };
-  }, [viewerSrc, zoom, closeViewer]);
+  }, [viewerSrc, zoom, closeViewer, captureScrollRatio, restoreScrollRatio]);
 
   const openDocByIndex = useCallback(
     async (idx: number) => {
@@ -228,9 +276,20 @@ export default function MobileTourLandingPage() {
         const fallbackTitle = filename.replace(".pdf", "");
         const title = docs?.[idx]?.title?.trim() || fallbackTitle;
 
+        // Reset pan+zoom cleanly on open
+        scrollRatioRef.current = { x: 0, y: 0 };
         setViewerTitle(title);
         setZoom(1.0);
         setViewerSrc(routeUrl);
+
+        // When it opens, start at top-left
+        requestAnimationFrame(() => {
+          const vp = viewportRef.current;
+          if (vp) {
+            vp.scrollLeft = 0;
+            vp.scrollTop = 0;
+          }
+        });
       } catch {
         alert(NOT_AVAILABLE_MESSAGE);
       } finally {
@@ -239,6 +298,52 @@ export default function MobileTourLandingPage() {
     },
     [tourId, docs]
   );
+
+  // ✅ Drag-to-pan handlers
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    isDraggingRef.current = true;
+    dragStartXRef.current = e.clientX;
+    dragStartYRef.current = e.clientY;
+    dragStartScrollLeftRef.current = vp.scrollLeft;
+    dragStartScrollTopRef.current = vp.scrollTop;
+
+    // Capture pointer so moves keep working even if finger leaves element
+    try {
+      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+    } catch {}
+
+    // Prevent the browser from trying to “scroll the page”
+    e.preventDefault();
+  }, []);
+
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current) return;
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    const dx = e.clientX - dragStartXRef.current;
+    const dy = e.clientY - dragStartYRef.current;
+
+    vp.scrollLeft = dragStartScrollLeftRef.current - dx;
+    vp.scrollTop = dragStartScrollTopRef.current - dy;
+
+    e.preventDefault();
+  }, []);
+
+  const endDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current) return;
+    isDraggingRef.current = false;
+
+    try {
+      (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+    } catch {}
+
+    // Update ratio so next zoom rerender preserves where user left it
+    captureScrollRatio();
+  }, [captureScrollRatio]);
 
   const baseBtn =
     "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
@@ -251,6 +356,16 @@ export default function MobileTourLandingPage() {
     "bg-blue-500 text-white",
     "bg-blue-600 text-white",
   ];
+
+  const zoomOut = useCallback(() => {
+    captureScrollRatio();
+    setZoom((z) => Math.max(0.6, Number((z - 0.2).toFixed(2))));
+  }, [captureScrollRatio]);
+
+  const zoomIn = useCallback(() => {
+    captureScrollRatio();
+    setZoom((z) => Math.min(3.0, Number((z + 0.2).toFixed(2))));
+  }, [captureScrollRatio]);
 
   return (
     <div className="min-h-dvh bg-black text-white">
@@ -346,6 +461,7 @@ export default function MobileTourLandingPage() {
         </div>
       </div>
 
+      {/* PDF.js overlay with zoom + drag-to-pan */}
       {viewerSrc && (
         <div className="fixed inset-0 z-50 bg-black">
           <div className="flex items-center justify-between px-4 py-3 bg-black/90">
@@ -353,7 +469,7 @@ export default function MobileTourLandingPage() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setZoom((z) => Math.max(0.6, Number((z - 0.2).toFixed(2))))}
+                onClick={zoomOut}
                 className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
                 disabled={rendering}
               >
@@ -361,7 +477,7 @@ export default function MobileTourLandingPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setZoom((z) => Math.min(3.0, Number((z + 0.2).toFixed(2))))}
+                onClick={zoomIn}
                 className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
                 disabled={rendering}
               >
@@ -377,8 +493,23 @@ export default function MobileTourLandingPage() {
             </div>
           </div>
 
-          <div className="w-full h-[calc(100dvh-52px)] bg-white overflow-auto">
-            <div className="min-h-full flex justify-center">
+          {/* viewport: we pan by dragging (updates scrollLeft/scrollTop) */}
+          <div
+            ref={viewportRef}
+            className="w-full h-[calc(100dvh-52px)] bg-white overflow-auto"
+            style={{
+              // critical: allow pointer dragging to work on mobile
+              touchAction: "none",
+              cursor: "grab",
+            }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            onPointerLeave={endDrag}
+          >
+            {/* DO NOT center; centering contributes to “snap back” feel */}
+            <div className="p-4">
               <canvas ref={canvasRef} className="block" />
             </div>
           </div>
