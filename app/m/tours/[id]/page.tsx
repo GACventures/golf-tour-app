@@ -4,11 +4,10 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-// PDF.js (no React wrapper; deterministic)
+// PDF.js (build-safe worker served from /public)
 import * as pdfjsLib from "pdfjs-dist";
-import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs";
 
-(pdfjsLib as any).GlobalWorkerOptions.workerSrc = pdfWorker;
+(pdfjsLib as any).GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
 type TourRow = {
   id: string;
@@ -48,7 +47,6 @@ const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
 const PDF_TOUR_ID = "5a80b049-396f-46ec-965e-810e738471b6";
 const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
 
-// Exact filenames for buttons 13–17
 const PDF_FILES = [
   "itinerary.pdf",
   "accommodation.pdf",
@@ -92,7 +90,6 @@ export default function MobileTourLandingPage() {
   const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // PDF viewer state
   const [openingDocIdx, setOpeningDocIdx] = useState<number | null>(null);
   const [viewerTitle, setViewerTitle] = useState<string>("Document");
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
@@ -100,12 +97,10 @@ export default function MobileTourLandingPage() {
   const [rendering, setRendering] = useState<boolean>(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const pdfDocRef = useRef<any>(null);
 
   const closeViewer = useCallback(() => {
     setViewerSrc(null);
     setZoom(1.0);
-    pdfDocRef.current = null;
     if (canvasRef.current) {
       const ctx = canvasRef.current.getContext("2d");
       if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
@@ -174,12 +169,9 @@ export default function MobileTourLandingPage() {
       setRendering(true);
 
       try {
-        // Load PDF from same-origin proxy route
         const loadingTask = (pdfjsLib as any).getDocument(viewerSrc);
         const pdf = await loadingTask.promise;
         if (cancelled) return;
-
-        pdfDocRef.current = pdf;
 
         const page = await pdf.getPage(1);
         if (cancelled) return;
@@ -191,7 +183,6 @@ export default function MobileTourLandingPage() {
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
 
-        // Clear and render
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         const renderTask = page.render({ canvasContext: ctx, viewport });
@@ -211,7 +202,6 @@ export default function MobileTourLandingPage() {
     };
   }, [viewerSrc, zoom, closeViewer]);
 
-  // Buttons 13–17: open via same-origin proxy route, then PDF.js renders it
   const openDocByIndex = useCallback(
     async (idx: number) => {
       if (tourId !== PDF_TOUR_ID) {
@@ -229,8 +219,6 @@ export default function MobileTourLandingPage() {
 
       try {
         const routeUrl = `/m/tours/${tourId}/pdf/${encodeURIComponent(filename)}`;
-
-        // Existence check against same-origin route
         const head = await fetch(routeUrl, { method: "HEAD", cache: "no-store" });
         if (!head.ok) {
           alert(NOT_AVAILABLE_MESSAGE);
@@ -277,7 +265,6 @@ export default function MobileTourLandingPage() {
         )}
       </div>
 
-      {/* Landscape hero */}
       <div className="relative h-[26vh] bg-black">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={heroImage} alt="" className="h-full w-full object-cover" />
@@ -325,7 +312,6 @@ export default function MobileTourLandingPage() {
             Rehandicapping
           </button>
 
-          {/* 13–17 (PDFs) */}
           <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(0)}>
             {openingDocIdx === 0 ? "Opening…" : "Itinerary"}
           </button>
@@ -360,7 +346,6 @@ export default function MobileTourLandingPage() {
         </div>
       </div>
 
-      {/* ✅ PDF.js overlay with deterministic zoom */}
       {viewerSrc && (
         <div className="fixed inset-0 z-50 bg-black">
           <div className="flex items-center justify-between px-4 py-3 bg-black/90">
