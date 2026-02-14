@@ -18,13 +18,6 @@ type PlayerRow = {
   name: string;
 };
 
-type TourPlayerRow = {
-  tour_id: string;
-  player_id: string;
-  starting_handicap: number | null;
-  players: PlayerRow | PlayerRow[] | null;
-};
-
 type CourseOption = { id: string; name: string };
 
 type ParRow = {
@@ -126,7 +119,7 @@ function makeLocalKey() {
   return `g_${Date.now()}_${Math.floor(Math.random() * 1e9)}`;
 }
 
-function formatRoundLine(r: RoundOption) {
+function roundLabel(r: RoundOption) {
   const rn = Number.isFinite(Number(r.round_no)) ? Number(r.round_no) : 0;
   const title = (r.course_name ?? "").trim() || (r.name ?? "").trim() || "Round";
   const date = (r.played_on ?? "").trim();
@@ -192,13 +185,11 @@ export default function MobileTourAdminPage() {
       setErrorMsg("");
       setSaveMsg("");
 
-      // reset course messages
       setCourseError("");
       setCourseSaveMsg("");
       setCourseLoading(false);
       setCourseSaving(false);
 
-      // reset tee time editor (but keep the section chooser state)
       setTtError("");
       setTtMsg("");
       setTtSelectedRoundId("");
@@ -235,7 +226,7 @@ export default function MobileTourAdminPage() {
           })
           .filter(Boolean) as any[];
 
-        // Load tour courses (only those used by rounds in this tour)
+        // courses limited to those used by rounds in this tour
         const { data: roundCourseData, error: roundCourseErr } = await supabase.from("rounds").select("course_id").eq("tour_id", tourId);
         if (roundCourseErr) throw roundCourseErr;
 
@@ -259,7 +250,7 @@ export default function MobileTourAdminPage() {
           }));
         }
 
-        // Rounds list for tee time editor (and consistent formatting)
+        // Rounds list for tee time editor
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,round_no,played_on,name,courses(name)")
@@ -293,7 +284,7 @@ export default function MobileTourAdminPage() {
 
         setRoundOptions(ropts);
 
-        // Start with no tool visible
+        // start with no tool visible
         setActiveSection(null);
       } catch (e: any) {
         if (!alive) return;
@@ -309,7 +300,7 @@ export default function MobileTourAdminPage() {
     };
   }, [tourId]);
 
-  // Load pars for selected course (only after user selects)
+  // Load pars for selected course
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
@@ -345,8 +336,9 @@ export default function MobileTourAdminPage() {
 
         if (error) throw error;
 
-        const rows = makeEmptyHoles();
+        const next = makeEmptyHoles();
         const byKey = new Map<string, ParRow>();
+
         (data ?? []).forEach((r: any) => {
           const hole = Number(r.hole_number);
           const tee = String(r.tee ?? "").toUpperCase();
@@ -364,7 +356,7 @@ export default function MobileTourAdminPage() {
         for (let i = 1; i <= 18; i++) {
           const m = byKey.get(`M:${i}`);
           const f = byKey.get(`F:${i}`);
-          rows[i - 1] = {
+          next[i - 1] = {
             hole: i,
             parM: m && Number.isFinite(m.par) ? String(m.par) : "",
             siM: m && Number.isFinite(m.stroke_index) ? String(m.stroke_index) : "",
@@ -374,7 +366,7 @@ export default function MobileTourAdminPage() {
         }
 
         if (!alive) return;
-        setHoleRows(rows);
+        setHoleRows(next);
       } catch (e: any) {
         if (!alive) return;
         setCourseError(e?.message ?? "Failed to load course pars.");
@@ -422,17 +414,14 @@ export default function MobileTourAdminPage() {
         return;
       }
 
-      // 1) Save tour-level starting handicap
       const { error: upErr } = await supabase.from("tour_players").upsert(updates, {
         onConflict: "tour_id,player_id",
       });
       if (upErr) throw upErr;
 
-      // 2) Recalc + save per-round playing handicaps using the existing engine.
       const recalcRes = await recalcAndSaveTourHandicaps({ supabase, tourId });
       if (!recalcRes.ok) throw new Error(recalcRes.error);
 
-      // Mark clean locally
       setRows((prev) =>
         prev.map((r) => {
           const u = updates.find((x) => x.player_id === r.player_id);
@@ -813,13 +802,9 @@ export default function MobileTourAdminPage() {
   const parOptions = ["3", "4", "5"];
   const siOptions = Array.from({ length: 18 }, (_, i) => String(i + 1));
 
-  const pillBase = "h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
-  const pillActive = "border-gray-900 bg-gray-900 text-white";
-  const pillIdle = "border-gray-200 bg-white text-gray-900";
-
-  const topBtnBase = "w-full rounded-2xl border px-4 py-4 text-left shadow-sm";
-  const topBtnActive = "border-gray-900 bg-gray-900 text-white";
-  const topBtnIdle = "border-gray-200 bg-white text-gray-900";
+  const chooserBtnBase = "h-11 rounded-xl border text-xs font-semibold flex items-center justify-center px-2";
+  const chooserBtnActive = "border-gray-900 bg-gray-900 text-white";
+  const chooserBtnIdle = "border-gray-200 bg-white text-gray-900";
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
@@ -840,59 +825,39 @@ export default function MobileTourAdminPage() {
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
-            {/* Button chooser (always visible) */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Admin tools</div>
-              </div>
+            {/* Chooser row (no "Admin tools" header or divider) */}
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveSection("starting")}
+                className={`${chooserBtnBase} ${activeSection === "starting" ? chooserBtnActive : chooserBtnIdle}`}
+              >
+                Tour starting handicaps
+              </button>
 
-              <div className="p-4 space-y-3">
-                <button
-                  type="button"
-                  onClick={() => setActiveSection("starting")}
-                  className={`${topBtnBase} ${activeSection === "starting" ? topBtnActive : topBtnIdle}`}
-                >
-                  <div className="text-sm font-semibold">Tour starting handicaps</div>
-                  <div className={`mt-1 text-xs ${activeSection === "starting" ? "text-white/80" : "text-gray-600"}`}>
-                    Edit tour-level starting handicaps and recalculate playing handicaps.
-                  </div>
-                </button>
+              <button
+                type="button"
+                onClick={() => setActiveSection("course")}
+                className={`${chooserBtnBase} ${activeSection === "course" ? chooserBtnActive : chooserBtnIdle}`}
+              >
+                Course Par &amp; SI
+              </button>
 
-                <button
-                  type="button"
-                  onClick={() => setActiveSection("course")}
-                  className={`${topBtnBase} ${activeSection === "course" ? topBtnActive : topBtnIdle}`}
-                >
-                  <div className="text-sm font-semibold">Course Par &amp; Stroke Index (global)</div>
-                  <div className={`mt-1 text-xs ${activeSection === "course" ? "text-white/80" : "text-gray-600"}`}>
-                    Update par and stroke index for tees M/F for courses used in this tour.
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveSection("tee")}
-                  className={`${topBtnBase} ${activeSection === "tee" ? topBtnActive : topBtnIdle}`}
-                >
-                  <div className="text-sm font-semibold">Tee time groups (manual)</div>
-                  <div className={`mt-1 text-xs ${activeSection === "tee" ? "text-white/80" : "text-gray-600"}`}>
-                    Create/edit tee time groups and seat order for a selected round.
-                  </div>
-                </button>
-              </div>
-            </section>
+              <button
+                type="button"
+                onClick={() => setActiveSection("tee")}
+                className={`${chooserBtnBase} ${activeSection === "tee" ? chooserBtnActive : chooserBtnIdle}`}
+              >
+                Tee time groups
+              </button>
+            </div>
 
             {/* Nothing else until a button is pressed */}
             {activeSection === null ? null : activeSection === "starting" ? (
               <>
-                {/* Starting handicaps (existing functionality) */}
                 <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                   <div className="p-4 border-b">
                     <div className="text-sm font-semibold text-gray-900">Tour starting handicaps</div>
-                    <div className="mt-1 text-xs text-gray-600">
-                      Saves <span className="font-medium">tour_players.starting_handicap</span>, then recalculates{" "}
-                      <span className="font-medium">round_players.playing_handicap</span> using the tour’s rule.
-                    </div>
                   </div>
 
                   {rows.length === 0 ? (
@@ -943,462 +908,443 @@ export default function MobileTourAdminPage() {
                 {saveMsg ? <div className="text-sm text-green-700">{saveMsg}</div> : null}
               </>
             ) : activeSection === "course" ? (
-              <>
-                {/* Course Par/SI Editor (existing functionality) */}
-                <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                  <div className="p-4 border-b">
-                    <div className="text-sm font-semibold text-gray-900">Course par &amp; stroke index (global)</div>
-                    <div className="mt-1 text-xs text-gray-600">
-                      Updates <span className="font-medium">pars</span> for tees <span className="font-medium">M</span> and{" "}
-                      <span className="font-medium">F</span>. Courses are limited to this tour’s rounds.
-                    </div>
-                  </div>
+              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                <div className="p-4 border-b">
+                  <div className="text-sm font-semibold text-gray-900">Course par &amp; stroke index (global)</div>
+                </div>
 
-                  <div className="p-4 space-y-3">
-                    {courseOptions.length === 0 ? (
-                      <div className="text-sm text-gray-700">No courses found on this tour (rounds have no course_id).</div>
-                    ) : (
-                      <>
-                        <label className="block text-xs font-semibold text-gray-700" htmlFor="courseSelect">
-                          Select course
-                        </label>
-                        <select
-                          id="courseSelect"
-                          className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
-                          value={selectedCourseId}
-                          onChange={(e) => setSelectedCourseId(e.target.value)}
-                        >
-                          <option value="">Select a course…</option>
-                          {courseOptions.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name}
-                            </option>
-                          ))}
-                        </select>
+                <div className="p-4 space-y-3">
+                  {courseOptions.length === 0 ? (
+                    <div className="text-sm text-gray-700">No courses found on this tour (rounds have no course_id).</div>
+                  ) : (
+                    <>
+                      <label className="block text-xs font-semibold text-gray-700" htmlFor="courseSelect">
+                        Select course
+                      </label>
+                      <select
+                        id="courseSelect"
+                        className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                        value={selectedCourseId}
+                        onChange={(e) => setSelectedCourseId(e.target.value)}
+                      >
+                        <option value="">Select a course…</option>
+                        {courseOptions.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
 
-                        {!selectedCourseId ? (
-                          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                            Choose a course to edit par and stroke index.
-                          </div>
-                        ) : (
-                          <>
-                            {courseLoading ? (
-                              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading hole data…</div>
-                            ) : null}
-
-                            {courseError ? (
-                              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{courseError}</div>
-                            ) : null}
-
-                            <div className="overflow-hidden rounded-2xl border border-gray-200">
-                              <div className="grid grid-cols-5 gap-0 border-b bg-gray-50">
-                                <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Hole</div>
-                                <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Par M</div>
-                                <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">SI M</div>
-                                <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Par F</div>
-                                <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">SI F</div>
-                              </div>
-
-                              <div className="divide-y">
-                                {holeRows.map((r) => (
-                                  <div key={r.hole} className="grid grid-cols-5 gap-0 items-center">
-                                    <div className="px-2 py-2 text-sm font-semibold text-gray-900">{r.hole}</div>
-
-                                    <div className="px-1 py-1">
-                                      <select
-                                        className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                        value={r.parM}
-                                        onChange={(e) => setHoleCell(r.hole, "parM", e.target.value)}
-                                        aria-label={`Par M hole ${r.hole}`}
-                                      >
-                                        <option value="">—</option>
-                                        {parOptions.map((p) => (
-                                          <option key={p} value={p}>
-                                            {p}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </div>
-
-                                    <div className="px-1 py-1">
-                                      <select
-                                        className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                        value={r.siM}
-                                        onChange={(e) => setHoleCell(r.hole, "siM", e.target.value)}
-                                        aria-label={`SI M hole ${r.hole}`}
-                                      >
-                                        <option value="">—</option>
-                                        {siOptions.map((si) => (
-                                          <option key={si} value={si}>
-                                            {si}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </div>
-
-                                    <div className="px-1 py-1">
-                                      <select
-                                        className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                        value={r.parF}
-                                        onChange={(e) => setHoleCell(r.hole, "parF", e.target.value)}
-                                        aria-label={`Par F hole ${r.hole}`}
-                                      >
-                                        <option value="">—</option>
-                                        {parOptions.map((p) => (
-                                          <option key={p} value={p}>
-                                            {p}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </div>
-
-                                    <div className="px-1 py-1">
-                                      <select
-                                        className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                        value={r.siF}
-                                        onChange={(e) => setHoleCell(r.hole, "siF", e.target.value)}
-                                        aria-label={`SI F hole ${r.hole}`}
-                                      >
-                                        <option value="">—</option>
-                                        {siOptions.map((si) => (
-                                          <option key={si} value={si}>
-                                            {si}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="text-xs text-gray-600">
-                                {selectedCourseName ? (
-                                  <>
-                                    Editing: <span className="font-medium">{selectedCourseName}</span>
-                                  </>
-                                ) : (
-                                  "Select a course to edit"
-                                )}
-                              </div>
-
-                              <button
-                                type="button"
-                                onClick={saveCoursePars}
-                                disabled={courseSaving || courseLoading || !selectedCourseId}
-                                className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                                  courseSaving || courseLoading || !selectedCourseId
-                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                    : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                                }`}
-                              >
-                                {courseSaving ? "Saving…" : "Save course"}
-                              </button>
-                            </div>
-
-                            {courseSaveMsg ? <div className="text-sm text-green-700">{courseSaveMsg}</div> : null}
-                          </>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </section>
-              </>
-            ) : (
-              <>
-                {/* Tee time groups (manual) - existing functionality, but round selection is now a list */}
-                <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                  <div className="p-4 border-b">
-                    <div className="text-sm font-semibold text-gray-900">Tee time groups (manual)</div>
-                    <div className="mt-1 text-xs text-gray-600">
-                      Saves to <span className="font-medium">round_groups</span> and <span className="font-medium">round_group_players</span>.
-                      Saving replaces prior groups for the round (idempotent).
-                    </div>
-                  </div>
-
-                  <div className="p-4 space-y-3">
-                    {roundOptions.length === 0 ? (
-                      <div className="text-sm text-gray-700">No rounds found for this tour.</div>
-                    ) : (
-                      <>
-                        <div className="text-xs font-semibold text-gray-700">Select round</div>
-
-                        <div className="rounded-2xl border border-gray-200 overflow-hidden">
-                          <div className="divide-y">
-                            {roundOptions.map((r) => {
-                              const selected = ttSelectedRoundId === r.id;
-                              return (
-                                <button
-                                  key={r.id}
-                                  type="button"
-                                  onClick={async () => {
-                                    const rid = r.id;
-                                    setTtSelectedRoundId(rid);
-                                    setTtError("");
-                                    setTtMsg("");
-                                    setTtGroups([]);
-                                    setTtAddTargetGroupNo(1);
-                                    if (rid) await loadManualTeeTimes(rid);
-                                  }}
-                                  className={`w-full px-3 py-3 text-left ${
-                                    selected ? "bg-gray-900 text-white" : "bg-white text-gray-900 active:bg-gray-50"
-                                  }`}
-                                >
-                                  <div className="text-sm font-semibold">{formatRoundLine(r)}</div>
-                                  {selected ? <div className="mt-1 text-[11px] text-white/80">Selected</div> : null}
-                                </button>
-                              );
-                            })}
-                          </div>
+                      {!selectedCourseId ? (
+                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                          Choose a course to edit par and stroke index.
                         </div>
+                      ) : (
+                        <>
+                          {courseLoading ? (
+                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading hole data…</div>
+                          ) : null}
 
-                        {!ttSelectedRoundId ? (
-                          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                            Choose a round to create or edit tee time groups.
-                          </div>
-                        ) : (
-                          <>
-                            {ttLoading ? (
-                              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading groups…</div>
-                            ) : null}
+                          {courseError ? (
+                            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{courseError}</div>
+                          ) : null}
 
-                            {ttError ? (
-                              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{ttError}</div>
-                            ) : null}
-
-                            {ttMsg ? <div className="text-sm text-green-700">{ttMsg}</div> : null}
-
-                            <div className="flex items-center justify-between gap-2">
-                              <button
-                                type="button"
-                                onClick={ttAddGroup}
-                                disabled={ttLoading || ttSaving}
-                                className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                                  ttLoading || ttSaving
-                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                    : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                }`}
-                              >
-                                + Add group
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={ttSave}
-                                disabled={ttLoading || ttSaving}
-                                className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                                  ttLoading || ttSaving
-                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                    : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                                }`}
-                              >
-                                {ttSaving ? "Saving…" : "Save groups"}
-                              </button>
+                          <div className="overflow-hidden rounded-2xl border border-gray-200">
+                            <div className="grid grid-cols-5 gap-0 border-b bg-gray-50">
+                              <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Hole</div>
+                              <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Par M</div>
+                              <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">SI M</div>
+                              <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Par F</div>
+                              <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">SI F</div>
                             </div>
 
-                            <div className="rounded-2xl border border-gray-200 overflow-hidden">
-                              <div className="grid grid-cols-12 gap-0 border-b bg-gray-50">
-                                <div className="col-span-7 px-2 py-2 text-[11px] font-semibold text-gray-700">Unassigned players</div>
-                                <div className="col-span-5 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">Add to…</div>
-                              </div>
+                            <div className="divide-y">
+                              {holeRows.map((r) => (
+                                <div key={r.hole} className="grid grid-cols-5 gap-0 items-center">
+                                  <div className="px-2 py-2 text-sm font-semibold text-gray-900">{r.hole}</div>
 
-                              <div className="p-3 space-y-2">
-                                {ttGroups.length === 0 ? (
-                                  <div className="text-sm text-gray-700">
-                                    No groups yet. Tap <span className="font-medium">Add group</span> to begin.
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div className="text-xs text-gray-600">Target group for adding players</div>
+                                  <div className="px-1 py-1">
                                     <select
-                                      className="h-9 rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                      value={ttAddTargetGroupNo}
-                                      onChange={(e) => setTtAddTargetGroupNo(Number(e.target.value))}
-                                      disabled={ttLoading || ttSaving || ttGroups.length === 0}
+                                      className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                      value={r.parM}
+                                      onChange={(e) => setHoleCell(r.hole, "parM", e.target.value)}
+                                      aria-label={`Par M hole ${r.hole}`}
                                     >
-                                      {ttGroups
-                                        .slice()
-                                        .sort((a, b) => a.groupNo - b.groupNo)
-                                        .map((g) => (
-                                          <option key={g.key} value={g.groupNo}>
-                                            Group {g.groupNo}
-                                          </option>
-                                        ))}
+                                      <option value="">—</option>
+                                      {parOptions.map((p) => (
+                                        <option key={p} value={p}>
+                                          {p}
+                                        </option>
+                                      ))}
                                     </select>
                                   </div>
-                                )}
 
-                                <div className="divide-y rounded-xl border border-gray-200 overflow-hidden">
-                                  {ttUnassigned.length === 0 ? (
-                                    <div className="p-3 text-sm text-gray-700">All players are assigned to a group.</div>
-                                  ) : (
-                                    ttUnassigned.map((p) => (
-                                      <div key={p.id} className="p-3 flex items-center justify-between gap-2">
-                                        <div className="min-w-0">
-                                          <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
+                                  <div className="px-1 py-1">
+                                    <select
+                                      className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                      value={r.siM}
+                                      onChange={(e) => setHoleCell(r.hole, "siM", e.target.value)}
+                                      aria-label={`SI M hole ${r.hole}`}
+                                    >
+                                      <option value="">—</option>
+                                      {siOptions.map((si) => (
+                                        <option key={si} value={si}>
+                                          {si}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+
+                                  <div className="px-1 py-1">
+                                    <select
+                                      className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                      value={r.parF}
+                                      onChange={(e) => setHoleCell(r.hole, "parF", e.target.value)}
+                                      aria-label={`Par F hole ${r.hole}`}
+                                    >
+                                      <option value="">—</option>
+                                      {parOptions.map((p) => (
+                                        <option key={p} value={p}>
+                                          {p}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+
+                                  <div className="px-1 py-1">
+                                    <select
+                                      className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                      value={r.siF}
+                                      onChange={(e) => setHoleCell(r.hole, "siF", e.target.value)}
+                                      aria-label={`SI F hole ${r.hole}`}
+                                    >
+                                      <option value="">—</option>
+                                      {siOptions.map((si) => (
+                                        <option key={si} value={si}>
+                                          {si}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-xs text-gray-600">
+                              {selectedCourseName ? (
+                                <>
+                                  Editing: <span className="font-medium">{selectedCourseName}</span>
+                                </>
+                              ) : (
+                                "Select a course to edit"
+                              )}
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={saveCoursePars}
+                              disabled={courseSaving || courseLoading || !selectedCourseId}
+                              className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                                courseSaving || courseLoading || !selectedCourseId
+                                  ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                  : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                              }`}
+                            >
+                              {courseSaving ? "Saving…" : "Save course"}
+                            </button>
+                          </div>
+
+                          {courseSaveMsg ? <div className="text-sm text-green-700">{courseSaveMsg}</div> : null}
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+              </section>
+            ) : (
+              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                <div className="p-4 border-b">
+                  <div className="text-sm font-semibold text-gray-900">Tee time groups (manual)</div>
+                </div>
+
+                <div className="p-4 space-y-3">
+                  {roundOptions.length === 0 ? (
+                    <div className="text-sm text-gray-700">No rounds found for this tour.</div>
+                  ) : (
+                    <>
+                      <label className="block text-xs font-semibold text-gray-700" htmlFor="teeTimeRoundSelect">
+                        Select round
+                      </label>
+
+                      <select
+                        id="teeTimeRoundSelect"
+                        className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                        value={ttSelectedRoundId}
+                        onChange={async (e) => {
+                          const rid = e.target.value;
+                          setTtSelectedRoundId(rid);
+                          setTtError("");
+                          setTtMsg("");
+                          setTtGroups([]);
+                          setTtAddTargetGroupNo(1);
+
+                          if (rid) {
+                            await loadManualTeeTimes(rid);
+                          }
+                        }}
+                      >
+                        <option value="">Select a round…</option>
+                        {roundOptions.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {roundLabel(r)}
+                          </option>
+                        ))}
+                      </select>
+
+                      {!ttSelectedRoundId ? (
+                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                          Choose a round to create or edit tee time groups.
+                        </div>
+                      ) : (
+                        <>
+                          {ttLoading ? (
+                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading groups…</div>
+                          ) : null}
+
+                          {ttError ? (
+                            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{ttError}</div>
+                          ) : null}
+
+                          {ttMsg ? <div className="text-sm text-green-700">{ttMsg}</div> : null}
+
+                          <div className="flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={ttAddGroup}
+                              disabled={ttLoading || ttSaving}
+                              className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                                ttLoading || ttSaving
+                                  ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                  : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                              }`}
+                            >
+                              + Add group
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={ttSave}
+                              disabled={ttLoading || ttSaving}
+                              className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                                ttLoading || ttSaving
+                                  ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                  : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                              }`}
+                            >
+                              {ttSaving ? "Saving…" : "Save groups"}
+                            </button>
+                          </div>
+
+                          <div className="rounded-2xl border border-gray-200 overflow-hidden">
+                            <div className="grid grid-cols-12 gap-0 border-b bg-gray-50">
+                              <div className="col-span-7 px-2 py-2 text-[11px] font-semibold text-gray-700">Unassigned players</div>
+                              <div className="col-span-5 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">Add to…</div>
+                            </div>
+
+                            <div className="p-3 space-y-2">
+                              {ttGroups.length === 0 ? (
+                                <div className="text-sm text-gray-700">
+                                  No groups yet. Tap <span className="font-medium">Add group</span> to begin.
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="text-xs text-gray-600">Target group for adding players</div>
+                                  <select
+                                    className="h-9 rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                    value={ttAddTargetGroupNo}
+                                    onChange={(e) => setTtAddTargetGroupNo(Number(e.target.value))}
+                                    disabled={ttLoading || ttSaving || ttGroups.length === 0}
+                                  >
+                                    {ttGroups
+                                      .slice()
+                                      .sort((a, b) => a.groupNo - b.groupNo)
+                                      .map((g) => (
+                                        <option key={g.key} value={g.groupNo}>
+                                          Group {g.groupNo}
+                                        </option>
+                                      ))}
+                                  </select>
+                                </div>
+                              )}
+
+                              <div className="divide-y rounded-xl border border-gray-200 overflow-hidden">
+                                {ttUnassigned.length === 0 ? (
+                                  <div className="p-3 text-sm text-gray-700">All players are assigned to a group.</div>
+                                ) : (
+                                  ttUnassigned.map((p) => (
+                                    <div key={p.id} className="p-3 flex items-center justify-between gap-2">
+                                      <div className="min-w-0">
+                                        <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
+                                      </div>
+
+                                      <button
+                                        type="button"
+                                        disabled={ttGroups.length === 0 || ttSaving || ttLoading}
+                                        onClick={() => ttAddPlayerToGroup(p.id, ttAddTargetGroupNo)}
+                                        className={`h-9 rounded-lg px-3 text-sm font-semibold border shadow-sm ${
+                                          ttGroups.length === 0 || ttSaving || ttLoading
+                                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                            : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                                        }`}
+                                      >
+                                        Add
+                                      </button>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+
+                              <div className="text-[11px] text-gray-500">
+                                Tip: this simple flow is mobile-safe (no drag/drop). Use “Move up/down” within groups to set seat order.
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="space-y-3">
+                            {ttGroups
+                              .slice()
+                              .sort((a, b) => a.groupNo - b.groupNo)
+                              .map((g, idx, arr) => {
+                                const count = g.playerIds.length;
+                                const over = count > 4;
+
+                                return (
+                                  <div key={g.key} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                                    <div className="p-3 border-b flex items-start justify-between gap-2">
+                                      <div className="min-w-0">
+                                        <div className="text-sm font-semibold text-gray-900">
+                                          Group {g.groupNo}{" "}
+                                          <span className={`text-xs ${over ? "text-amber-700" : "text-gray-500"}`}>
+                                            ({count} player{count === 1 ? "" : "s"})
+                                          </span>
                                         </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => ttMoveGroup(g.groupNo, "up")}
+                                          disabled={ttSaving || ttLoading || g.groupNo === 1}
+                                          className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
+                                            ttSaving || ttLoading || g.groupNo === 1
+                                              ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                              : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                          }`}
+                                        >
+                                          ↑
+                                        </button>
 
                                         <button
                                           type="button"
-                                          disabled={ttGroups.length === 0 || ttSaving || ttLoading}
-                                          onClick={() => ttAddPlayerToGroup(p.id, ttAddTargetGroupNo)}
-                                          className={`h-9 rounded-lg px-3 text-sm font-semibold border shadow-sm ${
-                                            ttGroups.length === 0 || ttSaving || ttLoading
+                                          onClick={() => ttMoveGroup(g.groupNo, "down")}
+                                          disabled={ttSaving || ttLoading || g.groupNo === arr.length}
+                                          className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
+                                            ttSaving || ttLoading || g.groupNo === arr.length
                                               ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                              : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                                              : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
                                           }`}
                                         >
-                                          Add
+                                          ↓
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => ttDeleteGroup(g.groupNo)}
+                                          disabled={ttSaving || ttLoading}
+                                          className={`h-9 rounded-lg border px-3 text-xs font-semibold shadow-sm ${
+                                            ttSaving || ttLoading
+                                              ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                              : "border-red-200 bg-white text-red-700 active:bg-red-50"
+                                          }`}
+                                        >
+                                          Delete
                                         </button>
                                       </div>
-                                    ))
-                                  )}
-                                </div>
-
-                                <div className="text-[11px] text-gray-500">
-                                  Tip: this simple flow is mobile-safe (no drag/drop). Use “Move up/down” within groups to set seat order.
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="space-y-3">
-                              {ttGroups
-                                .slice()
-                                .sort((a, b) => a.groupNo - b.groupNo)
-                                .map((g, idx, arr) => {
-                                  const count = g.playerIds.length;
-                                  const over = count > 4;
-
-                                  return (
-                                    <div key={g.key} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                                      <div className="p-3 border-b flex items-start justify-between gap-2">
-                                        <div className="min-w-0">
-                                          <div className="text-sm font-semibold text-gray-900">
-                                            Group {g.groupNo}{" "}
-                                            <span className={`text-xs ${over ? "text-amber-700" : "text-gray-500"}`}>
-                                              ({count} player{count === 1 ? "" : "s"})
-                                            </span>
-                                          </div>
-                                          <div className="mt-1 text-[11px] text-gray-600">
-                                            Typical is 4-ball (sometimes 3-ball/2-ball). We won’t block larger groups, but it may not be intended.
-                                          </div>
-                                        </div>
-
-                                        <div className="flex items-center gap-2">
-                                          <button
-                                            type="button"
-                                            onClick={() => ttMoveGroup(g.groupNo, "up")}
-                                            disabled={ttSaving || ttLoading || g.groupNo === 1}
-                                            className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
-                                              ttSaving || ttLoading || g.groupNo === 1
-                                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                            }`}
-                                          >
-                                            ↑
-                                          </button>
-
-                                          <button
-                                            type="button"
-                                            onClick={() => ttMoveGroup(g.groupNo, "down")}
-                                            disabled={ttSaving || ttLoading || g.groupNo === arr.length}
-                                            className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
-                                              ttSaving || ttLoading || g.groupNo === arr.length
-                                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                            }`}
-                                          >
-                                            ↓
-                                          </button>
-
-                                          <button
-                                            type="button"
-                                            onClick={() => ttDeleteGroup(g.groupNo)}
-                                            disabled={ttSaving || ttLoading}
-                                            className={`h-9 rounded-lg border px-3 text-xs font-semibold shadow-sm ${
-                                              ttSaving || ttLoading
-                                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                : "border-red-200 bg-white text-red-700 active:bg-red-50"
-                                            }`}
-                                          >
-                                            Delete
-                                          </button>
-                                        </div>
-                                      </div>
-
-                                      {g.playerIds.length === 0 ? (
-                                        <div className="p-3 text-sm text-gray-700">No players in this group yet.</div>
-                                      ) : (
-                                        <div className="divide-y">
-                                          {g.playerIds.map((pid) => {
-                                            const name = playerNameById.get(pid) ?? pid;
-                                            const isFirst = g.playerIds[0] === pid;
-                                            const isLast = g.playerIds[g.playerIds.length - 1] === pid;
-
-                                            return (
-                                              <div key={pid} className="p-3 flex items-center justify-between gap-2">
-                                                <div className="min-w-0">
-                                                  <div className="truncate text-sm font-semibold text-gray-900">{name}</div>
-                                                  <div className="text-[11px] text-gray-500">Seat {g.playerIds.indexOf(pid) + 1}</div>
-                                                </div>
-
-                                                <div className="flex items-center gap-2">
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "up")}
-                                                    disabled={ttSaving || ttLoading || isFirst}
-                                                    className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
-                                                      ttSaving || ttLoading || isFirst
-                                                        ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                        : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                                    }`}
-                                                  >
-                                                    ↑
-                                                  </button>
-
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "down")}
-                                                    disabled={ttSaving || ttLoading || isLast}
-                                                    className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
-                                                      ttSaving || ttLoading || isLast
-                                                        ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                        : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                                    }`}
-                                                  >
-                                                    ↓
-                                                  </button>
-
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => ttRemovePlayer(g.groupNo, pid)}
-                                                    disabled={ttSaving || ttLoading}
-                                                    className={`h-9 rounded-lg border px-3 text-xs font-semibold shadow-sm ${
-                                                      ttSaving || ttLoading
-                                                        ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                        : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                                    }`}
-                                                  >
-                                                    Remove
-                                                  </button>
-                                                </div>
-                                              </div>
-                                            );
-                                          })}
-                                        </div>
-                                      )}
                                     </div>
-                                  );
-                                })}
-                            </div>
-                          </>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </section>
-              </>
+
+                                    {g.playerIds.length === 0 ? (
+                                      <div className="p-3 text-sm text-gray-700">No players in this group yet.</div>
+                                    ) : (
+                                      <div className="divide-y">
+                                        {g.playerIds.map((pid) => {
+                                          const name = playerNameById.get(pid) ?? pid;
+                                          const isFirst = g.playerIds[0] === pid;
+                                          const isLast = g.playerIds[g.playerIds.length - 1] === pid;
+
+                                          return (
+                                            <div key={pid} className="p-3 flex items-center justify-between gap-2">
+                                              <div className="min-w-0">
+                                                <div className="truncate text-sm font-semibold text-gray-900">{name}</div>
+                                                <div className="text-[11px] text-gray-500">Seat {g.playerIds.indexOf(pid) + 1}</div>
+                                              </div>
+
+                                              <div className="flex items-center gap-2">
+                                                <button
+                                                  type="button"
+                                                  onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "up")}
+                                                  disabled={ttSaving || ttLoading || isFirst}
+                                                  className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
+                                                    ttSaving || ttLoading || isFirst
+                                                      ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                      : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                                  }`}
+                                                >
+                                                  ↑
+                                                </button>
+
+                                                <button
+                                                  type="button"
+                                                  onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "down")}
+                                                  disabled={ttSaving || ttLoading || isLast}
+                                                  className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
+                                                    ttSaving || ttLoading || isLast
+                                                      ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                      : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                                  }`}
+                                                >
+                                                  ↓
+                                                </button>
+
+                                                <button
+                                                  type="button"
+                                                  onClick={() => ttRemovePlayer(g.groupNo, pid)}
+                                                  disabled={ttSaving || ttLoading}
+                                                  className={`h-9 rounded-lg border px-3 text-xs font-semibold shadow-sm ${
+                                                    ttSaving || ttLoading
+                                                      ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                      : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                                  }`}
+                                                >
+                                                  Remove
+                                                </button>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+              </section>
             )}
           </>
         )}
