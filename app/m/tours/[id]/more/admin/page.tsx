@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -146,8 +146,8 @@ export default function MobileTourAdminPage() {
     Array<{
       player_id: string;
       name: string;
-      starting_handicap: number | null; // last saved value we loaded/committed
-      input: string; // editable text
+      starting_handicap: number | null;
+      input: string;
       dirty: boolean;
     }>
   >([]);
@@ -162,10 +162,13 @@ export default function MobileTourAdminPage() {
   const [selectedCourseId, setSelectedCourseId] = useState<string>("");
   const [holeRows, setHoleRows] = useState<HoleEditRow[]>(makeEmptyHoles());
 
+  // ✅ Guard against out-of-order async responses when switching courses quickly
+  const parsReqSeqRef = useRef(0);
+
   // Rounds list (used for tee time groups)
   const [roundOptions, setRoundOptions] = useState<RoundOption[]>([]);
 
-  // Manual tee time groups (uses existing round_groups / round_group_players)
+  // Manual tee time groups
   const [ttSelectedRoundId, setTtSelectedRoundId] = useState<string>("");
   const [ttLoading, setTtLoading] = useState(false);
   const [ttSaving, setTtSaving] = useState(false);
@@ -284,7 +287,6 @@ export default function MobileTourAdminPage() {
 
         setRoundOptions(ropts);
 
-        // start with no tool visible
         setActiveSection(null);
       } catch (e: any) {
         if (!alive) return;
@@ -300,11 +302,16 @@ export default function MobileTourAdminPage() {
     };
   }, [tourId]);
 
-  // Load pars for selected course
+  // Load pars for selected course (only after user selects)
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
+    // bump request sequence whenever the selection changes (including to empty)
+    const myReq = ++parsReqSeqRef.current;
+
     if (!selectedCourseId) {
+      // only apply if this is still the latest "selection"
+      if (parsReqSeqRef.current !== myReq) return;
       setCourseError("");
       setCourseSaveMsg("");
       setCourseLoading(false);
@@ -314,7 +321,9 @@ export default function MobileTourAdminPage() {
     }
 
     if (!isLikelyUuid(selectedCourseId)) {
+      if (parsReqSeqRef.current !== myReq) return;
       setCourseError("Selected course id is invalid.");
+      setCourseLoading(false);
       setHoleRows(makeEmptyHoles());
       return;
     }
@@ -322,6 +331,9 @@ export default function MobileTourAdminPage() {
     let alive = true;
 
     async function loadPars() {
+      // only the latest request should touch state
+      if (parsReqSeqRef.current !== myReq) return;
+
       setCourseLoading(true);
       setCourseError("");
       setCourseSaveMsg("");
@@ -366,13 +378,20 @@ export default function MobileTourAdminPage() {
         }
 
         if (!alive) return;
+        if (parsReqSeqRef.current !== myReq) return;
+
         setHoleRows(next);
       } catch (e: any) {
         if (!alive) return;
+        if (parsReqSeqRef.current !== myReq) return;
+
         setCourseError(e?.message ?? "Failed to load course pars.");
         setHoleRows(makeEmptyHoles());
       } finally {
-        if (alive) setCourseLoading(false);
+        if (!alive) return;
+        if (parsReqSeqRef.current !== myReq) return;
+
+        setCourseLoading(false);
       }
     }
 
@@ -825,7 +844,7 @@ export default function MobileTourAdminPage() {
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
-            {/* Chooser row (no "Admin tools" header or divider) */}
+            {/* Chooser row */}
             <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
@@ -852,7 +871,6 @@ export default function MobileTourAdminPage() {
               </button>
             </div>
 
-            {/* Nothing else until a button is pressed */}
             {activeSection === null ? null : activeSection === "starting" ? (
               <>
                 <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
