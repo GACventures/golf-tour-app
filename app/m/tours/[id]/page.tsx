@@ -1,252 +1,125 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
+import React, { useCallback, useMemo, useState } from "react";
+import { useParams } from "next/navigation";
+import { createClient } from "@supabase/supabase-js";
 
-type TourRow = {
-  id: string;
-  name: string | null;
-  start_date: string | null;
-  end_date: string | null;
-  image_url?: string | null;
-};
+const PDF_TOUR_ID = "5a80b049-396f-46ec-965e-810e738471b6";
+const BUCKET = "tours-pdfs-v2";
 
-type RoundRow = {
-  id: string;
-  tour_id: string;
-  played_on: string | null;
-};
+const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
 
-const DEFAULT_HERO = "/tours/tour-landing-hero-cartoon.webp";
+type PdfKey = "itinerary" | "accommodation" | "dining" | "profiles" | "comps";
 
-const JAPAN_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
-const JAPAN_HERO = "/tours/japan-poster_mobile_1080w.webp";
+const PDF_BUTTONS: Array<{
+  key: PdfKey;
+  label: string;
+  filename: string;
+}> = [
+  { key: "itinerary", label: "Itinerary", filename: "itinerary.pdf" },
+  { key: "accommodation", label: "Accommodation", filename: "accommodation.pdf" },
+  { key: "dining", label: "Dining", filename: "dining.pdf" },
+  { key: "profiles", label: "Player Profiles", filename: "profiles.pdf" },
+  { key: "comps", label: "Comps etc", filename: "comps.pdf" },
+];
 
-const PORTUGAL_TOUR_ID = "b5e5b90d-0ae5-4be5-a3cd-3ef1c73cb6b5";
-const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
+function getSupabaseBrowserClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
-const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
-
-/**
- * ✅ START-FROM-SCRATCH PDF CONFIG
- * 1) Create a brand-new PUBLIC bucket in Supabase Storage with this exact name:
- */
-const PDF_BUCKET = "tours-pdfs-v2";
-
-/**
- * 2) Only THIS tour is expected to have PDFs.
- *    For every other tour, we show "Document not available for this tour."
- */
-const TOUR_WITH_PDFS_ID = "5a80b049-396f-46ec-965e-810e738471b6";
-
-/**
- * 3) Upload PDFs under:
- *    tours/tours/<tourId>/<filename>.pdf
- */
-function pdfPath(tourId: string, filename: string) {
-  return `tours/tours/${tourId}/${filename}`;
-}
-
-function parseDate(value: string | null): Date | null {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function fmtDate(d: Date) {
-  return d.toLocaleDateString(undefined, {
-    weekday: "short",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-function formatTourDates(start: Date | null, end: Date | null) {
-  if (start && end) {
-    if (start.toDateString() === end.toDateString()) return fmtDate(start);
-    return `${fmtDate(start)} – ${fmtDate(end)}`;
+  if (!url || !anon) {
+    // Fail loudly and deterministically in dev if env vars are missing
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
   }
-  if (start) return fmtDate(start);
-  if (end) return fmtDate(end);
-  return "";
+
+  return createClient(url, anon);
 }
 
 export default function MobileTourLandingPage() {
   const params = useParams<{ id: string }>();
-  const router = useRouter();
   const tourId = params?.id ?? "";
 
-  const [tour, setTour] = useState<TourRow | null>(null);
-  const [rounds, setRounds] = useState<RoundRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+  const [openingKey, setOpeningKey] = useState<PdfKey | null>(null);
 
-  useEffect(() => {
-    let alive = true;
+  const openPdf = useCallback(
+    async (filename: string, key: PdfKey) => {
+      // Rule 1: only this one tour can ever open PDFs (hard-coded for now)
+      if (tourId !== PDF_TOUR_ID) {
+        alert(NOT_AVAILABLE_MESSAGE);
+        return;
+      }
 
-    async function loadAll() {
-      setLoading(true);
+      setOpeningKey(key);
 
-      const [{ data: t }, { data: r }] = await Promise.all([
-        supabase.from("tours").select("id,name,start_date,end_date,image_url").eq("id", tourId).single(),
-        supabase.from("rounds").select("id,tour_id,played_on").eq("tour_id", tourId),
-      ]);
+      try {
+        // Exact required path structure:
+        // tours/tours/<tourId>/<filename>.pdf
+        const path = `tours/tours/${tourId}/${filename}`;
 
-      if (!alive) return;
+        // Must use getPublicUrl (no signed URLs)
+        const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
+        const publicUrl = data?.publicUrl;
 
-      setTour((t ?? null) as TourRow | null);
-      setRounds((r ?? []) as RoundRow[]);
-      setLoading(false);
-    }
+        if (!publicUrl) {
+          alert(NOT_AVAILABLE_MESSAGE);
+          return;
+        }
 
-    if (tourId) loadAll();
-    return () => {
-      alive = false;
-    };
-  }, [tourId]);
+        // Deterministic existence check:
+        // If file does not exist (or not publicly readable), HEAD will fail.
+        const head = await fetch(publicUrl, { method: "HEAD", cache: "no-store" });
+        if (!head.ok) {
+          alert(NOT_AVAILABLE_MESSAGE);
+          return;
+        }
 
-  const heroImage = useMemo(() => {
-    if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
-    if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
-    if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
-    return tour?.image_url?.trim() || DEFAULT_HERO;
-  }, [tourId, tour?.image_url, tour?.name]);
+        // Open in new tab (exact requirement)
+        window.open(publicUrl, "_blank", "noopener,noreferrer");
+      } catch {
+        alert(NOT_AVAILABLE_MESSAGE);
+      } finally {
+        setOpeningKey(null);
+      }
+    },
+    [supabase, tourId]
+  );
 
-  const derivedDates = useMemo(() => {
-    const played = rounds.map((r) => r.played_on).filter(Boolean) as string[];
-    if (!played.length) return { start: null, end: null };
-    played.sort();
-    return { start: played[0], end: played[played.length - 1] };
-  }, [rounds]);
-
-  const start = parseDate(tour?.start_date || derivedDates.start);
-  const end = parseDate(tour?.end_date || derivedDates.end);
-  const dateLabel = formatTourDates(start, end);
-
-  function openPdf(filename: string) {
-    // Only one tour has PDFs (by design for this reset)
-    if (!tourId || tourId !== TOUR_WITH_PDFS_ID) {
-      alert("Document not available for this tour.");
-      return;
-    }
-
-    const path = pdfPath(tourId, filename);
-    const { data } = supabase.storage.from(PDF_BUCKET).getPublicUrl(path);
-    const url = data?.publicUrl;
-
-    if (!url) {
-      alert("Unable to open document.");
-      return;
-    }
-
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
-
-  const baseBtn =
-    "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
-
-  const rowColors = [
-    "bg-blue-100 text-gray-900",
-    "bg-blue-200 text-gray-900",
-    "bg-blue-300 text-gray-900",
-    "bg-blue-400 text-white",
-    "bg-blue-500 text-white",
-    "bg-blue-600 text-white",
-  ];
-
+  // Simple mobile-first layout; buttons 13–17 are the PDF buttons section
   return (
-    <div className="min-h-dvh bg-black text-white">
-      <div className="px-4 pt-4 pb-3 max-w-md mx-auto">
-        {loading ? (
-          <div className="h-6 w-48 bg-white/30 rounded" />
-        ) : (
-          <>
-            <div className="text-2xl font-extrabold">{tour?.name || "Tour"}</div>
-            <div className="text-sm text-white/80">{dateLabel || "Dates TBD"}</div>
-          </>
-        )}
-      </div>
+    <main className="min-h-dvh w-full px-4 py-4">
+      <header className="mb-4">
+        <h1 className="text-xl font-semibold">Tour</h1>
+        <p className="text-sm opacity-70 break-all">Tour ID: {tourId}</p>
+      </header>
 
-      <div className="relative h-[26vh] bg-black">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={heroImage} alt="" className="h-full w-full object-cover" />
-      </div>
+      <section className="mb-4 rounded-xl border p-3">
+        <p className="text-sm font-medium">Documents (Buttons 13–17)</p>
+        <p className="text-xs opacity-70 mt-1">
+          Opens PDFs only for the hard-coded PDF tour. All other tours show an alert.
+        </p>
+      </section>
 
-      <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
-        <div className="grid grid-cols-3 gap-2">
-          <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>
-            Daily<br />Tee times
-          </button>
-          <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>
-            Daily<br />Results
-          </button>
-          <button className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>
-            Score<br />Entry
-          </button>
+      <section className="grid grid-cols-2 gap-3">
+        {PDF_BUTTONS.map((b) => {
+          const isOpening = openingKey === b.key;
 
-          <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>
-            Leaderboards
-          </button>
-          <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/competitions`)}>
-            Competitions
-          </button>
-          <button className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/stats`)}>
-            Stats
-          </button>
-
-          <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>
-            Matchplay<br />Format
-          </button>
-          <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>
-            Matchplay<br />Results
-          </button>
-          <button className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>
-            Matchplay<br />Leaderboard
-          </button>
-
-          <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>
-            Tour<br />Details
-          </button>
-          <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>
-            Tour<br />Admin
-          </button>
-          <button className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>
-            Rehandicapping
-          </button>
-
-          {/* Buttons 13–17 (fresh start) */}
-          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openPdf("itinerary.pdf")}>
-            Itinerary
-          </button>
-          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openPdf("accommodation.pdf")}>
-            Accommodation
-          </button>
-          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openPdf("dining.pdf")}>
-            Dining
-          </button>
-
-          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openPdf("profiles.pdf")}>
-            Player<br />Profiles
-          </button>
-          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openPdf("comps.pdf")}>
-            Comps etc
-          </button>
-
-          <button
-            className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
-            onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
-          >
-            App<br />User Guide
-          </button>
-        </div>
-
-        <div className="pt-6 text-center">
-          <div className="text-sm font-semibold text-gray-300">Built by GAC Ventures</div>
-          <div className="text-xs italic tracking-wide text-gray-400">Golf · Analytics · Competition</div>
-        </div>
-      </div>
-    </div>
+          return (
+            <button
+              key={b.key}
+              type="button"
+              onClick={() => openPdf(b.filename, b.key)}
+              disabled={isOpening}
+              className="rounded-2xl border px-4 py-4 text-left active:scale-[0.99] disabled:opacity-60"
+            >
+              <div className="text-base font-semibold">{b.label}</div>
+              <div className="mt-1 text-xs opacity-70">
+                {isOpening ? "Opening…" : b.filename}
+              </div>
+            </button>
+          );
+        })}
+      </section>
+    </main>
   );
 }
