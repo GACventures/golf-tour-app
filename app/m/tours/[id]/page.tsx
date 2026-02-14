@@ -54,6 +54,22 @@ const PDF_FILES = [
   "comps.pdf",
 ] as const;
 
+/**
+ * ✅ TUNING KNOBS (your requested changes)
+ * - Zoom jumps are now MUCH larger per tap (multiplicative).
+ * - Drag-to-pan is now "faster" (movement multiplier).
+ */
+const ZOOM_IN_MULTIPLIER = 1.45; // one tap = ~45% bigger
+const ZOOM_OUT_MULTIPLIER = 1 / ZOOM_IN_MULTIPLIER;
+const MIN_ZOOM = 0.6;
+const MAX_ZOOM = 4.0;
+
+const PAN_SPEED = 1.9; // swipe moves ~1.9x further than finger distance
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
 function parseDate(value: string | null): Date | null {
   if (!value) return null;
   const d = new Date(value);
@@ -282,7 +298,7 @@ export default function MobileTourLandingPage() {
         setZoom(1.0);
         setViewerSrc(routeUrl);
 
-        // When it opens, start at top-left
+        // Start at top-left
         requestAnimationFrame(() => {
           const vp = viewportRef.current;
           if (vp) {
@@ -299,7 +315,7 @@ export default function MobileTourLandingPage() {
     [tourId, docs]
   );
 
-  // ✅ Drag-to-pan handlers
+  // Drag-to-pan handlers (with speed multiplier)
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const vp = viewportRef.current;
     if (!vp) return;
@@ -310,12 +326,10 @@ export default function MobileTourLandingPage() {
     dragStartScrollLeftRef.current = vp.scrollLeft;
     dragStartScrollTopRef.current = vp.scrollTop;
 
-    // Capture pointer so moves keep working even if finger leaves element
     try {
       (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
     } catch {}
 
-    // Prevent the browser from trying to “scroll the page”
     e.preventDefault();
   }, []);
 
@@ -327,23 +341,26 @@ export default function MobileTourLandingPage() {
     const dx = e.clientX - dragStartXRef.current;
     const dy = e.clientY - dragStartYRef.current;
 
-    vp.scrollLeft = dragStartScrollLeftRef.current - dx;
-    vp.scrollTop = dragStartScrollTopRef.current - dy;
+    // ✅ Faster panning (moves further per swipe)
+    vp.scrollLeft = dragStartScrollLeftRef.current - dx * PAN_SPEED;
+    vp.scrollTop = dragStartScrollTopRef.current - dy * PAN_SPEED;
 
     e.preventDefault();
   }, []);
 
-  const endDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDraggingRef.current) return;
-    isDraggingRef.current = false;
+  const endDrag = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!isDraggingRef.current) return;
+      isDraggingRef.current = false;
 
-    try {
-      (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
-    } catch {}
+      try {
+        (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+      } catch {}
 
-    // Update ratio so next zoom rerender preserves where user left it
-    captureScrollRatio();
-  }, [captureScrollRatio]);
+      captureScrollRatio();
+    },
+    [captureScrollRatio]
+  );
 
   const baseBtn =
     "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
@@ -357,14 +374,15 @@ export default function MobileTourLandingPage() {
     "bg-blue-600 text-white",
   ];
 
+  // ✅ Bigger zoom jumps per tap (multiplicative)
   const zoomOut = useCallback(() => {
     captureScrollRatio();
-    setZoom((z) => Math.max(0.6, Number((z - 0.2).toFixed(2))));
+    setZoom((z) => clamp(Number((z * ZOOM_OUT_MULTIPLIER).toFixed(3)), MIN_ZOOM, MAX_ZOOM));
   }, [captureScrollRatio]);
 
   const zoomIn = useCallback(() => {
     captureScrollRatio();
-    setZoom((z) => Math.min(3.0, Number((z + 0.2).toFixed(2))));
+    setZoom((z) => clamp(Number((z * ZOOM_IN_MULTIPLIER).toFixed(3)), MIN_ZOOM, MAX_ZOOM));
   }, [captureScrollRatio]);
 
   return (
@@ -493,12 +511,10 @@ export default function MobileTourLandingPage() {
             </div>
           </div>
 
-          {/* viewport: we pan by dragging (updates scrollLeft/scrollTop) */}
           <div
             ref={viewportRef}
             className="w-full h-[calc(100dvh-52px)] bg-white overflow-auto"
             style={{
-              // critical: allow pointer dragging to work on mobile
               touchAction: "none",
               cursor: "grab",
             }}
@@ -508,7 +524,6 @@ export default function MobileTourLandingPage() {
             onPointerCancel={endDrag}
             onPointerLeave={endDrag}
           >
-            {/* DO NOT center; centering contributes to “snap back” feel */}
             <div className="p-4">
               <canvas ref={canvasRef} className="block" />
             </div>
