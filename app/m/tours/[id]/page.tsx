@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -38,17 +38,9 @@ const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
 const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
 const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
 
-// ✅ Hard-coded PDF tour + filenames (v2 bucket via proxy route)
+// Only this tour has PDFs for now
 const PDF_TOUR_ID = "5a80b049-396f-46ec-965e-810e738471b6";
 const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
-
-const PDF_FILES = [
-  "itinerary.pdf",
-  "accommodation.pdf",
-  "dining.pdf",
-  "profiles.pdf",
-  "comps.pdf",
-] as const;
 
 function parseDate(value: string | null): Date | null {
   if (!value) return null;
@@ -84,18 +76,6 @@ export default function MobileTourLandingPage() {
   const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loading, setLoading] = useState(true);
-
-  // ✅ In-tab PDF blob viewer state (works on Vercel mobile)
-  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
-  const [viewerTitle, setViewerTitle] = useState<string>("Document");
-  const [openingDocIdx, setOpeningDocIdx] = useState<number | null>(null);
-
-  const closeViewer = useCallback(() => {
-    setViewerUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return null;
-    });
-  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -149,71 +129,19 @@ export default function MobileTourLandingPage() {
   const end = parseDate(tour?.end_date || derivedDates.end);
   const dateLabel = formatTourDates(start, end);
 
-  // ✅ Buttons 13–17 now use the working same-origin proxy route + blob viewer.
-  // Index mapping:
-  // 0 itinerary.pdf
-  // 1 accommodation.pdf
-  // 2 dining.pdf
-  // 3 profiles.pdf
-  // 4 comps.pdf
-  const openDocByIndex = useCallback(
-    async (idx: number) => {
-      // Rule: only one tour has PDFs
-      if (tourId !== PDF_TOUR_ID) {
-        alert(NOT_AVAILABLE_MESSAGE);
-        return;
-      }
+  // Buttons 13–17: open the dedicated PDF viewer page (same-tab; supports zoom better)
+  function openPdfViewer(file: string, title: string) {
+    if (tourId !== PDF_TOUR_ID) {
+      alert(NOT_AVAILABLE_MESSAGE);
+      return;
+    }
 
-      const filename = PDF_FILES[idx];
-      if (!filename) {
-        alert(NOT_AVAILABLE_MESSAGE);
-        return;
-      }
+    const url = `/m/tours/${tourId}/pdf-viewer?file=${encodeURIComponent(
+      file
+    )}&title=${encodeURIComponent(title)}`;
 
-      setOpeningDocIdx(idx);
-
-      try {
-        const res = await fetch(`/m/tours/${tourId}/pdf/${encodeURIComponent(filename)}`, {
-          method: "GET",
-          cache: "no-store",
-        });
-
-        if (!res.ok) {
-          alert(NOT_AVAILABLE_MESSAGE);
-          return;
-        }
-
-        const blob = await res.blob();
-        const type = (blob.type || "").toLowerCase();
-
-        // Guard against HTML/error responses
-        if (!type.includes("pdf")) {
-          alert(NOT_AVAILABLE_MESSAGE);
-          return;
-        }
-
-        // Revoke prior blob URL if present
-        setViewerUrl((prev) => {
-          if (prev) URL.revokeObjectURL(prev);
-          return prev;
-        });
-
-        const url = URL.createObjectURL(blob);
-
-        // Title from existing docs table (if present), otherwise use filename
-        const fallbackTitle = filename.replace(".pdf", "");
-        const title = docs?.[idx]?.title?.trim() || fallbackTitle;
-
-        setViewerTitle(title);
-        setViewerUrl(url);
-      } catch {
-        alert(NOT_AVAILABLE_MESSAGE);
-      } finally {
-        setOpeningDocIdx(null);
-      }
-    },
-    [tourId, docs]
-  );
+    router.push(url);
+  }
 
   const baseBtn =
     "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
@@ -252,21 +180,24 @@ export default function MobileTourLandingPage() {
             className={`${baseBtn} ${rowColors[0]}`}
             onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}
           >
-            Daily<br />
+            Daily
+            <br />
             Tee times
           </button>
           <button
             className={`${baseBtn} ${rowColors[0]}`}
             onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}
           >
-            Daily<br />
+            Daily
+            <br />
             Results
           </button>
           <button
             className={`${baseBtn} ${rowColors[0]}`}
             onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}
           >
-            Score<br />
+            Score
+            <br />
             Entry
           </button>
 
@@ -293,21 +224,24 @@ export default function MobileTourLandingPage() {
             className={`${baseBtn} ${rowColors[2]}`}
             onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}
           >
-            Matchplay<br />
+            Matchplay
+            <br />
             Format
           </button>
           <button
             className={`${baseBtn} ${rowColors[2]}`}
             onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}
           >
-            Matchplay<br />
+            Matchplay
+            <br />
             Results
           </button>
           <button
             className={`${baseBtn} ${rowColors[2]}`}
             onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}
           >
-            Matchplay<br />
+            Matchplay
+            <br />
             Leaderboard
           </button>
 
@@ -315,14 +249,16 @@ export default function MobileTourLandingPage() {
             className={`${baseBtn} ${rowColors[3]}`}
             onClick={() => router.push(`/m/tours/${tourId}/details`)}
           >
-            Tour<br />
+            Tour
+            <br />
             Details
           </button>
           <button
             className={`${baseBtn} ${rowColors[3]}`}
             onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}
           >
-            Tour<br />
+            Tour
+            <br />
             Admin
           </button>
           <button
@@ -332,51 +268,43 @@ export default function MobileTourLandingPage() {
             Rehandicapping
           </button>
 
-          {/* 13–17 (PDFs) */}
-          <button
-            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(0)}
-          >
-            {openingDocIdx === 0 ? "Opening…" : "Itinerary"}
+          {/* 13–15 */}
+          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openPdfViewer("itinerary.pdf", docs?.[0]?.title || "Itinerary")}>
+            Itinerary
           </button>
           <button
-            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(1)}
+            className={`${baseBtn} ${rowColors[4]}`}
+            onClick={() =>
+              openPdfViewer("accommodation.pdf", docs?.[1]?.title || "Accommodation")
+            }
           >
-            {openingDocIdx === 1 ? "Opening…" : "Accommodation"}
+            Accommodation
           </button>
-          <button
-            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(2)}
-          >
-            {openingDocIdx === 2 ? "Opening…" : "Dining"}
+          <button className={`${baseBtn} ${rowColors[4]}`} onClick={() => openPdfViewer("dining.pdf", docs?.[2]?.title || "Dining")}>
+            Dining
           </button>
 
+          {/* 16–17 */}
           <button
-            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(3)}
+            className={`${baseBtn} ${rowColors[5]}`}
+            onClick={() =>
+              openPdfViewer("profiles.pdf", docs?.[3]?.title || "Player Profiles")
+            }
           >
-            {openingDocIdx === 3 ? (
-              "Opening…"
-            ) : (
-              <>
-                Player<br />
-                Profiles
-              </>
-            )}
+            Player
+            <br />
+            Profiles
           </button>
-          <button
-            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(4)}
-          >
-            {openingDocIdx === 4 ? "Opening…" : "Comps etc"}
+          <button className={`${baseBtn} ${rowColors[5]}`} onClick={() => openPdfViewer("comps.pdf", docs?.[4]?.title || "Comps etc")}>
+            Comps etc
           </button>
 
           <button
             className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
             onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
           >
-            App<br />
+            App
+            <br />
             User Guide
           </button>
         </div>
@@ -388,28 +316,6 @@ export default function MobileTourLandingPage() {
           </div>
         </div>
       </div>
-
-      {/* ✅ Full-screen in-tab PDF viewer */}
-      {viewerUrl && (
-        <div className="fixed inset-0 z-50 bg-black">
-          <div className="flex items-center justify-between px-4 py-3 bg-black/90">
-            <div className="text-white text-sm font-semibold truncate">{viewerTitle}</div>
-            <button
-              type="button"
-              onClick={closeViewer}
-              className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
-            >
-              Close
-            </button>
-          </div>
-
-          <iframe
-            title={viewerTitle}
-            src={viewerUrl}
-            className="w-full h-[calc(100dvh-52px)] bg-white"
-          />
-        </div>
-      )}
     </div>
   );
 }
