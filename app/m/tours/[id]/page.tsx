@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 
@@ -25,12 +25,24 @@ const PDF_BUTTONS: Array<{
 function getSupabaseBrowserClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
   if (!url || !anon) {
     throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
   }
-
   return createClient(url, anon);
+}
+
+function openInNewTab(url: string) {
+  // Most reliable: user-gesture anchor click (works better than async window.open in many mobile/prod cases)
+  const a = document.createElement("a");
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  // Also attempt window.open (your original requirement). If blocked, anchor still handles it.
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 export default function MobileTourLandingPage() {
@@ -38,70 +50,79 @@ export default function MobileTourLandingPage() {
   const tourId = params?.id ?? "";
 
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
-  const [openingKey, setOpeningKey] = useState<PdfKey | null>(null);
 
-  const openPdf = useCallback(
-    async (filename: string, key: PdfKey) => {
-      // Rule 1: only this one tour can ever open PDFs (hard-coded for now)
+  const [openingKey, setOpeningKey] = useState<PdfKey | null>(null);
+  const [availableFiles, setAvailableFiles] = useState<Set<string>>(new Set());
+
+  // ✅ Key change vs your previous attempts:
+  // Pre-check file existence ONCE (via Storage list) so button clicks stay synchronous (no await before opening).
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAvailableFiles() {
+      // For any other tour: treat as "no PDFs"
+      if (tourId !== PDF_TOUR_ID) {
+        setAvailableFiles(new Set());
+        return;
+      }
+
+      const prefix = `tours/tours/${tourId}`; // folder path (no trailing slash required)
+      const { data, error } = await supabase.storage.from(BUCKET).list(prefix, {
+        limit: 100,
+        sortBy: { column: "name", order: "asc" },
+      });
+
+      if (cancelled) return;
+
+      if (error || !data) {
+        setAvailableFiles(new Set());
+        return;
+      }
+
+      // data is a list of objects in that folder; we only need names like "itinerary.pdf"
+      setAvailableFiles(new Set(data.map((x) => x.name)));
+    }
+
+    loadAvailableFiles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, tourId]);
+
+  const onPdfClick = useCallback(
+    (filename: string, key: PdfKey) => {
+      // Rule 1: only this tour can open PDFs
       if (tourId !== PDF_TOUR_ID) {
         alert(NOT_AVAILABLE_MESSAGE);
         return;
       }
 
-      // ✅ IMPORTANT: open synchronously (before any await) to avoid popup blockers in prod
-      const newWin = window.open("about:blank", "_blank", "noopener,noreferrer");
-
-      // If popup blocked, we’ll fall back to same-tab navigation (instead of “nothing happens”)
-      const popupBlocked = !newWin;
+      // Rule 2: if file doesn't exist -> alert
+      if (!availableFiles.has(filename)) {
+        alert(NOT_AVAILABLE_MESSAGE);
+        return;
+      }
 
       setOpeningKey(key);
 
       try {
-        // Exact required path structure:
-        // tours/tours/<tourId>/<filename>.pdf
         const path = `tours/tours/${tourId}/${filename}`;
-
-        // Must use getPublicUrl (no signed URLs)
         const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
         const publicUrl = data?.publicUrl;
 
         if (!publicUrl) {
-          if (newWin) newWin.close();
           alert(NOT_AVAILABLE_MESSAGE);
           return;
         }
 
-        // Deterministic existence check:
-        // If file does not exist (or not publicly readable), HEAD will fail.
-        const head = await fetch(publicUrl, { method: "HEAD", cache: "no-store" });
-        if (!head.ok) {
-          if (newWin) newWin.close();
-          alert(NOT_AVAILABLE_MESSAGE);
-          return;
-        }
-
-        // ✅ Navigate the already-opened tab (avoids popup blocking after awaits)
-        if (newWin) {
-          newWin.location.href = publicUrl;
-        } else {
-          // popup blocked: open in same tab so user can still see the PDF
-          // (still meets “open PDF” behavior; popup policies vary on mobile)
-          window.location.href = publicUrl;
-        }
-
-        // Optional: if popup was blocked, you can show a one-time hint
-        if (popupBlocked) {
-          // Keep it simple; comment out if you don’t want this message
-          // alert("Pop-up was blocked. Opened document in this tab instead.");
-        }
-      } catch {
-        if (newWin) newWin.close();
-        alert(NOT_AVAILABLE_MESSAGE);
+        // ✅ Synchronous open (no awaits), avoids popup blocking behaviour you saw on Vercel/mobile
+        openInNewTab(publicUrl);
       } finally {
         setOpeningKey(null);
       }
     },
-    [supabase, tourId]
+    [availableFiles, supabase, tourId]
   );
 
   return (
@@ -114,7 +135,7 @@ export default function MobileTourLandingPage() {
       <section className="mb-4 rounded-xl border p-3">
         <p className="text-sm font-medium">Documents (Buttons 13–17)</p>
         <p className="text-xs opacity-70 mt-1">
-          Opens PDFs only for the hard-coded PDF tour. All other tours show an alert.
+          PDFs open only for the hard-coded PDF tour. All others show an alert.
         </p>
       </section>
 
@@ -126,7 +147,7 @@ export default function MobileTourLandingPage() {
             <button
               key={b.key}
               type="button"
-              onClick={() => openPdf(b.filename, b.key)}
+              onClick={() => onPdfClick(b.filename, b.key)}
               disabled={isOpening}
               className="rounded-2xl border px-4 py-4 text-left active:scale-[0.99] disabled:opacity-60"
             >
