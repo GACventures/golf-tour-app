@@ -1,19 +1,16 @@
-// app/m/tours/[id]/more/admin/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import MobileNav from "../../_components/MobileNav";
 
-// ✅ Updated import path per your note: lib/handicaps/recalc...
+import MobileNav from "../../_components/MobileNav";
 import { recalcAndSaveTourHandicaps } from "@/lib/handicaps/recalcAndSaveTourHandicaps";
 
 type Tour = {
   id: string;
   name: string;
-  rehandicapping_enabled: boolean | null;
 };
 
 type PlayerRow = {
@@ -49,15 +46,9 @@ type HoleEditRow = {
 type RoundOption = {
   id: string;
   round_no: number;
-  played_on: string; // date
+  played_on: string | null;
   name: string | null;
   course_name: string | null;
-};
-
-type RoundPlayerHCRow = {
-  player_id: string;
-  playing_handicap: number;
-  base_playing_handicap: number | null;
 };
 
 // Tee time grouping tables (existing)
@@ -79,13 +70,12 @@ type RoundGroupPlayerRow = {
 };
 
 type ManualGroup = {
-  // local-only id (stable key for React even before save)
-  key: string;
-  // 1..N visual order
-  groupNo: number;
-  // ordered player_ids
-  playerIds: string[];
+  key: string; // local-only stable key
+  groupNo: number; // 1..N visual order
+  playerIds: string[]; // ordered player_ids
 };
+
+type AdminSection = "starting" | "course" | "tee" | null;
 
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
@@ -132,24 +122,27 @@ function validateSiSet(values: number[]) {
   return { ok: true as const, error: "" };
 }
 
-function roundLabel(r: RoundOption) {
-  const course = (r.course_name ?? "").trim();
-  const baseName = course || (r.name ?? "").trim() || `Round ${r.round_no}`;
-  return `R${r.round_no} • ${baseName} • ${r.played_on}`;
+function makeLocalKey() {
+  return `g_${Date.now()}_${Math.floor(Math.random() * 1e9)}`;
 }
 
-function makeLocalKey() {
-  // deterministic enough for UI keys; avoids crypto dependency
-  return `g_${Date.now()}_${Math.floor(Math.random() * 1e9)}`;
+function formatRoundLine(r: RoundOption) {
+  const rn = Number.isFinite(Number(r.round_no)) ? Number(r.round_no) : 0;
+  const title = (r.course_name ?? "").trim() || (r.name ?? "").trim() || "Round";
+  const date = (r.played_on ?? "").trim();
+  const tail = date ? ` • ${date}` : "";
+  return `R${rn} • ${title}${tail}`;
 }
 
 export default function MobileTourAdminPage() {
   const params = useParams<{ id?: string }>();
-  const router = useRouter();
   const tourId = String(params?.id ?? "").trim();
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
+
+  // section chooser
+  const [activeSection, setActiveSection] = useState<AdminSection>(null);
 
   // Starting handicaps state
   const [saving, setSaving] = useState(false);
@@ -166,16 +159,6 @@ export default function MobileTourAdminPage() {
     }>
   >([]);
 
-  // Rehandicapping toggle state
-  const [rhSaving, setRhSaving] = useState(false);
-  const [rhError, setRhError] = useState("");
-  const [rhMsg, setRhMsg] = useState("");
-  const [rhEnabledInput, setRhEnabledInput] = useState<boolean | null>(null);
-  const rhDirty = useMemo(() => {
-    if (!tour) return false;
-    return (tour.rehandicapping_enabled === true) !== (rhEnabledInput === true);
-  }, [tour, rhEnabledInput]);
-
   // Course editor state
   const [courseLoading, setCourseLoading] = useState(false);
   const [courseError, setCourseError] = useState("");
@@ -183,19 +166,11 @@ export default function MobileTourAdminPage() {
   const [courseSaving, setCourseSaving] = useState(false);
 
   const [courseOptions, setCourseOptions] = useState<CourseOption[]>([]);
-  const [selectedCourseId, setSelectedCourseId] = useState<string>(""); // empty = not selected yet
+  const [selectedCourseId, setSelectedCourseId] = useState<string>("");
   const [holeRows, setHoleRows] = useState<HoleEditRow[]>(makeEmptyHoles());
 
-  // One-off handicaps (only when rehandicapping is OFF)
-  const [ooRounds, setOoRounds] = useState<RoundOption[]>([]);
-  const [ooSelectedRoundId, setOoSelectedRoundId] = useState<string>("");
-  const [ooLoading, setOoLoading] = useState(false);
-  const [ooError, setOoError] = useState("");
-  const [ooSaving, setOoSaving] = useState(false);
-  const [ooMsg, setOoMsg] = useState("");
-
-  const [ooRoundPlayers, setOoRoundPlayers] = useState<Map<string, RoundPlayerHCRow>>(new Map());
-  const [ooInputs, setOoInputs] = useState<Record<string, string>>({}); // player_id -> text
+  // Rounds list (used for tee time groups)
+  const [roundOptions, setRoundOptions] = useState<RoundOption[]>([]);
 
   // Manual tee time groups (uses existing round_groups / round_group_players)
   const [ttSelectedRoundId, setTtSelectedRoundId] = useState<string>("");
@@ -207,8 +182,6 @@ export default function MobileTourAdminPage() {
   const [ttGroups, setTtGroups] = useState<ManualGroup[]>([]);
   const [ttAddTargetGroupNo, setTtAddTargetGroupNo] = useState<number>(1);
 
-  const rehandicappingEnabled = tour?.rehandicapping_enabled === true;
-
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
@@ -219,23 +192,13 @@ export default function MobileTourAdminPage() {
       setErrorMsg("");
       setSaveMsg("");
 
-      // Reset messages
-      setRhError("");
-      setRhMsg("");
+      // reset course messages
       setCourseError("");
       setCourseSaveMsg("");
       setCourseLoading(false);
       setCourseSaving(false);
 
-      // Reset one-off messages
-      setOoError("");
-      setOoMsg("");
-      setOoRounds([]);
-      setOoSelectedRoundId("");
-      setOoRoundPlayers(new Map());
-      setOoInputs({});
-
-      // Reset tee time editor
+      // reset tee time editor (but keep the section chooser state)
       setTtError("");
       setTtMsg("");
       setTtSelectedRoundId("");
@@ -243,11 +206,7 @@ export default function MobileTourAdminPage() {
       setTtAddTargetGroupNo(1);
 
       try {
-        const { data: tData, error: tErr } = await supabase
-          .from("tours")
-          .select("id,name,rehandicapping_enabled")
-          .eq("id", tourId)
-          .single();
+        const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
 
         const { data: tpData, error: tpErr } = await supabase
@@ -277,10 +236,12 @@ export default function MobileTourAdminPage() {
           .filter(Boolean) as any[];
 
         // Load tour courses (only those used by rounds in this tour)
-        const { data: roundData, error: roundErr } = await supabase.from("rounds").select("course_id").eq("tour_id", tourId);
-        if (roundErr) throw roundErr;
+        const { data: roundCourseData, error: roundCourseErr } = await supabase.from("rounds").select("course_id").eq("tour_id", tourId);
+        if (roundCourseErr) throw roundCourseErr;
 
-        const courseIds = Array.from(new Set((roundData ?? []).map((r: any) => String(r.course_id ?? "").trim()).filter(Boolean)));
+        const courseIds = Array.from(
+          new Set((roundCourseData ?? []).map((r: any) => String(r.course_id ?? "").trim()).filter(Boolean))
+        );
 
         let courses: CourseOption[] = [];
         if (courseIds.length > 0) {
@@ -298,12 +259,13 @@ export default function MobileTourAdminPage() {
           }));
         }
 
-        // One-off handicaps + tee time editor: load rounds list
+        // Rounds list for tee time editor (and consistent formatting)
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,round_no,played_on,name,courses(name)")
           .eq("tour_id", tourId)
           .order("round_no", { ascending: true });
+
         if (rErr) throw rErr;
 
         const ropts: RoundOption[] = (rData ?? [])
@@ -313,33 +275,26 @@ export default function MobileTourAdminPage() {
             return {
               id: String(r.id),
               round_no: Number(r.round_no),
-              played_on: String(r.played_on),
+              played_on: r.played_on == null ? null : String(r.played_on),
               name: r.name == null ? null : String(r.name),
               course_name: courseName,
             };
           })
-          .filter((r: RoundOption) => !!r.id && Number.isFinite(r.round_no) && !!r.played_on);
+          .filter((r: RoundOption) => !!r.id && Number.isFinite(r.round_no));
 
         if (!alive) return;
 
-        const t = tData as Tour;
-        setTour(t);
-        setRhEnabledInput(t.rehandicapping_enabled === true);
-
+        setTour(tData as Tour);
         setRows(list);
-        setCourseOptions(courses);
 
-        // Do NOT auto-select course
+        setCourseOptions(courses);
         setSelectedCourseId("");
         setHoleRows(makeEmptyHoles());
 
-        setOoRounds(ropts);
-        // Do NOT auto-select round (user picks)
-        setOoSelectedRoundId("");
+        setRoundOptions(ropts);
 
-        setTtSelectedRoundId("");
-        setTtGroups([]);
-        setTtAddTargetGroupNo(1);
+        // Start with no tool visible
+        setActiveSection(null);
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load Tour Admin page.");
@@ -473,7 +428,7 @@ export default function MobileTourAdminPage() {
       });
       if (upErr) throw upErr;
 
-      // 2) Recalc + save per-round playing handicaps using your rehandicapping engine.
+      // 2) Recalc + save per-round playing handicaps using the existing engine.
       const recalcRes = await recalcAndSaveTourHandicaps({ supabase, tourId });
       if (!recalcRes.ok) throw new Error(recalcRes.error);
 
@@ -500,30 +455,6 @@ export default function MobileTourAdminPage() {
       setErrorMsg(e?.message ?? "Save failed.");
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function saveRehandicappingEnabled() {
-    if (!tour) return;
-
-    setRhSaving(true);
-    setRhError("");
-    setRhMsg("");
-
-    try {
-      const nextEnabled = rhEnabledInput === true;
-
-      const { error } = await supabase.from("tours").update({ rehandicapping_enabled: nextEnabled }).eq("id", tour.id);
-
-      if (error) throw error;
-
-      // Update local state so other saves / UI show the committed value
-      setTour((prev) => (prev ? { ...prev, rehandicapping_enabled: nextEnabled } : prev));
-      setRhMsg(`Saved. Rehandicapping is now ${nextEnabled ? "enabled" : "disabled"}.`);
-    } catch (e: any) {
-      setRhError(e?.message ?? "Failed to save rehandicapping setting.");
-    } finally {
-      setRhSaving(false);
     }
   }
 
@@ -602,133 +533,6 @@ export default function MobileTourAdminPage() {
     } finally {
       setCourseSaving(false);
     }
-  }
-
-  async function loadOneOffRoundPlayers(roundId: string) {
-    if (!roundId || !isLikelyUuid(roundId)) {
-      setOoRoundPlayers(new Map());
-      setOoInputs({});
-      return;
-    }
-
-    setOoLoading(true);
-    setOoError("");
-    setOoMsg("");
-
-    try {
-      const { data, error } = await supabase
-        .from("round_players")
-        .select("player_id,playing_handicap,base_playing_handicap")
-        .eq("round_id", roundId);
-
-      if (error) throw error;
-
-      const map = new Map<string, RoundPlayerHCRow>();
-      const nextInputs: Record<string, string> = {};
-
-      (data ?? []).forEach((r: any) => {
-        const pid = String(r.player_id ?? "");
-        if (!pid) return;
-        const ph = Number(r.playing_handicap);
-        const base = r.base_playing_handicap == null ? null : Number(r.base_playing_handicap);
-
-        map.set(pid, {
-          player_id: pid,
-          playing_handicap: Number.isFinite(ph) ? Math.floor(ph) : 0,
-          base_playing_handicap: base != null && Number.isFinite(base) ? Math.floor(base) : null,
-        });
-
-        nextInputs[pid] = Number.isFinite(ph) ? String(Math.floor(ph)) : "";
-      });
-
-      setOoRoundPlayers(map);
-      setOoInputs(nextInputs);
-    } catch (e: any) {
-      setOoError(e?.message ?? "Failed to load one-off handicaps for this round.");
-      setOoRoundPlayers(new Map());
-      setOoInputs({});
-    } finally {
-      setOoLoading(false);
-    }
-  }
-
-  async function applyOneOff(playerId: string) {
-    if (!ooSelectedRoundId || !isLikelyUuid(ooSelectedRoundId)) return;
-
-    const raw = String(ooInputs[playerId] ?? "").trim();
-    if (!raw) return;
-
-    const nextPH = Number(raw);
-    if (!Number.isFinite(nextPH)) return;
-
-    const existing = ooRoundPlayers.get(playerId);
-    if (!existing) return;
-
-    setOoSaving(true);
-    setOoError("");
-    setOoMsg("");
-
-    try {
-      const payload: any = {
-        playing_handicap: Math.max(0, Math.floor(nextPH)),
-      };
-
-      // On first override only, preserve the original value
-      if (existing.base_playing_handicap == null) {
-        payload.base_playing_handicap = existing.playing_handicap;
-      }
-
-      const { error } = await supabase
-        .from("round_players")
-        .update(payload)
-        .eq("round_id", ooSelectedRoundId)
-        .eq("player_id", playerId);
-
-      if (error) throw error;
-
-      setOoMsg("Saved one-off handicap override.");
-      await loadOneOffRoundPlayers(ooSelectedRoundId);
-    } catch (e: any) {
-      setOoError(e?.message ?? "Failed to save one-off handicap.");
-    } finally {
-      setOoSaving(false);
-    }
-  }
-
-  async function resetOneOff(playerId: string) {
-    if (!ooSelectedRoundId || !isLikelyUuid(ooSelectedRoundId)) return;
-
-    const existing = ooRoundPlayers.get(playerId);
-    if (!existing) return;
-    if (existing.base_playing_handicap == null) return;
-
-    setOoSaving(true);
-    setOoError("");
-    setOoMsg("");
-
-    try {
-      const { error } = await supabase
-        .from("round_players")
-        .update({
-          playing_handicap: existing.base_playing_handicap,
-          base_playing_handicap: null,
-        })
-        .eq("round_id", ooSelectedRoundId)
-        .eq("player_id", playerId);
-
-      if (error) throw error;
-
-      setOoMsg("Reset to base playing handicap.");
-      await loadOneOffRoundPlayers(ooSelectedRoundId);
-    } catch (e: any) {
-      setOoError(e?.message ?? "Failed to reset one-off handicap.");
-    } finally {
-      setOoSaving(false);
-    }
-  }
-
-  function setOneOffInput(playerId: string, next: string) {
-    setOoInputs((prev) => ({ ...prev, [playerId]: next }));
   }
 
   // -------------------------
@@ -882,9 +686,7 @@ export default function MobileTourAdminPage() {
     setTtError("");
 
     setTtGroups((prev) => {
-      // remove from any existing group first (enforce uniqueness)
       const stripped = prev.map((g) => ({ ...g, playerIds: g.playerIds.filter((pid) => pid !== playerId) }));
-
       return stripped.map((g) => {
         if (g.groupNo !== groupNo) return g;
         return { ...g, playerIds: [...g.playerIds, playerId] };
@@ -932,13 +734,11 @@ export default function MobileTourAdminPage() {
     setTtMsg("");
 
     try {
-      // Only save non-empty groups
       const nonEmpty = ttGroups
         .map((g) => ({ ...g, playerIds: g.playerIds.filter(Boolean) }))
         .filter((g) => g.playerIds.length > 0)
         .sort((a, b) => a.groupNo - b.groupNo);
 
-      // Replace-all behavior (idempotent)
       const delM = await supabase.from("round_group_players").delete().eq("round_id", ttSelectedRoundId);
       if (delM.error) throw delM.error;
 
@@ -967,7 +767,7 @@ export default function MobileTourAdminPage() {
 
       const memberRows: any[] = [];
       nonEmpty.forEach((g, idx) => {
-        const groupNo = idx + 1; // saved numbering
+        const groupNo = idx + 1;
         const groupId = idByNo.get(groupNo);
         if (!groupId) return;
         g.playerIds.forEach((pid, seatIdx) => {
@@ -984,17 +784,12 @@ export default function MobileTourAdminPage() {
       if (insMErr) throw insMErr;
 
       setTtMsg(`Saved ${nonEmpty.length} group${nonEmpty.length === 1 ? "" : "s"} (${memberRows.length} player assignments).`);
-      // Reload from DB to ensure persisted order matches
       await loadManualTeeTimes(ttSelectedRoundId);
     } catch (e: any) {
       setTtError(e?.message ?? "Failed to save tee time groups.");
     } finally {
       setTtSaving(false);
     }
-  }
-
-  function goBack() {
-    router.push(`/m/tours/${tourId}/more`);
   }
 
   if (!tourId || !isLikelyUuid(tourId)) {
@@ -1018,18 +813,21 @@ export default function MobileTourAdminPage() {
   const parOptions = ["3", "4", "5"];
   const siOptions = Array.from({ length: 18 }, (_, i) => String(i + 1));
 
-  const pillBase = "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
+  const pillBase = "h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
   const pillActive = "border-gray-900 bg-gray-900 text-white";
   const pillIdle = "border-gray-200 bg-white text-gray-900";
+
+  const topBtnBase = "w-full rounded-2xl border px-4 py-4 text-left shadow-sm";
+  const topBtnActive = "border-gray-900 bg-gray-900 text-white";
+  const topBtnIdle = "border-gray-200 bg-white text-gray-900";
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       {/* Header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
-       <div className="mx-auto w-full max-w-md px-4 py-3">
-  <div className="text-base font-semibold text-gray-900">Tour Admin</div>
-</div>
-
+        <div className="mx-auto w-full max-w-md px-4 py-3">
+          <div className="text-base font-semibold text-gray-900">Tour Admin</div>
+        </div>
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 py-4 space-y-4">
@@ -1042,724 +840,566 @@ export default function MobileTourAdminPage() {
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
-            {/* Rehandicapping toggle */}
+            {/* Button chooser (always visible) */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Rehandicapping</div>
-                <div className="mt-1 text-xs text-gray-600">Controls whether rehandicapping is applied and displayed for this tour.</div>
+                <div className="text-sm font-semibold text-gray-900">Admin tools</div>
               </div>
 
               <div className="p-4 space-y-3">
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className={`${pillBase} ${rhEnabledInput === true ? pillActive : pillIdle}`}
-                    onClick={() => {
-                      setRhMsg("");
-                      setRhError("");
-                      setRhEnabledInput(true);
-                    }}
-                    aria-pressed={rhEnabledInput === true}
-                  >
-                    Yes
-                  </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveSection("starting")}
+                  className={`${topBtnBase} ${activeSection === "starting" ? topBtnActive : topBtnIdle}`}
+                >
+                  <div className="text-sm font-semibold">Tour starting handicaps</div>
+                  <div className={`mt-1 text-xs ${activeSection === "starting" ? "text-white/80" : "text-gray-600"}`}>
+                    Edit tour-level starting handicaps and recalculate playing handicaps.
+                  </div>
+                </button>
 
-                  <button
-                    type="button"
-                    className={`${pillBase} ${rhEnabledInput === false ? pillActive : pillIdle}`}
-                    onClick={() => {
-                      setRhMsg("");
-                      setRhError("");
-                      setRhEnabledInput(false);
-                    }}
-                    aria-pressed={rhEnabledInput === false}
-                  >
-                    No
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveSection("course")}
+                  className={`${topBtnBase} ${activeSection === "course" ? topBtnActive : topBtnIdle}`}
+                >
+                  <div className="text-sm font-semibold">Course Par &amp; Stroke Index (global)</div>
+                  <div className={`mt-1 text-xs ${activeSection === "course" ? "text-white/80" : "text-gray-600"}`}>
+                    Update par and stroke index for tees M/F for courses used in this tour.
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveSection("tee")}
+                  className={`${topBtnBase} ${activeSection === "tee" ? topBtnActive : topBtnIdle}`}
+                >
+                  <div className="text-sm font-semibold">Tee time groups (manual)</div>
+                  <div className={`mt-1 text-xs ${activeSection === "tee" ? "text-white/80" : "text-gray-600"}`}>
+                    Create/edit tee time groups and seat order for a selected round.
+                  </div>
+                </button>
+              </div>
+            </section>
+
+            {/* Nothing else until a button is pressed */}
+            {activeSection === null ? null : activeSection === "starting" ? (
+              <>
+                {/* Starting handicaps (existing functionality) */}
+                <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                  <div className="p-4 border-b">
+                    <div className="text-sm font-semibold text-gray-900">Tour starting handicaps</div>
+                    <div className="mt-1 text-xs text-gray-600">
+                      Saves <span className="font-medium">tour_players.starting_handicap</span>, then recalculates{" "}
+                      <span className="font-medium">round_players.playing_handicap</span> using the tour’s rule.
+                    </div>
+                  </div>
+
+                  {rows.length === 0 ? (
+                    <div className="p-4 text-sm text-gray-700">No players found for this tour.</div>
+                  ) : (
+                    <div className="divide-y">
+                      {rows.map((r) => (
+                        <div key={r.player_id} className="p-4 flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-gray-900">{r.name}</div>
+                            {r.dirty ? <div className="text-[11px] text-amber-700">Unsaved</div> : null}
+                          </div>
+
+                          <input
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            className="w-24 rounded-xl border border-gray-200 bg-white px-3 py-2 text-right text-sm font-semibold text-gray-900 shadow-sm"
+                            value={r.input}
+                            onChange={(e) => setRowInput(r.player_id, e.target.value)}
+                            placeholder="—"
+                            aria-label={`Starting handicap for ${r.name}`}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
 
                 <div className="flex items-center justify-between gap-3">
-                  <div className="text-xs text-gray-600">{rhDirty ? "Change pending" : "No pending change"}</div>
+                  <div className="text-xs text-gray-600">
+                    {dirtyCount > 0 ? `${dirtyCount} change${dirtyCount === 1 ? "" : "s"} pending` : "No pending changes"}
+                  </div>
 
                   <button
                     type="button"
-                    onClick={saveRehandicappingEnabled}
-                    disabled={rhSaving || !rhDirty}
+                    onClick={saveAll}
+                    disabled={saving || dirtyCount === 0}
                     className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                      rhSaving || !rhDirty
+                      saving || dirtyCount === 0
                         ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
                         : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
                     }`}
                   >
-                    {rhSaving ? "Saving…" : "Save"}
+                    {saving ? "Saving…" : "Save all"}
                   </button>
                 </div>
 
-                {rhError ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{rhError}</div> : null}
-                {rhMsg ? <div className="text-sm text-green-700">{rhMsg}</div> : null}
-              </div>
-            </section>
-
-            {/* One-off handicaps (only when rehandicapping is OFF) */}
-            {!rehandicappingEnabled ? (
-              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <div className="p-4 border-b">
-                  <div className="text-sm font-semibold text-gray-900">One-off handicaps (per round)</div>
-                  <div className="mt-1 text-xs text-gray-600">
-                    Only applies when rehandicapping is <span className="font-medium">off</span>. Updates{" "}
-                    <span className="font-medium">round_players.playing_handicap</span> for the selected round. First override stores{" "}
-                    <span className="font-medium">base_playing_handicap</span> so you can reset.
-                  </div>
-                </div>
-
-                <div className="p-4 space-y-3">
-                  {ooRounds.length === 0 ? (
-                    <div className="text-sm text-gray-700">No rounds found for this tour.</div>
-                  ) : (
-                    <>
-                      <label className="block text-xs font-semibold text-gray-700" htmlFor="oneOffRoundSelect">
-                        Select round
-                      </label>
-                      <select
-                        id="oneOffRoundSelect"
-                        className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
-                        value={ooSelectedRoundId}
-                        onChange={async (e) => {
-                          const rid = e.target.value;
-                          setOoSelectedRoundId(rid);
-                          setOoError("");
-                          setOoMsg("");
-                          if (rid) {
-                            await loadOneOffRoundPlayers(rid);
-                          } else {
-                            setOoRoundPlayers(new Map());
-                            setOoInputs({});
-                          }
-                        }}
-                      >
-                        <option value="">Select a round…</option>
-                        {ooRounds.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {roundLabel(r)}
-                          </option>
-                        ))}
-                      </select>
-
-                      {!ooSelectedRoundId ? (
-                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                          Choose a round to set one-off playing handicaps.
-                        </div>
-                      ) : (
-                        <>
-                          {ooLoading ? (
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                              Loading round handicaps…
-                            </div>
-                          ) : null}
-
-                          {ooError ? (
-                            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{ooError}</div>
-                          ) : null}
-
-                          {ooMsg ? <div className="text-sm text-green-700">{ooMsg}</div> : null}
-
-                          <div className="rounded-2xl border border-gray-200 overflow-hidden">
-                            <div className="grid grid-cols-12 gap-0 border-b bg-gray-50">
-                              <div className="col-span-6 px-2 py-2 text-[11px] font-semibold text-gray-700">Player</div>
-                              <div className="col-span-3 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">PH</div>
-                              <div className="col-span-3 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">Base</div>
-                            </div>
-
-                            <div className="divide-y">
-                              {rows.map((p) => {
-                                const rp = ooRoundPlayers.get(p.player_id);
-                                const ph = rp?.playing_handicap;
-                                const base = rp?.base_playing_handicap;
-
-                                const canReset = base != null;
-
-                                return (
-                                  <div key={p.player_id} className="p-3">
-                                    <div className="grid grid-cols-12 items-center gap-2">
-                                      <div className="col-span-6 min-w-0">
-                                        <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
-                                      </div>
-
-                                      <div className="col-span-3 text-right">
-                                        <div className="text-xs text-gray-600">{Number.isFinite(ph as any) ? ph : "—"}</div>
-                                      </div>
-
-                                      <div className="col-span-3 text-right">
-                                        <div className="text-xs text-gray-600">{base != null ? base : "—"}</div>
-                                      </div>
-                                    </div>
-
-                                    <div className="mt-2 flex items-center gap-2">
-                                      <input
-                                        inputMode="numeric"
-                                        pattern="[0-9]*"
-                                        className="w-24 rounded-xl border border-gray-200 bg-white px-3 py-2 text-right text-sm font-semibold text-gray-900 shadow-sm"
-                                        value={ooInputs[p.player_id] ?? ""}
-                                        onChange={(e) => setOneOffInput(p.player_id, e.target.value)}
-                                        placeholder="PH"
-                                        aria-label={`One-off playing handicap for ${p.name}`}
-                                        disabled={ooSaving || ooLoading || !rp}
-                                      />
-
-                                      <button
-                                        type="button"
-                                        onClick={() => applyOneOff(p.player_id)}
-                                        disabled={ooSaving || ooLoading || !rp}
-                                        className={`h-10 flex-1 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                                          ooSaving || ooLoading || !rp
-                                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                            : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                                        }`}
-                                      >
-                                        {ooSaving ? "Saving…" : "Apply"}
-                                      </button>
-
-                                      <button
-                                        type="button"
-                                        onClick={() => resetOneOff(p.player_id)}
-                                        disabled={ooSaving || ooLoading || !rp || !canReset}
-                                        className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                                          ooSaving || ooLoading || !rp || !canReset
-                                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                            : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                        }`}
-                                      >
-                                        Reset
-                                      </button>
-                                    </div>
-
-                                    {!rp ? (
-                                      <div className="mt-1 text-[11px] text-amber-700">
-                                        No round_players row found for this player in this round.
-                                      </div>
-                                    ) : (
-                                      <div className="mt-1 text-[11px] text-gray-500">Enter the full playing handicap you want for this round.</div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
-              </section>
-            ) : null}
-
-            {/* Starting handicaps (existing) */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Tour starting handicaps</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  Saves <span className="font-medium">tour_players.starting_handicap</span>, then recalculates{" "}
-                  <span className="font-medium">round_players.playing_handicap</span> using the tour’s rehandicapping rule.
-                </div>
-              </div>
-
-              {rows.length === 0 ? (
-                <div className="p-4 text-sm text-gray-700">No players found for this tour.</div>
-              ) : (
-                <div className="divide-y">
-                  {rows.map((r) => (
-                    <div key={r.player_id} className="p-4 flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-gray-900">{r.name}</div>
-                        {r.dirty ? <div className="text-[11px] text-amber-700">Unsaved</div> : null}
-                      </div>
-
-                      <input
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        className="w-24 rounded-xl border border-gray-200 bg-white px-3 py-2 text-right text-sm font-semibold text-gray-900 shadow-sm"
-                        value={r.input}
-                        onChange={(e) => setRowInput(r.player_id, e.target.value)}
-                        placeholder="—"
-                        aria-label={`Starting handicap for ${r.name}`}
-                      />
+                {saveMsg ? <div className="text-sm text-green-700">{saveMsg}</div> : null}
+              </>
+            ) : activeSection === "course" ? (
+              <>
+                {/* Course Par/SI Editor (existing functionality) */}
+                <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                  <div className="p-4 border-b">
+                    <div className="text-sm font-semibold text-gray-900">Course par &amp; stroke index (global)</div>
+                    <div className="mt-1 text-xs text-gray-600">
+                      Updates <span className="font-medium">pars</span> for tees <span className="font-medium">M</span> and{" "}
+                      <span className="font-medium">F</span>. Courses are limited to this tour’s rounds.
                     </div>
-                  ))}
-                </div>
-              )}
-            </section>
+                  </div>
 
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs text-gray-600">
-                {dirtyCount > 0 ? `${dirtyCount} change${dirtyCount === 1 ? "" : "s"} pending` : "No pending changes"}
-              </div>
-
-              <button
-                type="button"
-                onClick={saveAll}
-                disabled={saving || dirtyCount === 0}
-                className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                  saving || dirtyCount === 0
-                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                    : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                }`}
-              >
-                {saving ? "Saving…" : "Save all"}
-              </button>
-            </div>
-
-            {saveMsg ? <div className="text-sm text-green-700">{saveMsg}</div> : null}
-
-            {/* Course Par/SI Editor */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Course par &amp; stroke index (global)</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  Updates <span className="font-medium">pars</span> for tees <span className="font-medium">M</span> and{" "}
-                  <span className="font-medium">F</span>. Courses are limited to this tour’s rounds.
-                </div>
-              </div>
-
-              <div className="p-4 space-y-3">
-                {courseOptions.length === 0 ? (
-                  <div className="text-sm text-gray-700">No courses found on this tour (rounds have no course_id).</div>
-                ) : (
-                  <>
-                    <label className="block text-xs font-semibold text-gray-700" htmlFor="courseSelect">
-                      Select course
-                    </label>
-                    <select
-                      id="courseSelect"
-                      className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
-                      value={selectedCourseId}
-                      onChange={(e) => setSelectedCourseId(e.target.value)}
-                    >
-                      <option value="">Select a course…</option>
-                      {courseOptions.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-
-                    {!selectedCourseId ? (
-                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                        Choose a course to edit par and stroke index.
-                      </div>
+                  <div className="p-4 space-y-3">
+                    {courseOptions.length === 0 ? (
+                      <div className="text-sm text-gray-700">No courses found on this tour (rounds have no course_id).</div>
                     ) : (
                       <>
-                        {courseLoading ? (
-                          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading hole data…</div>
-                        ) : null}
+                        <label className="block text-xs font-semibold text-gray-700" htmlFor="courseSelect">
+                          Select course
+                        </label>
+                        <select
+                          id="courseSelect"
+                          className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                          value={selectedCourseId}
+                          onChange={(e) => setSelectedCourseId(e.target.value)}
+                        >
+                          <option value="">Select a course…</option>
+                          {courseOptions.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
 
-                        {courseError ? (
-                          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{courseError}</div>
-                        ) : null}
-
-                        <div className="overflow-hidden rounded-2xl border border-gray-200">
-                          <div className="grid grid-cols-5 gap-0 border-b bg-gray-50">
-                            <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Hole</div>
-                            <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Par M</div>
-                            <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">SI M</div>
-                            <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Par F</div>
-                            <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">SI F</div>
+                        {!selectedCourseId ? (
+                          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                            Choose a course to edit par and stroke index.
                           </div>
+                        ) : (
+                          <>
+                            {courseLoading ? (
+                              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading hole data…</div>
+                            ) : null}
 
-                          <div className="divide-y">
-                            {holeRows.map((r) => (
-                              <div key={r.hole} className="grid grid-cols-5 gap-0 items-center">
-                                <div className="px-2 py-2 text-sm font-semibold text-gray-900">{r.hole}</div>
+                            {courseError ? (
+                              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{courseError}</div>
+                            ) : null}
 
-                                <div className="px-1 py-1">
-                                  <select
-                                    className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                    value={r.parM}
-                                    onChange={(e) => setHoleCell(r.hole, "parM", e.target.value)}
-                                    aria-label={`Par M hole ${r.hole}`}
-                                  >
-                                    <option value="">—</option>
-                                    {parOptions.map((p) => (
-                                      <option key={p} value={p}>
-                                        {p}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-
-                                <div className="px-1 py-1">
-                                  <select
-                                    className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                    value={r.siM}
-                                    onChange={(e) => setHoleCell(r.hole, "siM", e.target.value)}
-                                    aria-label={`SI M hole ${r.hole}`}
-                                  >
-                                    <option value="">—</option>
-                                    {siOptions.map((si) => (
-                                      <option key={si} value={si}>
-                                        {si}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-
-                                <div className="px-1 py-1">
-                                  <select
-                                    className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                    value={r.parF}
-                                    onChange={(e) => setHoleCell(r.hole, "parF", e.target.value)}
-                                    aria-label={`Par F hole ${r.hole}`}
-                                  >
-                                    <option value="">—</option>
-                                    {parOptions.map((p) => (
-                                      <option key={p} value={p}>
-                                        {p}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-
-                                <div className="px-1 py-1">
-                                  <select
-                                    className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                    value={r.siF}
-                                    onChange={(e) => setHoleCell(r.hole, "siF", e.target.value)}
-                                    aria-label={`SI F hole ${r.hole}`}
-                                  >
-                                    <option value="">—</option>
-                                    {siOptions.map((si) => (
-                                      <option key={si} value={si}>
-                                        {si}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
+                            <div className="overflow-hidden rounded-2xl border border-gray-200">
+                              <div className="grid grid-cols-5 gap-0 border-b bg-gray-50">
+                                <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Hole</div>
+                                <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Par M</div>
+                                <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">SI M</div>
+                                <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">Par F</div>
+                                <div className="px-2 py-2 text-[11px] font-semibold text-gray-700">SI F</div>
                               </div>
-                            ))}
-                          </div>
-                        </div>
 
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-xs text-gray-600">
-                            {selectedCourseName ? (
-                              <>
-                                Editing: <span className="font-medium">{selectedCourseName}</span>
-                              </>
-                            ) : (
-                              "Select a course to edit"
-                            )}
-                          </div>
+                              <div className="divide-y">
+                                {holeRows.map((r) => (
+                                  <div key={r.hole} className="grid grid-cols-5 gap-0 items-center">
+                                    <div className="px-2 py-2 text-sm font-semibold text-gray-900">{r.hole}</div>
 
-                          <button
-                            type="button"
-                            onClick={saveCoursePars}
-                            disabled={courseSaving || courseLoading || !selectedCourseId}
-                            className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                              courseSaving || courseLoading || !selectedCourseId
-                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                            }`}
-                          >
-                            {courseSaving ? "Saving…" : "Save course"}
-                          </button>
-                        </div>
+                                    <div className="px-1 py-1">
+                                      <select
+                                        className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                        value={r.parM}
+                                        onChange={(e) => setHoleCell(r.hole, "parM", e.target.value)}
+                                        aria-label={`Par M hole ${r.hole}`}
+                                      >
+                                        <option value="">—</option>
+                                        {parOptions.map((p) => (
+                                          <option key={p} value={p}>
+                                            {p}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
 
-                        {courseSaveMsg ? <div className="text-sm text-green-700">{courseSaveMsg}</div> : null}
+                                    <div className="px-1 py-1">
+                                      <select
+                                        className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                        value={r.siM}
+                                        onChange={(e) => setHoleCell(r.hole, "siM", e.target.value)}
+                                        aria-label={`SI M hole ${r.hole}`}
+                                      >
+                                        <option value="">—</option>
+                                        {siOptions.map((si) => (
+                                          <option key={si} value={si}>
+                                            {si}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+
+                                    <div className="px-1 py-1">
+                                      <select
+                                        className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                        value={r.parF}
+                                        onChange={(e) => setHoleCell(r.hole, "parF", e.target.value)}
+                                        aria-label={`Par F hole ${r.hole}`}
+                                      >
+                                        <option value="">—</option>
+                                        {parOptions.map((p) => (
+                                          <option key={p} value={p}>
+                                            {p}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+
+                                    <div className="px-1 py-1">
+                                      <select
+                                        className="h-9 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                        value={r.siF}
+                                        onChange={(e) => setHoleCell(r.hole, "siF", e.target.value)}
+                                        aria-label={`SI F hole ${r.hole}`}
+                                      >
+                                        <option value="">—</option>
+                                        {siOptions.map((si) => (
+                                          <option key={si} value={si}>
+                                            {si}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-xs text-gray-600">
+                                {selectedCourseName ? (
+                                  <>
+                                    Editing: <span className="font-medium">{selectedCourseName}</span>
+                                  </>
+                                ) : (
+                                  "Select a course to edit"
+                                )}
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={saveCoursePars}
+                                disabled={courseSaving || courseLoading || !selectedCourseId}
+                                className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                                  courseSaving || courseLoading || !selectedCourseId
+                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                    : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                                }`}
+                              >
+                                {courseSaving ? "Saving…" : "Save course"}
+                              </button>
+                            </div>
+
+                            {courseSaveMsg ? <div className="text-sm text-green-700">{courseSaveMsg}</div> : null}
+                          </>
+                        )}
                       </>
                     )}
-                  </>
-                )}
-              </div>
-            </section>
+                  </div>
+                </section>
+              </>
+            ) : (
+              <>
+                {/* Tee time groups (manual) - existing functionality, but round selection is now a list */}
+                <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                  <div className="p-4 border-b">
+                    <div className="text-sm font-semibold text-gray-900">Tee time groups (manual)</div>
+                    <div className="mt-1 text-xs text-gray-600">
+                      Saves to <span className="font-medium">round_groups</span> and <span className="font-medium">round_group_players</span>.
+                      Saving replaces prior groups for the round (idempotent).
+                    </div>
+                  </div>
 
-            {/* Manual Tee Time Groups */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Tee time groups (manual)</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  Saves to <span className="font-medium">round_groups</span> and <span className="font-medium">round_group_players</span>.
-                  Saving replaces prior groups for the round (idempotent). Auto-generation on desktop is unchanged.
-                </div>
-              </div>
-
-              <div className="p-4 space-y-3">
-                {ooRounds.length === 0 ? (
-                  <div className="text-sm text-gray-700">No rounds found for this tour.</div>
-                ) : (
-                  <>
-                    <label className="block text-xs font-semibold text-gray-700" htmlFor="teeTimeRoundSelect">
-                      Select round
-                    </label>
-
-                    <select
-                      id="teeTimeRoundSelect"
-                      className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
-                      value={ttSelectedRoundId}
-                      onChange={async (e) => {
-                        const rid = e.target.value;
-                        setTtSelectedRoundId(rid);
-                        setTtError("");
-                        setTtMsg("");
-                        setTtGroups([]);
-                        setTtAddTargetGroupNo(1);
-
-                        if (rid) {
-                          await loadManualTeeTimes(rid);
-                        }
-                      }}
-                    >
-                      <option value="">Select a round…</option>
-                      {ooRounds.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {roundLabel(r)}
-                        </option>
-                      ))}
-                    </select>
-
-                    {!ttSelectedRoundId ? (
-                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                        Choose a round to create or edit tee time groups.
-                      </div>
+                  <div className="p-4 space-y-3">
+                    {roundOptions.length === 0 ? (
+                      <div className="text-sm text-gray-700">No rounds found for this tour.</div>
                     ) : (
                       <>
-                        {ttLoading ? (
-                          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading groups…</div>
-                        ) : null}
-
-                        {ttError ? (
-                          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{ttError}</div>
-                        ) : null}
-
-                        {ttMsg ? <div className="text-sm text-green-700">{ttMsg}</div> : null}
-
-                        <div className="flex items-center justify-between gap-2">
-                          <button
-                            type="button"
-                            onClick={ttAddGroup}
-                            disabled={ttLoading || ttSaving}
-                            className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                              ttLoading || ttSaving
-                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                            }`}
-                          >
-                            + Add group
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={ttSave}
-                            disabled={ttLoading || ttSaving}
-                            className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                              ttLoading || ttSaving
-                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                            }`}
-                          >
-                            {ttSaving ? "Saving…" : "Save groups"}
-                          </button>
-                        </div>
+                        <div className="text-xs font-semibold text-gray-700">Select round</div>
 
                         <div className="rounded-2xl border border-gray-200 overflow-hidden">
-                          <div className="grid grid-cols-12 gap-0 border-b bg-gray-50">
-                            <div className="col-span-7 px-2 py-2 text-[11px] font-semibold text-gray-700">Unassigned players</div>
-                            <div className="col-span-5 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">Add to…</div>
-                          </div>
-
-                          <div className="p-3 space-y-2">
-                            {ttGroups.length === 0 ? (
-                              <div className="text-sm text-gray-700">
-                                No groups yet. Tap <span className="font-medium">Add group</span> to begin.
-                              </div>
-                            ) : (
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="text-xs text-gray-600">Target group for adding players</div>
-                                <select
-                                  className="h-9 rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                  value={ttAddTargetGroupNo}
-                                  onChange={(e) => setTtAddTargetGroupNo(Number(e.target.value))}
-                                  disabled={ttLoading || ttSaving || ttGroups.length === 0}
-                                >
-                                  {ttGroups
-                                    .slice()
-                                    .sort((a, b) => a.groupNo - b.groupNo)
-                                    .map((g) => (
-                                      <option key={g.key} value={g.groupNo}>
-                                        Group {g.groupNo}
-                                      </option>
-                                    ))}
-                                </select>
-                              </div>
-                            )}
-
-                            <div className="divide-y rounded-xl border border-gray-200 overflow-hidden">
-                              {ttUnassigned.length === 0 ? (
-                                <div className="p-3 text-sm text-gray-700">All players are assigned to a group.</div>
-                              ) : (
-                                ttUnassigned.map((p) => (
-                                  <div key={p.id} className="p-3 flex items-center justify-between gap-2">
-                                    <div className="min-w-0">
-                                      <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
-                                    </div>
-
-                                    <button
-                                      type="button"
-                                      disabled={ttGroups.length === 0 || ttSaving || ttLoading}
-                                      onClick={() => ttAddPlayerToGroup(p.id, ttAddTargetGroupNo)}
-                                      className={`h-9 rounded-lg px-3 text-sm font-semibold border shadow-sm ${
-                                        ttGroups.length === 0 || ttSaving || ttLoading
-                                          ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                          : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                                      }`}
-                                    >
-                                      Add
-                                    </button>
-                                  </div>
-                                ))
-                              )}
-                            </div>
-
-                            <div className="text-[11px] text-gray-500">
-                              Tip: this simple flow is mobile-safe (no drag/drop). Use “Move up/down” within groups to set seat order.
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="space-y-3">
-                          {ttGroups
-                            .slice()
-                            .sort((a, b) => a.groupNo - b.groupNo)
-                            .map((g, idx, arr) => {
-                              const count = g.playerIds.length;
-                              const over = count > 4;
-
+                          <div className="divide-y">
+                            {roundOptions.map((r) => {
+                              const selected = ttSelectedRoundId === r.id;
                               return (
-                                <div key={g.key} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                                  <div className="p-3 border-b flex items-start justify-between gap-2">
-                                    <div className="min-w-0">
-                                      <div className="text-sm font-semibold text-gray-900">
-                                        Group {g.groupNo}{" "}
-                                        <span className={`text-xs ${over ? "text-amber-700" : "text-gray-500"}`}>
-                                          ({count} player{count === 1 ? "" : "s"})
-                                        </span>
-                                      </div>
-                                      <div className="mt-1 text-[11px] text-gray-600">
-                                        Typical is 4-ball (sometimes 3-ball/2-ball). We won’t block larger groups, but it may not be intended.
-                                      </div>
-                                    </div>
-
-                                    <div className="flex items-center gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => ttMoveGroup(g.groupNo, "up")}
-                                        disabled={ttSaving || ttLoading || g.groupNo === 1}
-                                        className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
-                                          ttSaving || ttLoading || g.groupNo === 1
-                                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                            : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                        }`}
-                                      >
-                                        ↑
-                                      </button>
-
-                                      <button
-                                        type="button"
-                                        onClick={() => ttMoveGroup(g.groupNo, "down")}
-                                        disabled={ttSaving || ttLoading || g.groupNo === arr.length}
-                                        className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
-                                          ttSaving || ttLoading || g.groupNo === arr.length
-                                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                            : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                        }`}
-                                      >
-                                        ↓
-                                      </button>
-
-                                      <button
-                                        type="button"
-                                        onClick={() => ttDeleteGroup(g.groupNo)}
-                                        disabled={ttSaving || ttLoading}
-                                        className={`h-9 rounded-lg border px-3 text-xs font-semibold shadow-sm ${
-                                          ttSaving || ttLoading
-                                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                            : "border-red-200 bg-white text-red-700 active:bg-red-50"
-                                        }`}
-                                      >
-                                        Delete
-                                      </button>
-                                    </div>
-                                  </div>
-
-                                  {g.playerIds.length === 0 ? (
-                                    <div className="p-3 text-sm text-gray-700">No players in this group yet.</div>
-                                  ) : (
-                                    <div className="divide-y">
-                                      {g.playerIds.map((pid) => {
-                                        const name = playerNameById.get(pid) ?? pid;
-                                        const isFirst = g.playerIds[0] === pid;
-                                        const isLast = g.playerIds[g.playerIds.length - 1] === pid;
-
-                                        return (
-                                          <div key={pid} className="p-3 flex items-center justify-between gap-2">
-                                            <div className="min-w-0">
-                                              <div className="truncate text-sm font-semibold text-gray-900">{name}</div>
-                                              <div className="text-[11px] text-gray-500">Seat {g.playerIds.indexOf(pid) + 1}</div>
-                                            </div>
-
-                                            <div className="flex items-center gap-2">
-                                              <button
-                                                type="button"
-                                                onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "up")}
-                                                disabled={ttSaving || ttLoading || isFirst}
-                                                className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
-                                                  ttSaving || ttLoading || isFirst
-                                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                    : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                                }`}
-                                              >
-                                                ↑
-                                              </button>
-
-                                              <button
-                                                type="button"
-                                                onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "down")}
-                                                disabled={ttSaving || ttLoading || isLast}
-                                                className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
-                                                  ttSaving || ttLoading || isLast
-                                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                    : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                                }`}
-                                              >
-                                                ↓
-                                              </button>
-
-                                              <button
-                                                type="button"
-                                                onClick={() => ttRemovePlayer(g.groupNo, pid)}
-                                                disabled={ttSaving || ttLoading}
-                                                className={`h-9 rounded-lg border px-3 text-xs font-semibold shadow-sm ${
-                                                  ttSaving || ttLoading
-                                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                    : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                                }`}
-                                              >
-                                                Remove
-                                              </button>
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  )}
-                                </div>
+                                <button
+                                  key={r.id}
+                                  type="button"
+                                  onClick={async () => {
+                                    const rid = r.id;
+                                    setTtSelectedRoundId(rid);
+                                    setTtError("");
+                                    setTtMsg("");
+                                    setTtGroups([]);
+                                    setTtAddTargetGroupNo(1);
+                                    if (rid) await loadManualTeeTimes(rid);
+                                  }}
+                                  className={`w-full px-3 py-3 text-left ${
+                                    selected ? "bg-gray-900 text-white" : "bg-white text-gray-900 active:bg-gray-50"
+                                  }`}
+                                >
+                                  <div className="text-sm font-semibold">{formatRoundLine(r)}</div>
+                                  {selected ? <div className="mt-1 text-[11px] text-white/80">Selected</div> : null}
+                                </button>
                               );
                             })}
+                          </div>
                         </div>
+
+                        {!ttSelectedRoundId ? (
+                          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                            Choose a round to create or edit tee time groups.
+                          </div>
+                        ) : (
+                          <>
+                            {ttLoading ? (
+                              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading groups…</div>
+                            ) : null}
+
+                            {ttError ? (
+                              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{ttError}</div>
+                            ) : null}
+
+                            {ttMsg ? <div className="text-sm text-green-700">{ttMsg}</div> : null}
+
+                            <div className="flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={ttAddGroup}
+                                disabled={ttLoading || ttSaving}
+                                className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                                  ttLoading || ttSaving
+                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                    : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                }`}
+                              >
+                                + Add group
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={ttSave}
+                                disabled={ttLoading || ttSaving}
+                                className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                                  ttLoading || ttSaving
+                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                    : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                                }`}
+                              >
+                                {ttSaving ? "Saving…" : "Save groups"}
+                              </button>
+                            </div>
+
+                            <div className="rounded-2xl border border-gray-200 overflow-hidden">
+                              <div className="grid grid-cols-12 gap-0 border-b bg-gray-50">
+                                <div className="col-span-7 px-2 py-2 text-[11px] font-semibold text-gray-700">Unassigned players</div>
+                                <div className="col-span-5 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">Add to…</div>
+                              </div>
+
+                              <div className="p-3 space-y-2">
+                                {ttGroups.length === 0 ? (
+                                  <div className="text-sm text-gray-700">
+                                    No groups yet. Tap <span className="font-medium">Add group</span> to begin.
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="text-xs text-gray-600">Target group for adding players</div>
+                                    <select
+                                      className="h-9 rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                                      value={ttAddTargetGroupNo}
+                                      onChange={(e) => setTtAddTargetGroupNo(Number(e.target.value))}
+                                      disabled={ttLoading || ttSaving || ttGroups.length === 0}
+                                    >
+                                      {ttGroups
+                                        .slice()
+                                        .sort((a, b) => a.groupNo - b.groupNo)
+                                        .map((g) => (
+                                          <option key={g.key} value={g.groupNo}>
+                                            Group {g.groupNo}
+                                          </option>
+                                        ))}
+                                    </select>
+                                  </div>
+                                )}
+
+                                <div className="divide-y rounded-xl border border-gray-200 overflow-hidden">
+                                  {ttUnassigned.length === 0 ? (
+                                    <div className="p-3 text-sm text-gray-700">All players are assigned to a group.</div>
+                                  ) : (
+                                    ttUnassigned.map((p) => (
+                                      <div key={p.id} className="p-3 flex items-center justify-between gap-2">
+                                        <div className="min-w-0">
+                                          <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
+                                        </div>
+
+                                        <button
+                                          type="button"
+                                          disabled={ttGroups.length === 0 || ttSaving || ttLoading}
+                                          onClick={() => ttAddPlayerToGroup(p.id, ttAddTargetGroupNo)}
+                                          className={`h-9 rounded-lg px-3 text-sm font-semibold border shadow-sm ${
+                                            ttGroups.length === 0 || ttSaving || ttLoading
+                                              ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                              : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                                          }`}
+                                        >
+                                          Add
+                                        </button>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+
+                                <div className="text-[11px] text-gray-500">
+                                  Tip: this simple flow is mobile-safe (no drag/drop). Use “Move up/down” within groups to set seat order.
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="space-y-3">
+                              {ttGroups
+                                .slice()
+                                .sort((a, b) => a.groupNo - b.groupNo)
+                                .map((g, idx, arr) => {
+                                  const count = g.playerIds.length;
+                                  const over = count > 4;
+
+                                  return (
+                                    <div key={g.key} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                                      <div className="p-3 border-b flex items-start justify-between gap-2">
+                                        <div className="min-w-0">
+                                          <div className="text-sm font-semibold text-gray-900">
+                                            Group {g.groupNo}{" "}
+                                            <span className={`text-xs ${over ? "text-amber-700" : "text-gray-500"}`}>
+                                              ({count} player{count === 1 ? "" : "s"})
+                                            </span>
+                                          </div>
+                                          <div className="mt-1 text-[11px] text-gray-600">
+                                            Typical is 4-ball (sometimes 3-ball/2-ball). We won’t block larger groups, but it may not be intended.
+                                          </div>
+                                        </div>
+
+                                        <div className="flex items-center gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => ttMoveGroup(g.groupNo, "up")}
+                                            disabled={ttSaving || ttLoading || g.groupNo === 1}
+                                            className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
+                                              ttSaving || ttLoading || g.groupNo === 1
+                                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                            }`}
+                                          >
+                                            ↑
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            onClick={() => ttMoveGroup(g.groupNo, "down")}
+                                            disabled={ttSaving || ttLoading || g.groupNo === arr.length}
+                                            className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
+                                              ttSaving || ttLoading || g.groupNo === arr.length
+                                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                            }`}
+                                          >
+                                            ↓
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            onClick={() => ttDeleteGroup(g.groupNo)}
+                                            disabled={ttSaving || ttLoading}
+                                            className={`h-9 rounded-lg border px-3 text-xs font-semibold shadow-sm ${
+                                              ttSaving || ttLoading
+                                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                : "border-red-200 bg-white text-red-700 active:bg-red-50"
+                                            }`}
+                                          >
+                                            Delete
+                                          </button>
+                                        </div>
+                                      </div>
+
+                                      {g.playerIds.length === 0 ? (
+                                        <div className="p-3 text-sm text-gray-700">No players in this group yet.</div>
+                                      ) : (
+                                        <div className="divide-y">
+                                          {g.playerIds.map((pid) => {
+                                            const name = playerNameById.get(pid) ?? pid;
+                                            const isFirst = g.playerIds[0] === pid;
+                                            const isLast = g.playerIds[g.playerIds.length - 1] === pid;
+
+                                            return (
+                                              <div key={pid} className="p-3 flex items-center justify-between gap-2">
+                                                <div className="min-w-0">
+                                                  <div className="truncate text-sm font-semibold text-gray-900">{name}</div>
+                                                  <div className="text-[11px] text-gray-500">Seat {g.playerIds.indexOf(pid) + 1}</div>
+                                                </div>
+
+                                                <div className="flex items-center gap-2">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "up")}
+                                                    disabled={ttSaving || ttLoading || isFirst}
+                                                    className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
+                                                      ttSaving || ttLoading || isFirst
+                                                        ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                        : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                                    }`}
+                                                  >
+                                                    ↑
+                                                  </button>
+
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "down")}
+                                                    disabled={ttSaving || ttLoading || isLast}
+                                                    className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
+                                                      ttSaving || ttLoading || isLast
+                                                        ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                        : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                                    }`}
+                                                  >
+                                                    ↓
+                                                  </button>
+
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => ttRemovePlayer(g.groupNo, pid)}
+                                                    disabled={ttSaving || ttLoading}
+                                                    className={`h-9 rounded-lg border px-3 text-xs font-semibold shadow-sm ${
+                                                      ttSaving || ttLoading
+                                                        ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                        : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                                    }`}
+                                                  >
+                                                    Remove
+                                                  </button>
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                            </div>
+                          </>
+                        )}
                       </>
                     )}
-                  </>
-                )}
-              </div>
-            </section>
+                  </div>
+                </section>
+              </>
+            )}
           </>
         )}
       </main>
