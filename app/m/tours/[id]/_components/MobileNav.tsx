@@ -1,121 +1,18 @@
 // app/m/tours/[id]/_components/MobileNav.tsx
 "use client";
 
-import Link from "next/link";
-import { useParams, usePathname } from "next/navigation";
-import React from "react";
-import { Flag, Trophy, Medal, BarChart3, MoreHorizontal } from "lucide-react";
-
-function isActive(pathname: string, href: string) {
-  if (pathname === href) return true;
-  return pathname.startsWith(href + "/");
-}
-
-type NavItem = {
-  key: string;
-  label: string;
-  href: string;
-  Icon: React.ComponentType<{ size?: number; className?: string }>;
-};
+/**
+ * MobileNav has been intentionally disabled.
+ *
+ * Reason:
+ * - The sub-navigation (Rounds / Boards / Competitions / Stats / More)
+ *   is no longer required anywhere in the app.
+ * - Returning null ensures it never renders, even if still imported.
+ *
+ * This acts as a safe global kill-switch.
+ * The file is kept to avoid breaking imports.
+ */
 
 export default function MobileNav() {
-  const params = useParams<{ id: string }>();
-  const tourId = params.id;
-  const pathname = usePathname();
-
-  const items: NavItem[] = [
-    { key: "rounds", label: "Rounds", href: `/m/tours/${tourId}/rounds`, Icon: Flag },
-    { key: "boards", label: "Boards", href: `/m/tours/${tourId}/leaderboards`, Icon: Trophy },
-    { key: "competitions", label: "Competitions", href: `/m/tours/${tourId}/competitions`, Icon: Medal },
-    { key: "stats", label: "Stats", href: `/m/tours/${tourId}/stats`, Icon: BarChart3 },
-    { key: "more", label: "More", href: `/m/tours/${tourId}/more`, Icon: MoreHorizontal },
-  ];
-
-  return (
-    <nav
-      style={{
-        position: "fixed",
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 1000,
-        borderTop: "1px solid #e5e7eb",
-        background: "white",
-        padding: "10px 10px 10px",
-        paddingBottom: "calc(10px + env(safe-area-inset-bottom))",
-        boxShadow: "0 -6px 18px rgba(0,0,0,0.06)",
-      }}
-    >
-      <div style={{ maxWidth: 860, margin: "0 auto" }}>
-        {/* Buttons */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(5, 1fr)",
-            gap: 8,
-          }}
-        >
-          {items.map((it) => {
-            const active = isActive(pathname, it.href);
-            const color = active ? "#111827" : "#6b7280";
-            const border = active ? "1px solid #111827" : "1px solid #e5e7eb";
-            const bg = active ? "#f9fafb" : "white";
-
-            return (
-              <Link
-                key={it.key}
-                href={it.href}
-                style={{
-                  textDecoration: "none",
-                  color,
-                  border,
-                  background: bg,
-                  borderRadius: 10,
-                  padding: "8px 6px",
-                  textAlign: "center",
-                  fontSize: 12,
-                  fontWeight: active ? 800 : 600,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 4,
-                  lineHeight: 1.1,
-                }}
-                aria-current={active ? "page" : undefined}
-              >
-                <it.Icon size={18} className="shrink-0" />
-                <span>{it.label}</span>
-              </Link>
-            );
-          })}
-        </div>
-
-        {/* Divider line */}
-        <div
-          style={{
-            marginTop: 10,
-            borderTop: "1px solid #e5e7eb",
-          }}
-        />
-
-        {/* Footer text */}
-        <div
-          style={{
-            marginTop: 8,
-            textAlign: "center",
-            color: "#9ca3af",
-            lineHeight: 1.15,
-          }}
-        >
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.4 }}>
-            Built by GAC Ventures
-          </div>
-          <div style={{ fontSize: 10, fontStyle: "italic", letterSpacing: 0.6 }}>
-            Golf – Analytics – Competition
-          </div>
-        </div>
-      </div>
-    </nav>
-  );
+  return null;
 }
