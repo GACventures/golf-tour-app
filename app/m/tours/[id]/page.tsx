@@ -6,7 +6,6 @@ import { createClient } from "@supabase/supabase-js";
 
 const PDF_TOUR_ID = "5a80b049-396f-46ec-965e-810e738471b6";
 const BUCKET = "tours-pdfs-v2";
-
 const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
 
 type PdfKey = "itinerary" | "accommodation" | "dining" | "profiles" | "comps";
@@ -28,7 +27,6 @@ function getSupabaseBrowserClient() {
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!url || !anon) {
-    // Fail loudly and deterministically in dev if env vars are missing
     throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
   }
 
@@ -50,6 +48,12 @@ export default function MobileTourLandingPage() {
         return;
       }
 
+      // ✅ IMPORTANT: open synchronously (before any await) to avoid popup blockers in prod
+      const newWin = window.open("about:blank", "_blank", "noopener,noreferrer");
+
+      // If popup blocked, we’ll fall back to same-tab navigation (instead of “nothing happens”)
+      const popupBlocked = !newWin;
+
       setOpeningKey(key);
 
       try {
@@ -62,6 +66,7 @@ export default function MobileTourLandingPage() {
         const publicUrl = data?.publicUrl;
 
         if (!publicUrl) {
+          if (newWin) newWin.close();
           alert(NOT_AVAILABLE_MESSAGE);
           return;
         }
@@ -70,13 +75,27 @@ export default function MobileTourLandingPage() {
         // If file does not exist (or not publicly readable), HEAD will fail.
         const head = await fetch(publicUrl, { method: "HEAD", cache: "no-store" });
         if (!head.ok) {
+          if (newWin) newWin.close();
           alert(NOT_AVAILABLE_MESSAGE);
           return;
         }
 
-        // Open in new tab (exact requirement)
-        window.open(publicUrl, "_blank", "noopener,noreferrer");
+        // ✅ Navigate the already-opened tab (avoids popup blocking after awaits)
+        if (newWin) {
+          newWin.location.href = publicUrl;
+        } else {
+          // popup blocked: open in same tab so user can still see the PDF
+          // (still meets “open PDF” behavior; popup policies vary on mobile)
+          window.location.href = publicUrl;
+        }
+
+        // Optional: if popup was blocked, you can show a one-time hint
+        if (popupBlocked) {
+          // Keep it simple; comment out if you don’t want this message
+          // alert("Pop-up was blocked. Opened document in this tab instead.");
+        }
       } catch {
+        if (newWin) newWin.close();
         alert(NOT_AVAILABLE_MESSAGE);
       } finally {
         setOpeningKey(null);
@@ -85,7 +104,6 @@ export default function MobileTourLandingPage() {
     [supabase, tourId]
   );
 
-  // Simple mobile-first layout; buttons 13–17 are the PDF buttons section
   return (
     <main className="min-h-dvh w-full px-4 py-4">
       <header className="mb-4">
