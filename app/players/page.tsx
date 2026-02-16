@@ -22,12 +22,28 @@ type Player = {
   created_at?: string | null;
 };
 
-function toInt(s: string): number | null {
-  const t = s.trim();
-  if (!t) return null;
-  const n = Number(t);
+// ✅ NEW: allow 0+ with up to 1 decimal place, normalize to 1dp (Number)
+function toHcp1dpOrNull(input: string): number | null {
+  const s = String(input ?? "").trim();
+  if (!s) return null;
+
+  // allow: "12", "12.", "12.0", "12.5"
+  // reject: negatives, non-numeric, >1dp (e.g. 12.55)
+  if (!/^\d+(\.\d{0,1})?$/.test(s)) return null;
+
+  const n = Number(s);
   if (!Number.isFinite(n)) return null;
-  return Math.trunc(n);
+  if (n < 0) return null;
+
+  // normalize to 1dp and return as number
+  const normalized = Number(n.toFixed(1));
+  return normalized;
+}
+
+// ✅ NEW: consistent display for any numeric handicap
+function fmt1dp(v: number | null | undefined): string {
+  if (!Number.isFinite(Number(v))) return "0.0";
+  return Number(v).toFixed(1);
 }
 
 function normalizeGender(v: any): Tee {
@@ -91,15 +107,16 @@ export default function PlayersPage() {
   const canAdd = useMemo(() => {
     if (saving) return false;
     if (!name.trim()) return false;
-    const n = toInt(hcp);
+    const n = toHcp1dpOrNull(hcp);
     return n != null;
   }, [name, hcp, saving]);
 
   async function addPlayer() {
     setErrorMsg("");
-    const n = toInt(hcp);
+    const n = toHcp1dpOrNull(hcp);
+
     if (!name.trim() || n == null) {
-      setErrorMsg("Please enter a player name and a valid whole-number starting handicap.");
+      setErrorMsg("Please enter a player name and a valid starting handicap (0+ with up to 1 decimal place).");
       return;
     }
 
@@ -129,20 +146,21 @@ export default function PlayersPage() {
   function effectiveHcp(p: Player): number {
     // Prefer new column, fallback to legacy
     const v = p.starting_handicap ?? p.start_handicap;
-    return typeof v === "number" ? v : 0;
+    return Number.isFinite(Number(v)) ? Number(v) : 0;
   }
 
   function beginEdit(p: Player) {
     setEditingId(p.id);
-    setEditHcp(String(effectiveHcp(p)));
+    setEditHcp(fmt1dp(effectiveHcp(p))); // ✅ show 1dp in edit box
     setEditGender(p.gender ? normalizeGender(p.gender) : "M");
   }
 
   async function saveEdit(playerId: string) {
     setErrorMsg("");
-    const n = toInt(editHcp);
+    const n = toHcp1dpOrNull(editHcp);
+
     if (n == null) {
-      setErrorMsg("Please enter a valid whole-number starting handicap.");
+      setErrorMsg("Please enter a valid starting handicap (0+ with up to 1 decimal place).");
       return;
     }
 
@@ -225,10 +243,11 @@ export default function PlayersPage() {
             <div className="text-sm opacity-70 mb-1">Starting handicap</div>
             <input
               className="w-full rounded-xl border px-3 py-2 text-sm text-right"
-              placeholder="e.g. 11"
+              placeholder="e.g. 11.5"
               value={hcp}
               onChange={(e) => setHcp(e.target.value)}
-              inputMode="numeric"
+              inputMode="decimal"
+              pattern="^\d+(\.\d{0,1})?$"
             />
           </div>
         </div>
@@ -289,10 +308,11 @@ export default function PlayersPage() {
                             className="w-24 rounded border px-2 py-1 text-right"
                             value={editHcp}
                             onChange={(e) => setEditHcp(e.target.value)}
-                            inputMode="numeric"
+                            inputMode="decimal"
+                            pattern="^\d+(\.\d{0,1})?$"
                           />
                         ) : (
-                          effectiveHcp(p)
+                          fmt1dp(effectiveHcp(p)) // ✅ always display 1dp
                         )}
                       </td>
 
@@ -344,6 +364,9 @@ export default function PlayersPage() {
         </div>
         <div>
           Gender values are stored as <code>M</code>/<code>F</code> in <code>players.gender</code>.
+        </div>
+        <div>
+          Handicaps accept <code>0+</code> with up to <code>1</code> decimal place and are stored/displayed as <code>1dp</code>.
         </div>
       </div>
     </main>
