@@ -54,8 +54,12 @@ function roundHalfUp(x: number): number {
   return x >= 0 ? Math.floor(x + 0.5) : Math.ceil(x - 0.5);
 }
 
-function ceilHalfStart(sh: number): number {
-  return Math.ceil(sh / 2);
+function round1dp(x: number): number {
+  return Math.round(x * 10) / 10;
+}
+
+function ceilHalfStart(shInt: number): number {
+  return Math.ceil(shInt / 2);
 }
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -76,8 +80,10 @@ function normalizePlayerJoin(val: PlayerJoin | PlayerJoin[] | null | undefined):
   if (!id) return null;
 
   const name = String((p as any).name ?? "").trim() || "(missing player)";
+
+  // ✅ CHANGE: keep global start handicap as 1dp (not floored)
   const shNum = Number((p as any).start_handicap);
-  const start_handicap = Number.isFinite(shNum) ? Math.max(0, Math.floor(shNum)) : null;
+  const start_handicap = Number.isFinite(shNum) ? Math.max(0, round1dp(shNum)) : null;
 
   const gender = (p as any).gender == null ? null : normalizeTee((p as any).gender);
 
@@ -103,7 +109,6 @@ export type RehandicapDebug = {
   targetRoundsCount: number;
   roundsOrdered: Array<{ id: string; round_no: number | null; course_id: string | null }>;
 
-  // purely informational (helps explain the “rounds 6–7 have no rows yet” case)
   scoredRoundsDetected: number;
   lastScoredRoundIndex: number;
 
@@ -127,13 +132,6 @@ export type RehandicapDebug = {
   }>;
 };
 
-/**
- * Rehandicap rule:
- * - Calculates sequential PH round-by-round.
- * - Uses ONLY players who are marked playing=true AND have ALL 18 holes filled for that round.
- * - If a player is not "complete" for a round, their PH is carried forward unchanged.
- * - When fromRoundId is provided, we only WRITE (upsert) PH for rounds AFTER that round.
- */
 export async function recalcAndSaveTourHandicaps(opts: {
   supabase: SupabaseClient;
   tourId: string;
@@ -230,15 +228,16 @@ export async function recalcAndSaveTourHandicaps(opts: {
       const pj = normalizePlayerJoin(r.players);
       if (!pj) return null;
 
+      // ✅ CHANGE: keep tour override as 1dp (not floored)
       const overrideRaw = Number((r as any).starting_handicap);
-      const tour_starting_handicap = Number.isFinite(overrideRaw) ? Math.max(0, Math.floor(overrideRaw)) : null;
+      const tour_starting_handicap = Number.isFinite(overrideRaw) ? Math.max(0, round1dp(overrideRaw)) : null;
 
       return {
         id: pj.id,
         name: pj.name,
         gender: pj.gender ?? null,
-        global_start: pj.start_handicap ?? 0,
-        tour_start: tour_starting_handicap, // may be null
+        global_start: pj.start_handicap ?? 0, // 1dp
+        tour_start: tour_starting_handicap, // 1dp or null
       };
     })
     .filter(Boolean) as Array<{
@@ -276,16 +275,24 @@ export async function recalcAndSaveTourHandicaps(opts: {
   const rpByKey = new Map<string, RoundPlayerRow>();
   for (const rp of roundPlayers) rpByKey.set(rpKey(rp.round_id, rp.player_id), rp);
 
-  // starting hcp and default tee
-  const startingHcpByPlayer: Record<string, number> = {};
+  // ✅ NEW: store decimal starts (1dp) + integer seed for round PH
+  const startDecimalByPlayer: Record<string, number> = {};
+  const startIntByPlayer: Record<string, number> = {};
   const defaultTeeByPlayer: Record<string, Tee> = {};
+
   for (const p of players) {
-    const sh = p.tour_start ?? p.global_start ?? 0;
-    startingHcpByPlayer[p.id] = Math.max(0, Math.floor(Number(sh) || 0));
+    const shDec = p.tour_start ?? p.global_start ?? 0; // 1dp
+    const shDecNorm = Math.max(0, round1dp(Number(shDec) || 0));
+
+    // round 1 playing handicap seed must be whole number
+    const shInt = roundHalfUp(shDecNorm);
+
+    startDecimalByPlayer[p.id] = shDecNorm;
+    startIntByPlayer[p.id] = Math.max(0, shInt);
     defaultTeeByPlayer[p.id] = p.gender ? normalizeTee(p.gender) : "M";
   }
 
-  // If OFF: reset PHs to starting for target rounds
+  // If OFF: reset PHs to starting for target rounds (whole numbers)
   if (!rehandicappingEnabled) {
     const payload: Array<{
       round_id: string;
@@ -300,7 +307,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
         const existing = rpByKey.get(rpKey(r.id, p.id));
         const playing = existing?.playing === true;
         const tee = existing?.tee ? normalizeTee(existing.tee) : defaultTeeByPlayer[p.id] ?? "M";
-        const sh = startingHcpByPlayer[p.id];
+        const sh = startIntByPlayer[p.id];
 
         payload.push({
           round_id: r.id,
@@ -359,11 +366,10 @@ export async function recalcAndSaveTourHandicaps(opts: {
     const rows = (page ?? []) as ScoreRow[];
     scores.push(...rows);
 
-    if (rows.length < PAGE_SIZE) break; // last page
+    if (rows.length < PAGE_SIZE) break;
     from += PAGE_SIZE;
   }
 
-  // Build scoreMap and detect which rounds actually have score rows.
   const scoreMap: Record<string, Record<string, Record<number, string>>> = {};
   const scoredRoundIdSet = new Set<string>();
 
@@ -381,15 +387,12 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
   debug.scoredRoundsDetected = scoredRoundIdSet.size;
 
-  // Find the last round (by rounds[] order) that has ANY score row.
-  // Rounds after this are guaranteed to be “scoreless tails” and PH will carry forward unchanged.
   let lastScoredIdx = -1;
   for (let i = 0; i < rounds.length; i++) {
     if (scoredRoundIdSet.has(String(rounds[i].id))) lastScoredIdx = i;
   }
   debug.lastScoredRoundIndex = lastScoredIdx;
 
-  // playing map
   const playingMap: Record<string, Record<string, boolean>> = {};
   for (const p of players) {
     for (const r of rounds) {
@@ -439,13 +442,13 @@ export async function recalcAndSaveTourHandicaps(opts: {
     return total;
   };
 
-  // sequential PH map
+  // sequential PH map (whole numbers)
   const phByRoundPlayer: Record<string, Record<string, number>> = {};
 
   // init round 1
   const r1 = rounds[0];
   phByRoundPlayer[r1.id] = {};
-  for (const p of players) phByRoundPlayer[r1.id][p.id] = startingHcpByPlayer[p.id];
+  for (const p of players) phByRoundPlayer[r1.id][p.id] = startIntByPlayer[p.id];
 
   for (let i = 0; i < rounds.length; i++) {
     const r = rounds[i];
@@ -455,7 +458,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
       phByRoundPlayer[r.id] = {};
       const prev = rounds[i - 1];
       for (const p of players) {
-        phByRoundPlayer[r.id][p.id] = phByRoundPlayer[prev.id]?.[p.id] ?? startingHcpByPlayer[p.id];
+        phByRoundPlayer[r.id][p.id] = phByRoundPlayer[prev.id]?.[p.id] ?? startIntByPlayer[p.id];
       }
     }
 
@@ -464,11 +467,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
       break;
     }
 
-    // ✅ Change 2:
-    // If this round (and all following rounds) have no score rows at all, then PH will carry forward unchanged.
-    // We can stop doing stableford / completeness work and just propagate PH forward.
     if (lastScoredIdx >= 0 && i > lastScoredIdx) {
-      // Optionally record a lightweight perRound entry for transparency
       const playedPlayers = players.filter((pl) => playingMap[r.id]?.[pl.id] === true);
       debug.perRound.push({
         round_no: r.round_no ?? null,
@@ -499,9 +498,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
     const playedCount = playedPlayers.length;
     const completeCount = completePlayers.length;
 
-    // Keep the original “gate” for meaningfully computing next PH for this round.
-    // (You previously said you’re fine with “meaningless along the way”, but since this is now working,
-    // we leave the logic intact; it only affects whether PH changes are “real”.)
     if (completeCount === 0) {
       debug.stopReason = `Stop: round ${r.round_no ?? "?"} has 0 complete players (of ${playedCount} playing)`;
       debug.perRound.push({
@@ -568,7 +564,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
         const isPlaying = playingMap[r.id]?.[p.id] === true;
         const isComplete = isPlaying && isPlayerComplete(r.id, p.id);
 
-        // carry forward unless complete and avg exists
         if (!isComplete || avgRounded === null) {
           phByRoundPlayer[next.id][p.id] = prevPH;
           continue;
@@ -583,14 +578,14 @@ export async function recalcAndSaveTourHandicaps(opts: {
         const diff = (avgRounded - prevScore) / 3;
         const raw = roundHalfUp(prevPH + diff);
 
-        const sh = startingHcpByPlayer[p.id];
+        // ✅ IMPORTANT: min/max are based on the integer seed start (whole-number handicap rules)
+        const sh = startIntByPlayer[p.id];
         const max = sh + 3;
         const min = ceilHalfStart(sh);
 
         const nextPH = clamp(raw, min, max);
         phByRoundPlayer[next.id][p.id] = nextPH;
 
-        // fill sample nextPH for debug if present
         const d = debug.perRound[debug.perRound.length - 1];
         const s = d?.sample?.find((x) => x.player_id === p.id);
         if (s) s.nextPH = nextPH;
@@ -613,7 +608,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
       const playing = existing?.playing === true;
 
       const computed = phByRoundPlayer[r.id]?.[p.id];
-      const fallback = existing?.playing_handicap ?? startingHcpByPlayer[p.id];
+      const fallback = existing?.playing_handicap ?? startIntByPlayer[p.id];
       const tee = existing?.tee ? normalizeTee(existing.tee) : defaultTeeByPlayer[p.id] ?? "M";
 
       payload.push({
@@ -634,8 +629,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
   if (upErr) return { ok: false, error: upErr.message, debug };
 
-  // ✅ Change 1: remove “expectedScoreRows” warnings entirely.
-  // If you ever hit a real pagination/truncation issue, it will show up as weird holesFilled/completeCount.
   debug.warnings = (debug.warnings ?? []).filter(Boolean);
 
   return { ok: true, updated: payload.length, debug };

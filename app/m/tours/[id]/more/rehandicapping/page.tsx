@@ -1,3 +1,4 @@
+// app/m/tours/[id]/more/rehandicapping/page.tsx
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -97,6 +98,11 @@ function roundLabel(r: RoundOption) {
   const date = r.played_on ? String(r.played_on) : "";
   const nm = (r.name ?? "").trim();
   return `R${rn}${nm ? ` • ${nm}` : ""}${date ? ` • ${date}` : ""}`;
+}
+
+// ✅ REQUIRED CHANGE: half-up rounding so decimal start handicaps (e.g. 12.6) reset to 13, not 12.
+function roundHalfUp(x: number): number {
+  return x >= 0 ? Math.floor(x + 0.5) : Math.ceil(x - 0.5);
 }
 
 const PLAIN_ENGLISH_RULE_V1 =
@@ -414,7 +420,8 @@ export default function MobileTourMoreRehandicappingPage() {
     setManMsg("");
 
     try {
-      const ph = Math.max(0, Math.floor(Number(start)));
+      // ✅ REQUIRED CHANGE: use half-up rounding instead of floor()
+      const ph = Math.max(0, roundHalfUp(Number(start)));
 
       const payload = manTargetRoundIds.map((rid) => {
         const existing = rpByRoundPlayer[rid]?.[playerId];
@@ -540,7 +547,9 @@ export default function MobileTourMoreRehandicappingPage() {
                   </button>
                 </div>
 
-                {autoError ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{autoError}</div> : null}
+                {autoError ? (
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{autoError}</div>
+                ) : null}
                 {autoMsg ? <div className="text-sm text-green-700">{autoMsg}</div> : null}
               </div>
             </section>
@@ -634,7 +643,9 @@ export default function MobileTourMoreRehandicappingPage() {
                           ) : (
                             <>
                               {manError ? (
-                                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{manError}</div>
+                                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                                  {manError}
+                                </div>
                               ) : null}
 
                               {manMsg ? <div className="text-sm text-green-700">{manMsg}</div> : null}
@@ -664,7 +675,9 @@ export default function MobileTourMoreRehandicappingPage() {
                                           </div>
 
                                           <div className="col-span-3 text-right">
-                                            <div className="text-xs text-gray-600">{Number.isFinite(Number(currentPH)) ? currentPH : "—"}</div>
+                                            <div className="text-xs text-gray-600">
+                                              {Number.isFinite(Number(currentPH)) ? currentPH : "—"}
+                                            </div>
                                           </div>
 
                                           <div className="col-span-3 text-right">

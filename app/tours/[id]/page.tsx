@@ -16,12 +16,13 @@ type Tour = {
 
 type Course = { id: string; name: string; tour_id: string | null };
 
+// ✅ start_handicap is now numeric(5,1) in DB -> treat as number
 type Player = { id: string; name: string; start_handicap: number | null };
 
 type TourPlayerRow = {
   tour_id: string;
   player_id: string;
-  starting_handicap: number | null; // tour override
+  starting_handicap: number | null; // ✅ numeric(5,1) in DB (tour override)
   players: Player | Player[] | null; // global
 };
 
@@ -74,14 +75,6 @@ function normalizePlayerJoin(val: any): Player | null {
 
   if (!id) return null;
   return { id, name: name || "(missing player)", start_handicap: sh };
-}
-
-function clampIntOrNull(v: string): number | null {
-  const s = v.trim();
-  if (!s) return null;
-  const n = Number(s);
-  if (!Number.isFinite(n)) return null;
-  return Math.max(0, Math.floor(n));
 }
 
 function parseDateOnly(value: string | null): Date | null {
@@ -140,6 +133,34 @@ function fmtRuleTeams(s: TourGroupingSettings | null) {
   return `Best ${y} per hole, −1 per zero (all rounds)`;
 }
 
+// ✅ One-decimal helpers
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
+function parseOneDecimalOrNull(raw: string): number | null {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+
+  // allow "12", "12.", "12.3"
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+
+  // clamp to >= 0 and round to 1dp
+  return round1(Math.max(0, n));
+}
+
+function fmt1(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  return round1(Number(n)).toFixed(1);
+}
+
+function equal1(a: number | null, b: number | null): boolean {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  return round1(a) === round1(b);
+}
+
 export default function TourPage() {
   const params = useParams<{ id: string }>();
   const tourId = params.id;
@@ -163,14 +184,14 @@ export default function TourPage() {
   const [nameSaving, setNameSaving] = useState(false);
   const [nameMsg, setNameMsg] = useState<string>("");
 
-  // NEW: Tour dates editing
+  // Tour dates editing
   const [editingDates, setEditingDates] = useState(false);
   const [startDateDraft, setStartDateDraft] = useState<string>(""); // YYYY-MM-DD or ""
   const [endDateDraft, setEndDateDraft] = useState<string>(""); // YYYY-MM-DD or ""
   const [datesSaving, setDatesSaving] = useState(false);
   const [datesMsg, setDatesMsg] = useState<string>("");
 
-  // Starting handicaps
+  // Starting handicaps (tour override editor)
   const [hcpDraftByPlayerId, setHcpDraftByPlayerId] = useState<Record<string, string>>({});
   const [hcpSaving, setHcpSaving] = useState(false);
   const [hcpMsg, setHcpMsg] = useState<string>("");
@@ -183,7 +204,7 @@ export default function TourPage() {
     setHcpMsg("");
 
     try {
-      // Tour (include start/end dates)
+      // Tour
       const { data: tourData, error: tourErr } = await supabase
         .from("tours")
         .select("id,name,start_date,end_date")
@@ -211,7 +232,7 @@ export default function TourPage() {
       if (sErr) throw new Error(sErr.message);
       setEventSettings((sData ?? null) as TourGroupingSettings | null);
 
-      // Rounds (need played_on)
+      // Rounds
       const { data: roundData, error: roundErr } = await supabase
         .from("rounds")
         .select("id,tour_id,course_id,name,round_no,created_at,played_on")
@@ -261,7 +282,7 @@ export default function TourPage() {
         setRoundTeeTimeByRoundId({});
       }
 
-      // Tour players
+      // Tour players (global start handicap is players.start_handicap)
       const { data: tpData, error: tpErr } = await supabase
         .from("tour_players")
         .select("tour_id,player_id,starting_handicap, players(id,name,start_handicap)")
@@ -290,7 +311,7 @@ export default function TourPage() {
 
       setTourPlayers(normalizedTP);
 
-      // init drafts (prefer tour override if present, else global)
+      // init drafts (prefer tour override if present, else global) -> store as 1dp strings
       const draft: Record<string, string> = {};
       for (const r of normalizedTP) {
         const p = normalizePlayerJoin(r.players);
@@ -301,12 +322,12 @@ export default function TourPage() {
 
         const effective =
           tourVal !== null && tourVal !== undefined
-            ? tourVal
+            ? Number(tourVal)
             : globalVal !== null && globalVal !== undefined
-            ? globalVal
+            ? Number(globalVal)
             : 0;
 
-        draft[p.id] = String(effective);
+        draft[p.id] = round1(effective).toFixed(1);
       }
       setHcpDraftByPlayerId(draft);
 
@@ -360,7 +381,7 @@ export default function TourPage() {
 
         const global = Number.isFinite(Number(p.start_handicap)) ? Number(p.start_handicap) : 0;
         const override = r.starting_handicap;
-        const effective = override !== null && override !== undefined ? override : global;
+        const effective = override !== null && override !== undefined ? Number(override) : global;
 
         return {
           id: p.id,
@@ -428,7 +449,6 @@ export default function TourPage() {
 
     if (!played.length) return { start: null as string | null, end: null as string | null };
 
-    // ISO date strings compare lexicographically correctly
     played.sort();
     return { start: played[0] ?? null, end: played[played.length - 1] ?? null };
   }, [rounds]);
@@ -483,7 +503,6 @@ export default function TourPage() {
     const s = startDateDraft.trim() || null;
     const e = endDateDraft.trim() || null;
 
-    // If both set, ensure order
     if (s && e) {
       const sd = parseDateOnly(s);
       const ed = parseDateOnly(e);
@@ -496,7 +515,6 @@ export default function TourPage() {
         return;
       }
     } else {
-      // validate whichever exists
       if (s && !parseDateOnly(s)) {
         setDatesMsg("Start date is invalid.");
         return;
@@ -535,15 +553,15 @@ export default function TourPage() {
 
     setHcpSaving(true);
     try {
-      // Store NULL when equals global, so default uses global
+      // Store NULL when equals global (to mean “use global”)
       const payload = playersInThisTour.map((p) => {
         const draftStr = hcpDraftByPlayerId[p.id] ?? "";
-        const draft = clampIntOrNull(draftStr);
+        const draft = parseOneDecimalOrNull(draftStr);
 
         if (draft === null) {
           return { tour_id: tourId, player_id: p.id, starting_handicap: null };
         }
-        if (draft === p.globalStart) {
+        if (equal1(draft, p.globalStart)) {
           return { tour_id: tourId, player_id: p.id, starting_handicap: null };
         }
         return { tour_id: tourId, player_id: p.id, starting_handicap: draft };
@@ -585,9 +603,7 @@ export default function TourPage() {
             <div style={{ marginTop: 6, color: "#444", fontSize: 13, fontWeight: 700 }}>
               Dates: <span style={{ fontWeight: 800 }}>{tourDatesLabel}</span>
               {!tour?.start_date || !tour?.end_date ? (
-                <span style={{ marginLeft: 8, fontWeight: 600, color: "#666" }}>
-                  (default based on rounds)
-                </span>
+                <span style={{ marginLeft: 8, fontWeight: 600, color: "#666" }}>(default based on rounds)</span>
               ) : null}
             </div>
 
@@ -635,13 +651,7 @@ export default function TourPage() {
             <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Edit tour name</h1>
 
             <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <input
-                value={nameDraft}
-                onChange={(e) => setNameDraft(e.target.value)}
-                placeholder="Tour name"
-                style={inputWide}
-                disabled={nameSaving}
-              />
+              <input value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} placeholder="Tour name" style={inputWide} disabled={nameSaving} />
               <button type="button" onClick={() => void saveTourName()} disabled={nameSaving} style={btnPrimary(nameSaving)}>
                 {nameSaving ? "Saving…" : "Save"}
               </button>
@@ -650,11 +660,7 @@ export default function TourPage() {
               </button>
             </div>
 
-            {nameMsg && (
-              <div style={{ marginTop: 8, fontSize: 12, color: nameMsg.startsWith("Saved") ? "#2e7d32" : "crimson" }}>
-                {nameMsg}
-              </div>
-            )}
+            {nameMsg && <div style={{ marginTop: 8, fontSize: 12, color: nameMsg.startsWith("Saved") ? "#2e7d32" : "crimson" }}>{nameMsg}</div>}
           </div>
         )}
 
@@ -662,37 +668,19 @@ export default function TourPage() {
           <div style={{ width: "min(560px, 100%)" }}>
             <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Edit tour dates</h2>
             <div style={{ marginTop: 8, fontSize: 12, color: "#666" }}>
-              Suggested default:{" "}
-              <strong>
-                {suggestedTourStartEnd.start ? fmtDate(suggestedTourStartEnd.start) : "TBD"}
-              </strong>{" "}
-              {" – "}
-              <strong>
-                {suggestedTourStartEnd.end ? fmtDate(suggestedTourStartEnd.end) : "TBD"}
-              </strong>
+              Suggested default: <strong>{suggestedTourStartEnd.start ? fmtDate(suggestedTourStartEnd.start) : "TBD"}</strong> {" – "}
+              <strong>{suggestedTourStartEnd.end ? fmtDate(suggestedTourStartEnd.end) : "TBD"}</strong>
             </div>
 
             <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
               <div>
                 <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Start date</div>
-                <input
-                  type="date"
-                  value={startDateDraft}
-                  onChange={(e) => setStartDateDraft(e.target.value)}
-                  style={inputDate}
-                  disabled={datesSaving}
-                />
+                <input type="date" value={startDateDraft} onChange={(e) => setStartDateDraft(e.target.value)} style={inputDate} disabled={datesSaving} />
               </div>
 
               <div>
                 <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>End date</div>
-                <input
-                  type="date"
-                  value={endDateDraft}
-                  onChange={(e) => setEndDateDraft(e.target.value)}
-                  style={inputDate}
-                  disabled={datesSaving}
-                />
+                <input type="date" value={endDateDraft} onChange={(e) => setEndDateDraft(e.target.value)} style={inputDate} disabled={datesSaving} />
               </div>
 
               <button type="button" onClick={() => void saveTourDates()} disabled={datesSaving} style={btnPrimary(datesSaving)}>
@@ -703,11 +691,7 @@ export default function TourPage() {
               </button>
             </div>
 
-            {datesMsg && (
-              <div style={{ marginTop: 8, fontSize: 12, color: datesMsg.startsWith("Saved") ? "#2e7d32" : "crimson" }}>
-                {datesMsg}
-              </div>
-            )}
+            {datesMsg && <div style={{ marginTop: 8, fontSize: 12, color: datesMsg.startsWith("Saved") ? "#2e7d32" : "crimson" }}>{datesMsg}</div>}
           </div>
         ) : null}
       </div>
@@ -722,12 +706,7 @@ export default function TourPage() {
 
         <Link href={`/tours/${tourId}/players`}>Manage players (this tour) →</Link>
 
-        <button
-          type="button"
-          onClick={() => void saveStartingHandicaps()}
-          disabled={hcpSaving || playersInThisTour.length === 0}
-          style={btnThin}
-        >
+        <button type="button" onClick={() => void saveStartingHandicaps()} disabled={hcpSaving || playersInThisTour.length === 0} style={btnThin}>
           {hcpSaving ? "Saving…" : "Save starting handicaps"}
         </button>
 
@@ -749,10 +728,10 @@ export default function TourPage() {
             </thead>
             <tbody>
               {playersInThisTour.map((p) => {
-                const draft = hcpDraftByPlayerId[p.id] ?? String(p.effectiveStart);
-                const draftNum = clampIntOrNull(draft);
+                const draft = hcpDraftByPlayerId[p.id] ?? round1(p.effectiveStart).toFixed(1);
+                const draftNum = parseOneDecimalOrNull(draft);
                 const effective = draftNum === null ? p.globalStart : draftNum;
-                const isOverride = draftNum !== null && draftNum !== p.globalStart;
+                const isOverride = draftNum !== null && !equal1(draftNum, p.globalStart);
 
                 return (
                   <tr key={p.id}>
@@ -760,18 +739,22 @@ export default function TourPage() {
                       <div style={{ fontWeight: 700 }}>{p.name}</div>
                       <div style={{ fontSize: 12, color: "#666" }}>{isOverride ? "Using tour override" : "Using global"}</div>
                     </td>
-                    <td style={tdRight}>{p.globalStart}</td>
+
+                    <td style={tdRight}>{fmt1(p.globalStart)}</td>
+
                     <td style={tdRight}>
                       <input
                         value={draft}
                         onChange={(e) => setHcpDraftByPlayerId((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                        placeholder={`${p.globalStart}`}
+                        placeholder={fmt1(p.globalStart)}
                         style={inputSmallRight}
                         disabled={hcpSaving}
+                        inputMode="decimal"
                       />
                       <div style={{ fontSize: 11, color: "#777", marginTop: 4 }}>Blank = global</div>
                     </td>
-                    <td style={tdRight}>{effective}</td>
+
+                    <td style={tdRight}>{fmt1(effective)}</td>
                   </tr>
                 );
               })}
@@ -943,7 +926,7 @@ const inputDate: React.CSSProperties = {
 };
 
 const inputSmallRight: React.CSSProperties = {
-  width: 90,
+  width: 110,
   padding: "6px 8px",
   borderRadius: 10,
   border: "1px solid #ccc",

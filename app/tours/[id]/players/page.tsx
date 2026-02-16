@@ -18,13 +18,13 @@ type PlayerRow = {
   id: string;
   name: string;
   gender: Tee | null;
-  start_handicap: number | null; // ✅ GLOBAL source of truth
+  start_handicap: number | null; // ✅ GLOBAL source of truth (now supports 1dp)
 };
 
 type TourPlayerJoinRow = {
   tour_id: string;
   player_id: string;
-  starting_handicap: number; // ✅ TOUR snapshot / override
+  starting_handicap: number | null; // ✅ TOUR snapshot / override (now supports 1dp)
   players: PlayerRow | PlayerRow[] | null; // supabase join can be array
 };
 
@@ -33,12 +33,31 @@ function asSingle<T>(v: T | T[] | null | undefined): T | null {
   return Array.isArray(v) ? v[0] ?? null : v;
 }
 
-function toNonNegIntOrNull(v: string): number | null {
-  const s = (v ?? "").trim();
+/**
+ * Parse a non-negative number with up to 1 decimal place.
+ * Returns null for blank/invalid.
+ * Examples allowed: "12", "12.3", "0", "0.0"
+ * Examples rejected: "-1", "12.34", "abc"
+ */
+function toNonNegOneDecimalOrNull(v: string): number | null {
+  const s = String(v ?? "").trim();
   if (!s) return null;
+
+  // allow digits, optional .digit (single)
+  if (!/^\d+(\.\d)?$/.test(s)) return null;
+
   const n = Number(s);
   if (!Number.isFinite(n)) return null;
-  return Math.max(0, Math.floor(n));
+  if (n < 0) return null;
+
+  // normalize to 1dp
+  return Math.round(n * 10) / 10;
+}
+
+function fmt1(v: number | null | undefined): string {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "0.0";
+  return (Math.round(n * 10) / 10).toFixed(1);
 }
 
 export default function TourPlayersPage() {
@@ -89,10 +108,10 @@ export default function TourPlayersPage() {
       setAllPlayers((pData ?? []) as PlayerRow[]);
       setTourPlayers((tpData ?? []) as TourPlayerJoinRow[]);
 
-      // init editDraft
+      // init editDraft (1dp)
       const nextDraft: Record<string, string> = {};
       for (const tp of (tpData ?? []) as TourPlayerJoinRow[]) {
-        nextDraft[String(tp.player_id)] = String(tp.starting_handicap ?? 0);
+        nextDraft[String(tp.player_id)] = fmt1(tp.starting_handicap ?? 0);
       }
       setEditDraft(nextDraft);
 
@@ -126,8 +145,6 @@ export default function TourPlayersPage() {
     [availablePlayers, selectedPlayerId]
   );
 
-  // ✅ KEY CHANGE:
-  // When selected player changes, the Tour Starting HCP input should be BLANK (not 0, not auto-filled).
   // Blank => use global automatically on insert.
   useEffect(() => {
     setTourStartHcpDraft("");
@@ -142,11 +159,12 @@ export default function TourPlayersPage() {
     setToast("");
 
     try {
-      const globalHcp = Number.isFinite(Number(selectedPlayer?.start_handicap))
-        ? Math.max(0, Math.floor(Number(selectedPlayer?.start_handicap)))
-        : 0;
+      const globalHcp =
+        Number.isFinite(Number(selectedPlayer?.start_handicap)) && selectedPlayer?.start_handicap != null
+          ? Math.round(Number(selectedPlayer.start_handicap) * 10) / 10
+          : 0.0;
 
-      const parsed = toNonNegIntOrNull(tourStartHcpDraft);
+      const parsed = toNonNegOneDecimalOrNull(tourStartHcpDraft);
 
       // ✅ Blank => use global
       const starting_handicap = parsed === null ? globalHcp : parsed;
@@ -172,10 +190,10 @@ export default function TourPlayersPage() {
 
   async function saveTourStartingHcp(playerId: string) {
     const draft = (editDraft[playerId] ?? "").trim();
-    const parsed = toNonNegIntOrNull(draft);
+    const parsed = toNonNegOneDecimalOrNull(draft);
 
     if (parsed === null) {
-      setEditErr((prev) => ({ ...prev, [playerId]: "Enter a whole number (0+)." }));
+      setEditErr((prev) => ({ ...prev, [playerId]: "Enter a number (0+) with up to 1 decimal place." }));
       return;
     }
 
@@ -216,7 +234,6 @@ export default function TourPlayersPage() {
       setToast("Removed ✓");
       await loadAll();
     } catch (e: any) {
-      // If there are FK dependencies (round_players/scores/etc), Supabase will tell us here.
       setErrorMsg(e?.message ?? "Failed to remove player from tour.");
     } finally {
       setBusy(false);
@@ -284,10 +301,11 @@ export default function TourPlayersPage() {
                 disabled={busy}
               >
                 {availablePlayers.map((p) => {
-                  const gh = Number.isFinite(Number(p.start_handicap)) ? Number(p.start_handicap) : 0;
+                  const gh =
+                    Number.isFinite(Number(p.start_handicap)) && p.start_handicap != null ? Number(p.start_handicap) : 0;
                   return (
                     <option key={p.id} value={p.id}>
-                      {p.name} {p.gender ? `(${p.gender})` : ""} — Global HCP: {gh}
+                      {p.name} {p.gender ? `(${p.gender})` : ""} — Global HCP: {fmt1(gh)}
                     </option>
                   );
                 })}
@@ -297,18 +315,18 @@ export default function TourPlayersPage() {
             <div className="w-full sm:w-56">
               <div className="text-xs font-semibold text-gray-700">Tour Starting HCP</div>
               <input
-                inputMode="numeric"
+                inputMode="decimal"
                 className="mt-1 w-full rounded-md border px-3 py-2"
                 value={tourStartHcpDraft}
                 onChange={(e) => setTourStartHcpDraft(e.target.value)}
                 placeholder={
                   selectedPlayer
-                    ? `Blank = Global (${Number.isFinite(Number(selectedPlayer.start_handicap)) ? Number(selectedPlayer.start_handicap) : 0})`
+                    ? `Blank = Global (${fmt1(selectedPlayer.start_handicap ?? 0)})`
                     : "Blank = Global"
                 }
                 disabled={busy}
               />
-              <div className="mt-1 text-[11px] text-gray-500">Leave blank to use Global HCP automatically.</div>
+              <div className="mt-1 text-[11px] text-gray-500">Use up to 1 decimal place (e.g. 12.3).</div>
             </div>
 
             <button
@@ -344,7 +362,8 @@ export default function TourPlayersPage() {
                 const saving = editSaving[pid] === true;
                 const err = editErr[pid] ?? "";
 
-                const globalHcp = Number.isFinite(Number(p?.start_handicap)) ? Number(p?.start_handicap) : 0;
+                const globalHcp =
+                  Number.isFinite(Number(p?.start_handicap)) && p?.start_handicap != null ? Number(p.start_handicap) : 0;
 
                 return (
                   <div key={pid} className="rounded-xl border p-3">
@@ -355,7 +374,7 @@ export default function TourPlayersPage() {
                           {p?.gender ? <span className="opacity-60">({p.gender})</span> : null}
                         </div>
                         <div className="text-xs text-gray-600">
-                          Global HCP: <span className="font-medium">{globalHcp}</span>
+                          Global HCP: <span className="font-medium">{fmt1(globalHcp)}</span>
                         </div>
 
                         <button
@@ -373,9 +392,9 @@ export default function TourPlayersPage() {
                         <div className="text-xs font-semibold text-gray-700">Tour Starting HCP</div>
                         <div className="flex items-center gap-2">
                           <input
-                            inputMode="numeric"
-                            className="w-24 rounded-md border px-2 py-1"
-                            value={editDraft[pid] ?? String(tp.starting_handicap ?? 0)}
+                            inputMode="decimal"
+                            className="w-24 rounded-md border px-2 py-1 text-right"
+                            value={editDraft[pid] ?? fmt1(tp.starting_handicap ?? 0)}
                             onChange={(e) => {
                               setEditDraft((prev) => ({ ...prev, [pid]: e.target.value }));
                               setEditErr((prev) => ({ ...prev, [pid]: "" }));

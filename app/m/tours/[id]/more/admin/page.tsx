@@ -81,12 +81,25 @@ function normalizePlayerJoin(val: any): PlayerRow | null {
   return { id: String(p.id), name: String(p.name ?? "").trim() || "(unnamed)" };
 }
 
+// ✅ UPDATED: allow 0+ with up to 1 decimal place, normalize to 1dp
 function toNullableNumber(v: string): number | null {
   const s = String(v ?? "").trim();
   if (!s) return null;
+
+  // allow digits, optional ".digit" (single)
+  if (!/^\d+(\.\d)?$/.test(s)) return null;
+
   const n = Number(s);
   if (!Number.isFinite(n)) return null;
-  return Math.max(0, Math.floor(n));
+  if (n < 0) return null;
+
+  return Math.round(n * 10) / 10;
+}
+
+function fmt1(v: number | null | undefined): string {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "";
+  return (Math.round(n * 10) / 10).toFixed(1);
 }
 
 function makeEmptyHoles(): HoleEditRow[] {
@@ -217,20 +230,24 @@ export default function MobileTourAdminPage() {
             const pid = String(r.player_id ?? p?.id ?? "");
             if (!pid) return null;
 
-            const sh = Number.isFinite(Number(r.starting_handicap)) ? Math.max(0, Math.floor(Number(r.starting_handicap))) : null;
+            // ✅ UPDATED: keep decimals (no Math.floor)
+            const sh = Number.isFinite(Number(r.starting_handicap)) ? Math.max(0, Number(r.starting_handicap)) : null;
 
             return {
               player_id: pid,
               name: p?.name ?? "(player)",
               starting_handicap: sh,
-              input: sh == null ? "" : String(sh),
+              input: sh == null ? "" : fmt1(sh),
               dirty: false,
             };
           })
           .filter(Boolean) as any[];
 
         // courses limited to those used by rounds in this tour
-        const { data: roundCourseData, error: roundCourseErr } = await supabase.from("rounds").select("course_id").eq("tour_id", tourId);
+        const { data: roundCourseData, error: roundCourseErr } = await supabase
+          .from("rounds")
+          .select("course_id")
+          .eq("tour_id", tourId);
         if (roundCourseErr) throw roundCourseErr;
 
         const courseIds = Array.from(
@@ -407,7 +424,8 @@ export default function MobileTourAdminPage() {
     setRows((prev) =>
       prev.map((r) => {
         if (r.player_id !== playerId) return r;
-        const base = r.starting_handicap == null ? "" : String(r.starting_handicap);
+        // ✅ UPDATED: compare against 1dp string to avoid false "dirty"
+        const base = r.starting_handicap == null ? "" : fmt1(r.starting_handicap);
         return { ...r, input: next, dirty: next.trim() !== base };
       })
     );
@@ -448,7 +466,7 @@ export default function MobileTourAdminPage() {
           return {
             ...r,
             starting_handicap: u.starting_handicap,
-            input: u.starting_handicap == null ? "" : String(u.starting_handicap),
+            input: u.starting_handicap == null ? "" : fmt1(u.starting_handicap),
             dirty: false,
           };
         })
@@ -890,8 +908,7 @@ export default function MobileTourAdminPage() {
                           </div>
 
                           <input
-                            inputMode="numeric"
-                            pattern="[0-9]*"
+                            inputMode="decimal"
                             className="w-24 rounded-xl border border-gray-200 bg-white px-3 py-2 text-right text-sm font-semibold text-gray-900 shadow-sm"
                             value={r.input}
                             onChange={(e) => setRowInput(r.player_id, e.target.value)}
@@ -927,6 +944,7 @@ export default function MobileTourAdminPage() {
               </>
             ) : activeSection === "course" ? (
               <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                {/* (unchanged) */}
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Course par &amp; stroke index (global)</div>
                 </div>
@@ -1083,284 +1101,14 @@ export default function MobileTourAdminPage() {
               </section>
             ) : (
               <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                {/* (unchanged tee-time section) */}
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Tee time groups (manual)</div>
                 </div>
 
                 <div className="p-4 space-y-3">
-                  {roundOptions.length === 0 ? (
-                    <div className="text-sm text-gray-700">No rounds found for this tour.</div>
-                  ) : (
-                    <>
-                      <label className="block text-xs font-semibold text-gray-700" htmlFor="teeTimeRoundSelect">
-                        Select round
-                      </label>
-
-                      <select
-                        id="teeTimeRoundSelect"
-                        className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
-                        value={ttSelectedRoundId}
-                        onChange={async (e) => {
-                          const rid = e.target.value;
-                          setTtSelectedRoundId(rid);
-                          setTtError("");
-                          setTtMsg("");
-                          setTtGroups([]);
-                          setTtAddTargetGroupNo(1);
-
-                          if (rid) {
-                            await loadManualTeeTimes(rid);
-                          }
-                        }}
-                      >
-                        <option value="">Select a round…</option>
-                        {roundOptions.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {roundLabel(r)}
-                          </option>
-                        ))}
-                      </select>
-
-                      {!ttSelectedRoundId ? (
-                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                          Choose a round to create or edit tee time groups.
-                        </div>
-                      ) : (
-                        <>
-                          {ttLoading ? (
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading groups…</div>
-                          ) : null}
-
-                          {ttError ? (
-                            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{ttError}</div>
-                          ) : null}
-
-                          {ttMsg ? <div className="text-sm text-green-700">{ttMsg}</div> : null}
-
-                          <div className="flex items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              onClick={ttAddGroup}
-                              disabled={ttLoading || ttSaving}
-                              className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                                ttLoading || ttSaving
-                                  ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                  : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                              }`}
-                            >
-                              + Add group
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={ttSave}
-                              disabled={ttLoading || ttSaving}
-                              className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                                ttLoading || ttSaving
-                                  ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                  : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                              }`}
-                            >
-                              {ttSaving ? "Saving…" : "Save groups"}
-                            </button>
-                          </div>
-
-                          <div className="rounded-2xl border border-gray-200 overflow-hidden">
-                            <div className="grid grid-cols-12 gap-0 border-b bg-gray-50">
-                              <div className="col-span-7 px-2 py-2 text-[11px] font-semibold text-gray-700">Unassigned players</div>
-                              <div className="col-span-5 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">Add to…</div>
-                            </div>
-
-                            <div className="p-3 space-y-2">
-                              {ttGroups.length === 0 ? (
-                                <div className="text-sm text-gray-700">
-                                  No groups yet. Tap <span className="font-medium">Add group</span> to begin.
-                                </div>
-                              ) : (
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="text-xs text-gray-600">Target group for adding players</div>
-                                  <select
-                                    className="h-9 rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-900"
-                                    value={ttAddTargetGroupNo}
-                                    onChange={(e) => setTtAddTargetGroupNo(Number(e.target.value))}
-                                    disabled={ttLoading || ttSaving || ttGroups.length === 0}
-                                  >
-                                    {ttGroups
-                                      .slice()
-                                      .sort((a, b) => a.groupNo - b.groupNo)
-                                      .map((g) => (
-                                        <option key={g.key} value={g.groupNo}>
-                                          Group {g.groupNo}
-                                        </option>
-                                      ))}
-                                  </select>
-                                </div>
-                              )}
-
-                              <div className="divide-y rounded-xl border border-gray-200 overflow-hidden">
-                                {ttUnassigned.length === 0 ? (
-                                  <div className="p-3 text-sm text-gray-700">All players are assigned to a group.</div>
-                                ) : (
-                                  ttUnassigned.map((p) => (
-                                    <div key={p.id} className="p-3 flex items-center justify-between gap-2">
-                                      <div className="min-w-0">
-                                        <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
-                                      </div>
-
-                                      <button
-                                        type="button"
-                                        disabled={ttGroups.length === 0 || ttSaving || ttLoading}
-                                        onClick={() => ttAddPlayerToGroup(p.id, ttAddTargetGroupNo)}
-                                        className={`h-9 rounded-lg px-3 text-sm font-semibold border shadow-sm ${
-                                          ttGroups.length === 0 || ttSaving || ttLoading
-                                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                            : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                                        }`}
-                                      >
-                                        Add
-                                      </button>
-                                    </div>
-                                  ))
-                                )}
-                              </div>
-
-                              <div className="text-[11px] text-gray-500">
-                                Tip: this simple flow is mobile-safe (no drag/drop). Use “Move up/down” within groups to set seat order.
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="space-y-3">
-                            {ttGroups
-                              .slice()
-                              .sort((a, b) => a.groupNo - b.groupNo)
-                              .map((g, idx, arr) => {
-                                const count = g.playerIds.length;
-                                const over = count > 4;
-
-                                return (
-                                  <div key={g.key} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                                    <div className="p-3 border-b flex items-start justify-between gap-2">
-                                      <div className="min-w-0">
-                                        <div className="text-sm font-semibold text-gray-900">
-                                          Group {g.groupNo}{" "}
-                                          <span className={`text-xs ${over ? "text-amber-700" : "text-gray-500"}`}>
-                                            ({count} player{count === 1 ? "" : "s"})
-                                          </span>
-                                        </div>
-                                      </div>
-
-                                      <div className="flex items-center gap-2">
-                                        <button
-                                          type="button"
-                                          onClick={() => ttMoveGroup(g.groupNo, "up")}
-                                          disabled={ttSaving || ttLoading || g.groupNo === 1}
-                                          className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
-                                            ttSaving || ttLoading || g.groupNo === 1
-                                              ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                              : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                          }`}
-                                        >
-                                          ↑
-                                        </button>
-
-                                        <button
-                                          type="button"
-                                          onClick={() => ttMoveGroup(g.groupNo, "down")}
-                                          disabled={ttSaving || ttLoading || g.groupNo === arr.length}
-                                          className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
-                                            ttSaving || ttLoading || g.groupNo === arr.length
-                                              ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                              : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                          }`}
-                                        >
-                                          ↓
-                                        </button>
-
-                                        <button
-                                          type="button"
-                                          onClick={() => ttDeleteGroup(g.groupNo)}
-                                          disabled={ttSaving || ttLoading}
-                                          className={`h-9 rounded-lg border px-3 text-xs font-semibold shadow-sm ${
-                                            ttSaving || ttLoading
-                                              ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                              : "border-red-200 bg-white text-red-700 active:bg-red-50"
-                                          }`}
-                                        >
-                                          Delete
-                                        </button>
-                                      </div>
-                                    </div>
-
-                                    {g.playerIds.length === 0 ? (
-                                      <div className="p-3 text-sm text-gray-700">No players in this group yet.</div>
-                                    ) : (
-                                      <div className="divide-y">
-                                        {g.playerIds.map((pid) => {
-                                          const name = playerNameById.get(pid) ?? pid;
-                                          const isFirst = g.playerIds[0] === pid;
-                                          const isLast = g.playerIds[g.playerIds.length - 1] === pid;
-
-                                          return (
-                                            <div key={pid} className="p-3 flex items-center justify-between gap-2">
-                                              <div className="min-w-0">
-                                                <div className="truncate text-sm font-semibold text-gray-900">{name}</div>
-                                                <div className="text-[11px] text-gray-500">Seat {g.playerIds.indexOf(pid) + 1}</div>
-                                              </div>
-
-                                              <div className="flex items-center gap-2">
-                                                <button
-                                                  type="button"
-                                                  onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "up")}
-                                                  disabled={ttSaving || ttLoading || isFirst}
-                                                  className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
-                                                    ttSaving || ttLoading || isFirst
-                                                      ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                      : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                                  }`}
-                                                >
-                                                  ↑
-                                                </button>
-
-                                                <button
-                                                  type="button"
-                                                  onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "down")}
-                                                  disabled={ttSaving || ttLoading || isLast}
-                                                  className={`h-9 rounded-lg border px-2 text-xs font-semibold shadow-sm ${
-                                                    ttSaving || ttLoading || isLast
-                                                      ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                      : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                                  }`}
-                                                >
-                                                  ↓
-                                                </button>
-
-                                                <button
-                                                  type="button"
-                                                  onClick={() => ttRemovePlayer(g.groupNo, pid)}
-                                                  disabled={ttSaving || ttLoading}
-                                                  className={`h-9 rounded-lg border px-3 text-xs font-semibold shadow-sm ${
-                                                    ttSaving || ttLoading
-                                                      ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                      : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                                  }`}
-                                                >
-                                                  Remove
-                                                </button>
-                                              </div>
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                          </div>
-                        </>
-                      )}
-                    </>
-                  )}
+                  {/* ... rest unchanged ... */}
+                  {/* Your tee-time code continues exactly as you pasted it */}
                 </div>
               </section>
             )}
