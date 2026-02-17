@@ -59,6 +59,12 @@ export default function TourPairsTeamsPage() {
   const [teamName, setTeamName] = useState<string>("");
   const [teamMembers, setTeamMembers] = useState<Record<string, boolean>>({}); // playerId -> selected
 
+  // NEW: manual add/remove
+  const [selectedPairId, setSelectedPairId] = useState<string>("");
+  const [selectedTeamId, setSelectedTeamId] = useState<string>("");
+  const [selectedPairPlayerId, setSelectedPairPlayerId] = useState<string>("");
+  const [selectedTeamPlayerId, setSelectedTeamPlayerId] = useState<string>("");
+
   const playerNameById = useMemo(() => {
     const m = new Map<string, string>();
     for (const p of players) m.set(p.id, p.name);
@@ -78,6 +84,33 @@ export default function TourPairsTeamsPage() {
     }
     return m;
   }, [members]);
+
+  // NEW: who is already in ANY pair / ANY team (so we can offer "unassigned" lists)
+  const assignedToPairs = useMemo(() => {
+    const s = new Set<string>();
+    for (const g of tourPairs) {
+      const ids = membersByGroup.get(g.id) ?? [];
+      for (const pid of ids) s.add(pid);
+    }
+    return s;
+  }, [tourPairs, membersByGroup]);
+
+  const assignedToTeams = useMemo(() => {
+    const s = new Set<string>();
+    for (const g of tourTeams) {
+      const ids = membersByGroup.get(g.id) ?? [];
+      for (const pid of ids) s.add(pid);
+    }
+    return s;
+  }, [tourTeams, membersByGroup]);
+
+  const unassignedForPairs = useMemo(() => {
+    return [...players].filter((p) => !assignedToPairs.has(p.id)).sort(stablePlayerSort);
+  }, [players, assignedToPairs]);
+
+  const unassignedForTeams = useMemo(() => {
+    return [...players].filter((p) => !assignedToTeams.has(p.id)).sort(stablePlayerSort);
+  }, [players, assignedToTeams]);
 
   async function loadAll() {
     if (!tourId) return;
@@ -116,7 +149,7 @@ export default function TourPairsTeamsPage() {
         const next = { ...prev };
         for (const p of plist) if (next[p.id] === undefined) next[p.id] = false;
 
-        // prune removed players (keeps state tidy if roster changes)
+        // prune removed players
         for (const k of Object.keys(next)) {
           if (!plist.some((p) => p.id === k)) delete next[k];
         }
@@ -152,6 +185,13 @@ export default function TourPairsTeamsPage() {
 
       if (mErr) throw mErr;
       setMembers((mData ?? []) as TourGroupMemberRow[]);
+
+      // keep selected ids valid
+      const firstPair = glist.find((g) => g.type === "pair")?.id ?? "";
+      const firstTeam = glist.find((g) => g.type === "team")?.id ?? "";
+
+      setSelectedPairId((prev) => (prev && glist.some((g) => g.id === prev) ? prev : firstPair));
+      setSelectedTeamId((prev) => (prev && glist.some((g) => g.id === prev) ? prev : firstTeam));
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Failed to load pairs/teams.");
     } finally {
@@ -190,6 +230,11 @@ export default function TourPairsTeamsPage() {
         return (x === a && y === b) || (x === b && y === a);
       });
       if (existing) throw new Error("That pair already exists.");
+
+      // optional: prevent player being in multiple pairs
+      if (assignedToPairs.has(a) || assignedToPairs.has(b)) {
+        throw new Error("One of those players is already in a pair. Remove them from their existing pair first.");
+      }
 
       const name = pairLabelFromIds(a, b);
 
@@ -241,6 +286,11 @@ export default function TourPairsTeamsPage() {
         .map(([pid]) => pid);
 
       if (memberIds.length < 2) throw new Error("Pick at least 2 team members.");
+
+      // optional: prevent player being in multiple teams
+      if (memberIds.some((pid) => assignedToTeams.has(pid))) {
+        throw new Error("One or more selected players are already in a team. Remove them from their existing team first.");
+      }
 
       const { data: insG, error: insGErr } = await supabase
         .from("tour_groups")
@@ -296,6 +346,81 @@ export default function TourPairsTeamsPage() {
       await loadAll();
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Failed to delete group.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ===== NEW: add/remove members =====
+
+  async function removeGroupMember(groupId: string, playerId: string) {
+    setBusy(true);
+    setErrorMsg("");
+    setInfoMsg("");
+    try {
+      const { error } = await supabase.from("tour_group_members").delete().eq("group_id", groupId).eq("player_id", playerId);
+      if (error) throw error;
+      setInfoMsg("Removed member.");
+      await loadAll();
+    } catch (e: any) {
+      setErrorMsg(e?.message ?? "Failed to remove member.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addMemberToPair() {
+    setErrorMsg("");
+    setInfoMsg("");
+
+    const gid = selectedPairId.trim();
+    const pid = selectedPairPlayerId.trim();
+
+    if (!gid) return setErrorMsg("Select a pair.");
+    if (!pid) return setErrorMsg("Select a player to add.");
+
+    const existing = membersByGroup.get(gid) ?? [];
+    if (existing.length >= 2) return setErrorMsg("That pair already has 2 members. Remove one first.");
+
+    if (assignedToPairs.has(pid)) return setErrorMsg("That player is already in a pair. Remove them from their existing pair first.");
+
+    setBusy(true);
+    try {
+      const { error } = await supabase.from("tour_group_members").insert({ group_id: gid, player_id: pid });
+      if (error) throw error;
+
+      setInfoMsg("Added to pair.");
+      setSelectedPairPlayerId("");
+      await loadAll();
+    } catch (e: any) {
+      setErrorMsg(e?.message ?? "Failed to add member to pair.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addMemberToTeam() {
+    setErrorMsg("");
+    setInfoMsg("");
+
+    const gid = selectedTeamId.trim();
+    const pid = selectedTeamPlayerId.trim();
+
+    if (!gid) return setErrorMsg("Select a team.");
+    if (!pid) return setErrorMsg("Select a player to add.");
+
+    if (assignedToTeams.has(pid)) return setErrorMsg("That player is already in a team. Remove them from their existing team first.");
+
+    setBusy(true);
+    try {
+      const { error } = await supabase.from("tour_group_members").insert({ group_id: gid, player_id: pid });
+      if (error) throw error;
+
+      setInfoMsg("Added to team.");
+      setSelectedTeamPlayerId("");
+      await loadAll();
+    } catch (e: any) {
+      setErrorMsg(e?.message ?? "Failed to add member to team.");
     } finally {
       setBusy(false);
     }
@@ -362,6 +487,121 @@ export default function TourPairsTeamsPage() {
         )}
       </section>
 
+      {/* NEW: Manual member changes */}
+      <section className="rounded-2xl border bg-white p-4 space-y-3">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold">Manual member changes</h2>
+            <div className="text-sm opacity-70">Add/remove players from existing pairs and teams.</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {/* Pair add */}
+          <div className="rounded-xl border p-3 space-y-2">
+            <div className="font-semibold">Add to pair</div>
+            <div className="text-xs opacity-70">
+              Available (not already in a pair): {unassignedForPairs.length}
+            </div>
+
+            <div className="flex flex-wrap gap-2 items-center">
+              <select
+                className="rounded-md border px-2 py-1 text-sm"
+                value={selectedPairId}
+                onChange={(e) => setSelectedPairId(e.target.value)}
+                disabled={busy || tourPairs.length === 0}
+              >
+                <option value="">{tourPairs.length ? "Select pair…" : "No pairs yet"}</option>
+                {tourPairs.map((g) => {
+                  const ids = membersByGroup.get(g.id) ?? [];
+                  const label =
+                    g.name?.trim() || (ids.length >= 2 ? pairLabelFromIds(ids[0], ids[1]) : `Pair ${g.id.slice(0, 6)}`);
+                  return (
+                    <option key={g.id} value={g.id}>
+                      {label}
+                    </option>
+                  );
+                })}
+              </select>
+
+              <select
+                className="rounded-md border px-2 py-1 text-sm"
+                value={selectedPairPlayerId}
+                onChange={(e) => setSelectedPairPlayerId(e.target.value)}
+                disabled={busy || unassignedForPairs.length === 0}
+              >
+                <option value="">{unassignedForPairs.length ? "Select player…" : "No available players"}</option>
+                {unassignedForPairs.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={() => void addMemberToPair()}
+                disabled={busy || !selectedPairId || !selectedPairPlayerId}
+                className="rounded-md bg-black px-3 py-1 text-sm text-white disabled:opacity-50"
+              >
+                Add
+              </button>
+            </div>
+
+            <div className="text-[11px] opacity-60">Pairs are capped at 2 members.</div>
+          </div>
+
+          {/* Team add */}
+          <div className="rounded-xl border p-3 space-y-2">
+            <div className="font-semibold">Add to team</div>
+            <div className="text-xs opacity-70">
+              Available (not already in a team): {unassignedForTeams.length}
+            </div>
+
+            <div className="flex flex-wrap gap-2 items-center">
+              <select
+                className="rounded-md border px-2 py-1 text-sm"
+                value={selectedTeamId}
+                onChange={(e) => setSelectedTeamId(e.target.value)}
+                disabled={busy || tourTeams.length === 0}
+              >
+                <option value="">{tourTeams.length ? "Select team…" : "No teams yet"}</option>
+                {tourTeams.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name?.trim() || `Team ${g.id.slice(0, 6)}`}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                className="rounded-md border px-2 py-1 text-sm"
+                value={selectedTeamPlayerId}
+                onChange={(e) => setSelectedTeamPlayerId(e.target.value)}
+                disabled={busy || unassignedForTeams.length === 0}
+              >
+                <option value="">{unassignedForTeams.length ? "Select player…" : "No available players"}</option>
+                {unassignedForTeams.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={() => void addMemberToTeam()}
+                disabled={busy || !selectedTeamId || !selectedTeamPlayerId}
+                className="rounded-md bg-black px-3 py-1 text-sm text-white disabled:opacity-50"
+              >
+                Add
+              </button>
+            </div>
+
+            <div className="text-[11px] opacity-60">Teams have no size limit (you can remove members below).</div>
+          </div>
+        </div>
+      </section>
+
       <section className="rounded-2xl border bg-white p-4 space-y-3">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Pairs</h2>
@@ -409,24 +649,46 @@ export default function TourPairsTeamsPage() {
               const ids = membersByGroup.get(g.id) ?? [];
               const label =
                 g.name?.trim() || (ids.length >= 2 ? pairLabelFromIds(ids[0], ids[1]) : `Pair ${g.id.slice(0, 6)}`);
+
               return (
-                <div key={g.id} className="rounded-xl border p-3 flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="font-semibold truncate">{label}</div>
-                    <div className="text-xs opacity-70">
-                      Members: {ids.map((pid) => playerNameById.get(pid) ?? pid).join(" / ") || "—"}
+                <div key={g.id} className="rounded-xl border p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold truncate">{label}</div>
+                      <div className="text-xs opacity-70">Members:</div>
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={() => void deleteGroup(g.id)}
+                      disabled={busy}
+                      className="rounded-md border px-3 py-1 text-sm disabled:opacity-50"
+                      title="Delete pair"
+                    >
+                      Delete
+                    </button>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => deleteGroup(g.id)}
-                    disabled={busy}
-                    className="rounded-md border px-3 py-1 text-sm disabled:opacity-50"
-                    title="Delete pair"
-                  >
-                    Delete
-                  </button>
+                  {ids.length === 0 ? (
+                    <div className="text-sm opacity-70">No members yet.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {ids.map((pid) => (
+                        <div key={pid} className="flex items-center justify-between rounded-lg border px-3 py-2">
+                          <div className="text-sm">{playerNameById.get(pid) ?? pid}</div>
+                          <button
+                            type="button"
+                            onClick={() => void removeGroupMember(g.id, pid)}
+                            disabled={busy}
+                            className="rounded-md border px-3 py-1 text-sm disabled:opacity-50"
+                            title="Remove member"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -483,24 +745,46 @@ export default function TourPairsTeamsPage() {
             {tourTeams.map((g) => {
               const ids = membersByGroup.get(g.id) ?? [];
               const label = g.name?.trim() || `Team ${g.id.slice(0, 6)}`;
+
               return (
-                <div key={g.id} className="rounded-xl border p-3 flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="font-semibold truncate">{label}</div>
-                    <div className="text-xs opacity-70">
-                      Members: {ids.map((pid) => playerNameById.get(pid) ?? pid).join(" / ") || "—"}
+                <div key={g.id} className="rounded-xl border p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold truncate">{label}</div>
+                      <div className="text-xs opacity-70">Members:</div>
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={() => void deleteGroup(g.id)}
+                      disabled={busy}
+                      className="rounded-md border px-3 py-1 text-sm disabled:opacity-50"
+                      title="Delete team"
+                    >
+                      Delete
+                    </button>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => deleteGroup(g.id)}
-                    disabled={busy}
-                    className="rounded-md border px-3 py-1 text-sm disabled:opacity-50"
-                    title="Delete team"
-                  >
-                    Delete
-                  </button>
+                  {ids.length === 0 ? (
+                    <div className="text-sm opacity-70">No members yet.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {ids.map((pid) => (
+                        <div key={pid} className="flex items-center justify-between rounded-lg border px-3 py-2">
+                          <div className="text-sm">{playerNameById.get(pid) ?? pid}</div>
+                          <button
+                            type="button"
+                            onClick={() => void removeGroupMember(g.id, pid)}
+                            disabled={busy}
+                            className="rounded-md border px-3 py-1 text-sm disabled:opacity-50"
+                            title="Remove member"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
