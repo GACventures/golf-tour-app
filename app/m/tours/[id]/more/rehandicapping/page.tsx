@@ -1,4 +1,3 @@
-// app/m/tours/[id]/more/rehandicapping/page.tsx
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -100,7 +99,7 @@ function roundLabel(r: RoundOption) {
   return `R${rn}${nm ? ` • ${nm}` : ""}${date ? ` • ${date}` : ""}`;
 }
 
-// ✅ REQUIRED CHANGE: half-up rounding so decimal start handicaps (e.g. 12.6) reset to 13, not 12.
+// ✅ half-up rounding so decimal start handicaps (e.g. 12.6) reset to 13, not 12.
 function roundHalfUp(x: number): number {
   return x >= 0 ? Math.floor(x + 0.5) : Math.ceil(x - 0.5);
 }
@@ -116,9 +115,14 @@ const PLAIN_ENGLISH_RULE_V1 =
   "The resulting Playing Handicap cannot exceed Starting Handicap + 3, and cannot be lower than half the Starting Handicap, rounded up if the Starting Handicap is odd.\n\n" +
   "If a player does not play a round, their Playing Handicap carries forward unchanged to the next round.";
 
+// ✅ Only show Appleby for New Zealand Tour 2026
+const NZ_TOUR_2026_ID = "5a80b049-396f-46ec-965e-810e738471b6";
+
 export default function MobileTourMoreRehandicappingPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
+
+  const showAppleby = tourId === NZ_TOUR_2026_ID;
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
@@ -425,7 +429,6 @@ export default function MobileTourMoreRehandicappingPage() {
     setManMsg("");
 
     try {
-      // ✅ REQUIRED CHANGE: use half-up rounding instead of floor()
       const ph = Math.max(0, roundHalfUp(Number(start)));
 
       const payload = manTargetRoundIds.map((rid) => {
@@ -499,6 +502,16 @@ export default function MobileTourMoreRehandicappingPage() {
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
+            {/* ✅ Appleby navigation button (NZ Tour 2026 only) */}
+            {showAppleby ? (
+              <Link
+                href={`/m/tours/${tourId}/more/appleby`}
+                className="h-11 w-full rounded-2xl px-4 text-sm font-semibold border border-gray-900 bg-gray-900 text-white shadow-sm flex items-center justify-center active:bg-gray-800"
+              >
+                Appleby rehandicapping system →
+              </Link>
+            ) : null}
+
             {/* 1) Automatic rehandicapping toggle */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b">
@@ -764,7 +777,7 @@ export default function MobileTourMoreRehandicappingPage() {
                           Player
                         </th>
 
-                        {/* ✅ NEW: 2nd column = exact starting handicap (1dp) */}
+                        {/* 2nd column = exact starting handicap (1dp) */}
                         <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap">
                           Starting Handicap (exact)
                         </th>
@@ -791,10 +804,7 @@ export default function MobileTourMoreRehandicappingPage() {
                               {p.name}
                             </td>
 
-                            {/* ✅ NEW: exact start value (1dp), no asterisks */}
-                            <td className="px-3 py-2 text-right text-sm tabular-nums text-gray-700">
-                              {fmt1dp(startExact)}
-                            </td>
+                            <td className="px-3 py-2 text-right text-sm tabular-nums text-gray-700">{fmt1dp(startExact)}</td>
 
                             {roundsSorted.map((r) => {
                               const v = hcpByRoundPlayer[r.id]?.[p.id];
