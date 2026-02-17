@@ -9,10 +9,10 @@ import { netStablefordPointsForHole } from "@/lib/stableford";
 
 type Round = {
   id: string;
-  name: string | null; // allow null
+  name: string | null;
   tour_id?: string | null;
   course_id: string | null;
-  created_at?: string | null; // NEW
+  created_at?: string | null;
   courses?: { name: string } | null;
 };
 
@@ -24,8 +24,6 @@ type RoundPlayer = {
   playing: boolean | null;
   playing_handicap: number | null;
 };
-
-type ParRow = { course_id: string; hole_number: number; par: number; stroke_index: number };
 
 type ScoreRow = {
   round_id: string;
@@ -52,7 +50,7 @@ type RoundGroupPlayer = {
   seat: number | null;
 };
 
-type Pair = { a: string; b: string }; // player ids
+type Pair = { a: string; b: string };
 
 function shuffle<T>(arr: T[]) {
   const a = [...arr];
@@ -84,7 +82,6 @@ function buildGroupSizes(nPlayers: number): number[] {
     for (let i = 0; i < remaining / 4; i++) sizes.push(4);
     return sizes;
   }
-  // mod === 1
   if (nPlayers >= 9) {
     sizes.push(3, 3, 3);
     const remaining = nPlayers - 9;
@@ -92,7 +89,6 @@ function buildGroupSizes(nPlayers: number): number[] {
     return sizes;
   }
 
-  // fallback
   sizes.push(3);
   let rem = nPlayers - 3;
   while (rem >= 4) {
@@ -240,8 +236,11 @@ export default function RoundGroupsPage() {
   const [tourPairs, setTourPairs] = useState<Pair[]>([]);
   const [tourPairWarn, setTourPairWarn] = useState<string>("");
 
-  // NEW: for friendly “Round 1/2/3” fallback
   const [tourRounds, setTourRounds] = useState<{ id: string; name: string | null; created_at: string | null }[]>([]);
+
+  // NEW: manual group assignment UI state
+  const [selectedGroupId, setSelectedGroupId] = useState<string>("");
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string>("");
 
   const rpByPlayerId = useMemo(() => {
     const m = new Map<string, RoundPlayer>();
@@ -262,11 +261,7 @@ export default function RoundGroupsPage() {
           (Number.isFinite(Number(p.start_handicap)) ? Number(p.start_handicap) : null) ??
           0;
 
-        return {
-          id: p.id,
-          name: p.name,
-          hcp: effectiveHcp,
-        };
+        return { id: p.id, name: p.name, hcp: effectiveHcp };
       });
 
     list.sort((a, b) => a.name.localeCompare(b.name));
@@ -305,11 +300,24 @@ export default function RoundGroupsPage() {
     return m;
   }, [members]);
 
+  // NEW: who is already assigned to ANY group for this round
+  const assignedPlayerIdSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const m of members) s.add(m.player_id);
+    return s;
+  }, [members]);
+
+  // NEW: list of playing players not in any group
+  const unassignedPlaying = useMemo(() => {
+    const list = playingPlayers.filter((p) => !assignedPlayerIdSet.has(p.id));
+    list.sort((a, b) => a.name.localeCompare(b.name));
+    return list;
+  }, [playingPlayers, assignedPlayerIdSet]);
+
   const roundDisplayName = useMemo(() => {
     const explicit = (round?.name ?? "").trim();
     if (explicit) return explicit;
 
-    // If no name in DB, use Round N based on created_at order in tour
     const tid = round?.tour_id ?? null;
     if (!tid) return `Round`;
 
@@ -322,7 +330,6 @@ export default function RoundGroupsPage() {
     const idx = ordered.findIndex((r) => r.id === round?.id);
     if (idx >= 0) return `Round ${idx + 1}`;
 
-    // last resort, but never show UUID
     return "Round";
   }, [round?.id, round?.name, round?.tour_id, tourRounds]);
 
@@ -344,7 +351,6 @@ export default function RoundGroupsPage() {
       const r = roundData as any as Round;
       setRound(r);
 
-      // NEW: load all rounds in tour for fallback naming
       if (r.tour_id) {
         const { data: trData, error: trErr } = await supabase
           .from("rounds")
@@ -352,11 +358,8 @@ export default function RoundGroupsPage() {
           .eq("tour_id", r.tour_id)
           .order("created_at", { ascending: true });
 
-        if (!trErr) {
-          setTourRounds((trData ?? []) as any);
-        } else {
-          setTourRounds([]);
-        }
+        if (!trErr) setTourRounds((trData ?? []) as any);
+        else setTourRounds([]);
       } else {
         setTourRounds([]);
       }
@@ -408,7 +411,7 @@ export default function RoundGroupsPage() {
       if (mErr) throw mErr;
       setMembers((mData ?? []) as RoundGroupPlayer[]);
 
-      // Tour pairs
+      // Tour pairs (optional)
       const tourId = (roundData as any)?.tour_id as string | null | undefined;
       if (tourId) {
         const { data: tg, error: tgErr } = await supabase
@@ -454,6 +457,9 @@ export default function RoundGroupsPage() {
       } else {
         setTourPairs([]);
       }
+
+      // keep selection valid
+      if (gData?.length && !selectedGroupId) setSelectedGroupId(String((gData as any[])[0].id));
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Failed to load groups.");
     } finally {
@@ -462,7 +468,7 @@ export default function RoundGroupsPage() {
   }
 
   useEffect(() => {
-    loadAll();
+    void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
@@ -489,11 +495,7 @@ export default function RoundGroupsPage() {
         notes: note,
       }));
 
-      const { data: insertedGroups, error: insGErr } = await supabase
-        .from("round_groups")
-        .insert(groupRows)
-        .select("id,group_no");
-
+      const { data: insertedGroups, error: insGErr } = await supabase.from("round_groups").insert(groupRows).select("id,group_no");
       if (insGErr) throw insGErr;
 
       const idByNo = new Map<number, string>();
@@ -555,7 +557,6 @@ export default function RoundGroupsPage() {
   }
 
   async function computeLeaderboardToDate(tourId: string, currentRoundId: string) {
-    // Sum stableford points across all rounds in tour excluding current round.
     const { data: tourRounds, error: trErr } = await supabase.from("rounds").select("id,tour_id,course_id").eq("tour_id", tourId);
     if (trErr) throw trErr;
 
@@ -668,6 +669,73 @@ export default function RoundGroupsPage() {
     await persistGeneratedGroups(gen, "Auto: Final round (leaderboard-seeded)");
   }
 
+  // ===== NEW: add/remove handlers =====
+
+  async function removeMember(mem: RoundGroupPlayer) {
+    setBusy(true);
+    setErrorMsg("");
+    setInfoMsg("");
+    try {
+      const { error } = await supabase.from("round_group_players").delete().eq("id", mem.id);
+      if (error) throw error;
+      setInfoMsg("Removed player from group.");
+      await loadAll();
+    } catch (e: any) {
+      setErrorMsg(e?.message ?? "Failed to remove player.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function nextSeatForGroup(groupId: string): number {
+    const mem = membersByGroup.get(groupId) ?? [];
+    const seats = mem.map((m) => (Number.isFinite(Number(m.seat)) ? Number(m.seat) : 0));
+    const max = seats.length ? Math.max(...seats) : 0;
+    return max + 1;
+  }
+
+  async function addSelectedPlayerToSelectedGroup() {
+    setErrorMsg("");
+    setInfoMsg("");
+
+    if (!selectedGroupId) {
+      setErrorMsg("Select a group first.");
+      return;
+    }
+    if (!selectedPlayerId) {
+      setErrorMsg("Select a player to add.");
+      return;
+    }
+
+    // must be playing + unassigned
+    if (!unassignedPlaying.some((p) => p.id === selectedPlayerId)) {
+      setErrorMsg("That player is not available to add (not playing or already assigned).");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const seat = nextSeatForGroup(selectedGroupId);
+
+      const { error } = await supabase.from("round_group_players").insert({
+        round_id: roundId,
+        group_id: selectedGroupId,
+        player_id: selectedPlayerId,
+        seat,
+      });
+
+      if (error) throw error;
+
+      setInfoMsg("Added player to group.");
+      setSelectedPlayerId("");
+      await loadAll();
+    } catch (e: any) {
+      setErrorMsg(e?.message ?? "Failed to add player to group.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <main className="mx-auto max-w-4xl p-4">
@@ -703,7 +771,7 @@ export default function RoundGroupsPage() {
         </div>
 
         <div className="flex flex-col items-end gap-2">
-          <button onClick={loadAll} disabled={busy} className="rounded-xl border px-3 py-2 text-sm disabled:opacity-50">
+          <button onClick={() => void loadAll()} disabled={busy} className="rounded-xl border px-3 py-2 text-sm disabled:opacity-50">
             Refresh
           </button>
         </div>
@@ -723,11 +791,13 @@ export default function RoundGroupsPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="font-semibold">Auto-generate</div>
-            <div className="text-sm opacity-70">Groups of 4 where possible, otherwise a mix of 4s and 3s. Leaders go out last in the final round.</div>
+            <div className="text-sm opacity-70">
+              Groups of 4 where possible, otherwise a mix of 4s and 3s. Leaders go out last in the final round.
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
-              onClick={onGenerateRound1}
+              onClick={() => void onGenerateRound1()}
               disabled={busy || playingPlayers.length === 0}
               className="rounded-xl bg-black px-4 py-2 text-white disabled:opacity-50"
               title="Prefer tour pairs where possible"
@@ -735,7 +805,7 @@ export default function RoundGroupsPage() {
               Generate Round 1
             </button>
             <button
-              onClick={onGenerateFair}
+              onClick={() => void onGenerateFair()}
               disabled={busy || playingPlayers.length === 0}
               className="rounded-xl bg-black px-4 py-2 text-white disabled:opacity-50"
               title="Reduce repeat pairings based on past round groups"
@@ -743,7 +813,7 @@ export default function RoundGroupsPage() {
               Generate Fair Mix
             </button>
             <button
-              onClick={onGenerateFinal}
+              onClick={() => void onGenerateFinal()}
               disabled={busy || playingPlayers.length === 0}
               className="rounded-xl bg-black px-4 py-2 text-white disabled:opacity-50"
               title="Seed by points-to-date so leaders tee off last"
@@ -753,7 +823,70 @@ export default function RoundGroupsPage() {
           </div>
         </div>
 
-        <div className="text-xs opacity-60">Generating clears any existing groups for this round and regenerates them (manual override comes later).</div>
+        <div className="text-xs opacity-60">
+          Generating clears any existing groups for this round and regenerates them. You can also manually add/remove players below.
+        </div>
+      </section>
+
+      {/* NEW: Manual add block */}
+      <section className="rounded-2xl border p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="font-semibold">Manual group changes</div>
+            <div className="text-sm opacity-70">Add unassigned playing players to a group, or remove a player from a group.</div>
+          </div>
+          <div className="text-sm opacity-70">Unassigned: {unassignedPlaying.length}</div>
+        </div>
+
+        {groups.length === 0 ? (
+          <div className="text-sm opacity-70">Create groups first (generate above), then you can add/remove players.</div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="md:col-span-1">
+              <div className="text-xs font-semibold opacity-70 mb-1">Group</div>
+              <select
+                className="w-full rounded-xl border px-3 py-2 text-sm"
+                value={selectedGroupId}
+                onChange={(e) => setSelectedGroupId(e.target.value)}
+                disabled={busy}
+              >
+                <option value="">Select group…</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    Group {g.group_no}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="md:col-span-1">
+              <div className="text-xs font-semibold opacity-70 mb-1">Unassigned player</div>
+              <select
+                className="w-full rounded-xl border px-3 py-2 text-sm"
+                value={selectedPlayerId}
+                onChange={(e) => setSelectedPlayerId(e.target.value)}
+                disabled={busy || unassignedPlaying.length === 0}
+              >
+                <option value="">{unassignedPlaying.length ? "Select player…" : "No unassigned players"}</option>
+                {unassignedPlaying.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} (HC {p.hcp})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="md:col-span-1 flex items-end">
+              <button
+                onClick={() => void addSelectedPlayerToSelectedGroup()}
+                disabled={busy || !selectedGroupId || !selectedPlayerId}
+                className="w-full rounded-xl bg-black px-4 py-2 text-white disabled:opacity-50"
+              >
+                Add to group
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="rounded-2xl border p-4 space-y-2">
@@ -770,20 +903,35 @@ export default function RoundGroupsPage() {
               const mem = membersByGroup.get(g.id) ?? [];
               return (
                 <div key={g.id} className="rounded-2xl border p-4">
-                  <div className="text-lg font-semibold">Group {g.group_no}</div>
-                  <div className="text-xs opacity-70">Tee: 1st · Members: {mem.length} · Note: {g.notes ?? "—"}</div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-lg font-semibold">Group {g.group_no}</div>
+                      <div className="text-xs opacity-70">Tee: 1st · Members: {mem.length} · Note: {g.notes ?? "—"}</div>
+                    </div>
+                  </div>
 
                   <div className="mt-3 space-y-2">
+                    {mem.length === 0 ? <div className="text-sm opacity-60">No members.</div> : null}
+
                     {mem.map((m) => {
                       const name = playerNameById.get(m.player_id) ?? m.player_id;
                       const hcp = playerHcpById.get(m.player_id) ?? 0;
                       return (
-                        <div key={m.id} className="flex items-center justify-between rounded-xl border p-3">
-                          <div>
-                            <div className="font-medium">{name}</div>
-                            <div className="text-xs opacity-70">HC: {hcp}</div>
+                        <div key={m.id} className="flex items-center justify-between rounded-xl border p-3 gap-3">
+                          <div className="min-w-0">
+                            <div className="font-medium truncate">{name}</div>
+                            <div className="text-xs opacity-70">HC: {hcp} · Seat {m.seat ?? "-"}</div>
                           </div>
-                          <div className="text-xs opacity-60">Seat {m.seat ?? "-"}</div>
+
+                          <button
+                            type="button"
+                            onClick={() => void removeMember(m)}
+                            disabled={busy}
+                            className="rounded-xl border px-3 py-2 text-sm disabled:opacity-50"
+                            title="Remove from group"
+                          >
+                            Remove
+                          </button>
                         </div>
                       );
                     })}
@@ -802,7 +950,9 @@ export default function RoundGroupsPage() {
         ) : (
           <div className="text-sm opacity-80 space-y-1">
             {tourPairs.map((pr, idx) => (
-              <div key={idx}>{(playerNameById.get(pr.a) ?? pr.a) + " + " + (playerNameById.get(pr.b) ?? pr.b)}</div>
+              <div key={idx}>
+                {(playerNameById.get(pr.a) ?? pr.a) + " + " + (playerNameById.get(pr.b) ?? pr.b)}
+              </div>
             ))}
           </div>
         )}
