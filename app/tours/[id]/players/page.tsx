@@ -18,13 +18,13 @@ type PlayerRow = {
   id: string;
   name: string;
   gender: Tee | null;
-  start_handicap: number | null; // ✅ GLOBAL source of truth (now supports 1dp)
+  start_handicap: number | null; // GLOBAL handicap (supports 1dp)
 };
 
 type TourPlayerJoinRow = {
   tour_id: string;
   player_id: string;
-  starting_handicap: number | null; // ✅ TOUR snapshot / override (now supports 1dp)
+  starting_handicap: number | null; // TOUR handicap snapshot/override (supports 1dp)
   players: PlayerRow | PlayerRow[] | null; // supabase join can be array
 };
 
@@ -36,21 +36,17 @@ function asSingle<T>(v: T | T[] | null | undefined): T | null {
 /**
  * Parse a non-negative number with up to 1 decimal place.
  * Returns null for blank/invalid.
- * Examples allowed: "12", "12.3", "0", "0.0"
- * Examples rejected: "-1", "12.34", "abc"
  */
 function toNonNegOneDecimalOrNull(v: string): number | null {
   const s = String(v ?? "").trim();
   if (!s) return null;
 
-  // allow digits, optional .digit (single)
   if (!/^\d+(\.\d)?$/.test(s)) return null;
 
   const n = Number(s);
   if (!Number.isFinite(n)) return null;
   if (n < 0) return null;
 
-  // normalize to 1dp
   return Math.round(n * 10) / 10;
 }
 
@@ -74,7 +70,7 @@ export default function TourPlayersPage() {
 
   // Add-player UI
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>("");
-  const [tourStartHcpDraft, setTourStartHcpDraft] = useState<string>(""); // ✅ must default to blank
+  const [tourStartHcpDraft, setTourStartHcpDraft] = useState<string>(""); // blank = use global
 
   // Per-row edit drafts
   const [editDraft, setEditDraft] = useState<Record<string, string>>({});
@@ -115,7 +111,7 @@ export default function TourPlayersPage() {
       }
       setEditDraft(nextDraft);
 
-      // Pick a default available player if none selected
+      // Pick default available player if none selected
       const currentIds = new Set(((tpData ?? []) as TourPlayerJoinRow[]).map((x) => String(x.player_id)));
       const available = ((pData ?? []) as PlayerRow[]).filter((p) => !currentIds.has(p.id));
       if (!selectedPlayerId && available.length) {
@@ -145,10 +141,41 @@ export default function TourPlayersPage() {
     [availablePlayers, selectedPlayerId]
   );
 
-  // Blank => use global automatically on insert.
+  // Reset input when selected player changes
   useEffect(() => {
     setTourStartHcpDraft("");
   }, [selectedPlayerId]);
+
+  // ✅ Helper: ensure a player exists in round_players for ALL rounds in this tour
+  async function addPlayerToAllRoundsInTour(playerId: string) {
+    // get all rounds for this tour
+    const { data: roundRows, error: roundsErr } = await supabase.from("rounds").select("id").eq("tour_id", tourId);
+    if (roundsErr) throw roundsErr;
+
+    const roundIds = (roundRows ?? []).map((r: any) => String(r.id)).filter(Boolean);
+
+    for (const rid of roundIds) {
+      // check if already exists
+      const { data: existing, error: exErr } = await supabase
+        .from("round_players")
+        .select("id")
+        .eq("round_id", rid)
+        .eq("player_id", playerId)
+        .limit(1);
+
+      if (exErr) throw exErr;
+
+      if (!existing || existing.length === 0) {
+        // Insert only required columns (defaults fill: playing=true, tee='M', playing_handicap=0, course_handicap=0)
+        const { error: insErr } = await supabase.from("round_players").insert({
+          round_id: rid,
+          player_id: playerId,
+          playing: true,
+        });
+        if (insErr) throw insErr;
+      }
+    }
+  }
 
   async function addPlayerToTour() {
     if (!tourId) return;
@@ -166,9 +193,10 @@ export default function TourPlayersPage() {
 
       const parsed = toNonNegOneDecimalOrNull(tourStartHcpDraft);
 
-      // ✅ Blank => use global
+      // Blank => use global
       const starting_handicap = parsed === null ? globalHcp : parsed;
 
+      // 1) Add to tour roster
       const { error } = await supabase.from("tour_players").insert({
         tour_id: tourId,
         player_id: selectedPlayerId,
@@ -176,6 +204,9 @@ export default function TourPlayersPage() {
       });
 
       if (error) throw error;
+
+      // 2) Ensure they are included in all existing rounds (default playing=true)
+      await addPlayerToAllRoundsInTour(selectedPlayerId);
 
       setToast("Added ✓");
       setTourStartHcpDraft("");
@@ -218,26 +249,63 @@ export default function TourPlayersPage() {
     window.setTimeout(() => setToast(""), 1200);
   }
 
+  // ✅ Tour primacy removal: remove from tour AND all rounds in this tour
   async function removePlayerFromTour(playerId: string) {
     if (!tourId || !playerId) return;
 
-    if (!confirm("Remove this player from the tour?")) return;
+    const ok = window.confirm(
+      "Remove this player from the tour?\n\nThis will ALSO remove them from ALL rounds in this tour and delete their scores for those rounds.\nThis cannot be undone."
+    );
+    if (!ok) return;
 
     setBusy(true);
     setErrorMsg("");
     setToast("");
 
     try {
+      // 1) Load all round ids for this tour
+      const { data: roundRows, error: roundsErr } = await supabase.from("rounds").select("id").eq("tour_id", tourId);
+      if (roundsErr) throw roundsErr;
+
+      const roundIds = (roundRows ?? []).map((r: any) => String(r.id)).filter(Boolean);
+
+      // 2) Remove the player from every round-level table for each round
+      for (const rid of roundIds) {
+        const delScores = await supabase.from("scores").delete().eq("round_id", rid).eq("player_id", playerId);
+        if (delScores.error) throw delScores.error;
+
+        const delBuddy1 = await supabase.from("buddy_scores").delete().eq("round_id", rid).eq("owner_player_id", playerId);
+        if (delBuddy1.error) throw delBuddy1.error;
+
+        const delBuddy2 = await supabase.from("buddy_scores").delete().eq("round_id", rid).eq("buddy_player_id", playerId);
+        if (delBuddy2.error) throw delBuddy2.error;
+
+        const delRoundGroupPlayers = await supabase
+          .from("round_group_players")
+          .delete()
+          .eq("round_id", rid)
+          .eq("player_id", playerId);
+        if (delRoundGroupPlayers.error) throw delRoundGroupPlayers.error;
+
+        const delRoundPlayers = await supabase.from("round_players").delete().eq("round_id", rid).eq("player_id", playerId);
+        if (delRoundPlayers.error) throw delRoundPlayers.error;
+      }
+
+      // 3) Remove from tour pairs/teams membership
+      const delTourGroupMembers = await supabase.from("tour_group_members").delete().eq("player_id", playerId);
+      if (delTourGroupMembers.error) throw delTourGroupMembers.error;
+
+      // 4) Finally remove from the tour roster
       const { error } = await supabase.from("tour_players").delete().eq("tour_id", tourId).eq("player_id", playerId);
       if (error) throw error;
 
-      setToast("Removed ✓");
+      setToast("Removed from tour + rounds ✓");
       await loadAll();
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Failed to remove player from tour.");
     } finally {
       setBusy(false);
-      window.setTimeout(() => setToast(""), 1200);
+      window.setTimeout(() => setToast(""), 1600);
     }
   }
 
@@ -320,9 +388,7 @@ export default function TourPlayersPage() {
                 value={tourStartHcpDraft}
                 onChange={(e) => setTourStartHcpDraft(e.target.value)}
                 placeholder={
-                  selectedPlayer
-                    ? `Blank = Global (${fmt1(selectedPlayer.start_handicap ?? 0)})`
-                    : "Blank = Global"
+                  selectedPlayer ? `Blank = Global (${fmt1(selectedPlayer.start_handicap ?? 0)})` : "Blank = Global"
                 }
                 disabled={busy}
               />

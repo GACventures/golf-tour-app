@@ -16,15 +16,13 @@ type Round = {
   created_at: string | null;
   course_id: string | null;
 
-  // NEW(used here)
-  played_on: string | null; // date string (YYYY-MM-DD)
-  tee_time: string | null; // optional text, e.g. "08:10"
+  played_on: string | null; // YYYY-MM-DD
+  tee_time: string | null; // optional text
 };
 
 type Course = { id: string; name: string };
 
 function todayISODate() {
-  // YYYY-MM-DD
   const d = new Date();
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -69,11 +67,9 @@ export default function TourRoundsPage() {
   const [newRoundName, setNewRoundName] = useState<string>("");
   const [selectedCourseId, setSelectedCourseId] = useState<string>("");
 
-  // NEW: required played_on + optional tee_time on create
   const [newPlayedOn, setNewPlayedOn] = useState<string>(todayISODate());
   const [newTeeTime, setNewTeeTime] = useState<string>("");
 
-  // NEW: required round_no on create
   const [newRoundNo, setNewRoundNo] = useState<string>("");
 
   // Inline edit state (per round)
@@ -114,13 +110,9 @@ export default function TourRoundsPage() {
       setCourses(cs);
       setCourseNameById(map);
 
-      // Default selection if not set
       if (!selectedCourseId && cs.length) setSelectedCourseId(cs[0].id);
-
-      // Default round number if blank
       if (!newRoundNo) setNewRoundNo(String(rs.length + 1));
 
-      // Seed edit state for rounds (so inputs are controlled)
       const nextEdit: Record<string, { played_on: string; tee_time: string }> = {};
       for (const r of rs) {
         nextEdit[r.id] = {
@@ -150,10 +142,43 @@ export default function TourRoundsPage() {
   }, [tourId]);
 
   const canAdd = useMemo(() => {
-    // played_on and round_no are required
     const rn = clampPositiveIntOrNull(newRoundNo);
     return !savingAdd && Boolean(selectedCourseId) && Boolean(newPlayedOn) && rn !== null;
   }, [savingAdd, selectedCourseId, newPlayedOn, newRoundNo]);
+
+  // ✅ Helper: Ensure all tour players exist in round_players for a given round
+  async function addAllTourPlayersToRound(roundId: string) {
+    // Get tour roster
+    const { data: tpRows, error: tpErr } = await supabase.from("tour_players").select("player_id").eq("tour_id", tourId);
+    if (tpErr) throw new Error(tpErr.message);
+
+    const playerIds = (tpRows ?? []).map((r: any) => String(r.player_id)).filter(Boolean);
+
+    if (playerIds.length === 0) return;
+
+    // Get existing round_players for this round to avoid duplicates
+    const { data: existingRows, error: exErr } = await supabase
+      .from("round_players")
+      .select("player_id")
+      .eq("round_id", roundId);
+
+    if (exErr) throw new Error(exErr.message);
+
+    const existing = new Set((existingRows ?? []).map((x: any) => String(x.player_id)));
+
+    const missing = playerIds
+      .filter((pid) => !existing.has(pid))
+      .map((pid) => ({
+        round_id: roundId,
+        player_id: pid,
+        playing: true,
+      }));
+
+    if (missing.length > 0) {
+      const { error: insErr } = await supabase.from("round_players").insert(missing);
+      if (insErr) throw new Error(insErr.message);
+    }
+  }
 
   async function addRound() {
     setErrorMsg("");
@@ -167,9 +192,6 @@ export default function TourRoundsPage() {
 
     setSavingAdd(true);
     try {
-      // NOTE: If your DB enforces rounds.name NOT NULL, we must provide a value.
-      // Your schema shows name is nullable, but you got a NOT NULL constraint error earlier.
-      // So we ALWAYS provide a fallback name.
       const fallbackName = `Round ${roundNo}`;
       const nameToUse = newRoundName.trim() ? newRoundName.trim() : fallbackName;
 
@@ -178,19 +200,25 @@ export default function TourRoundsPage() {
         course_id: selectedCourseId,
         name: nameToUse,
         round_no: roundNo,
-        played_on: newPlayedOn, // required
+        played_on: newPlayedOn,
       };
 
       const tt = newTeeTime.trim();
       if (tt) payload.tee_time = tt;
 
-      const { error } = await supabase.from("rounds").insert(payload);
+      // ✅ Insert round and get its id back
+      const { data: newRound, error } = await supabase.from("rounds").insert(payload).select("id").single();
       if (error) throw new Error(error.message);
+
+      const newRoundId = String((newRound as any)?.id ?? "");
+      if (!newRoundId) throw new Error("Round created but id was not returned.");
+
+      // ✅ Default behaviour: add ALL tour players to this round (playing=true)
+      await addAllTourPlayersToRound(newRoundId);
 
       setNewRoundName("");
       setNewTeeTime("");
       setNewRoundNo(String(roundNo + 1));
-      // keep date (often adding multiple rounds same day)
       await load();
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Unknown error");
@@ -215,7 +243,6 @@ export default function TourRoundsPage() {
     const ed = editByRoundId[roundId];
     if (!ed) return;
 
-    // played_on required
     const played_on = (ed.played_on ?? "").trim();
     if (!played_on) {
       setErrorMsg("Played-on date is required.");
@@ -252,8 +279,6 @@ export default function TourRoundsPage() {
 
     setDeletingRoundId(roundId);
     try {
-      // Delete children first (order matters with FK constraints).
-
       const del1 = await supabase.from("scores").delete().eq("round_id", roundId);
       if (del1.error) throw new Error(del1.error.message);
 
@@ -306,7 +331,6 @@ export default function TourRoundsPage() {
 
   return (
     <main className="mx-auto max-w-5xl p-4 space-y-4">
-      {/* Breadcrumb */}
       <div className="text-sm opacity-70">
         <Link className="underline" href="/tours">
           Tours
@@ -336,7 +360,6 @@ export default function TourRoundsPage() {
         </div>
       </header>
 
-      {/* Add round */}
       <section className="rounded-2xl border bg-white p-4 space-y-3">
         <div className="text-lg font-semibold">Add a round</div>
 
@@ -413,7 +436,6 @@ export default function TourRoundsPage() {
         </div>
       </section>
 
-      {/* Rounds list */}
       <section className="rounded-2xl border bg-white">
         {rounds.length === 0 ? (
           <div className="p-4 text-sm opacity-70">No rounds yet.</div>
