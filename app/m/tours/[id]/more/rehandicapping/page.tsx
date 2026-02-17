@@ -15,7 +15,7 @@ type Tour = {
   id: string;
   name: string;
   rehandicapping_enabled: boolean | null;
-  rehandicapping_rules_summary: string | null;
+  rehandicapping_rules_summary: string | null; // kept in type (DB), but intentionally NOT used for display
   rehandicapping_rule_key: string | null;
 };
 
@@ -100,9 +100,14 @@ function roundLabel(r: RoundOption) {
   return `R${rn}${nm ? ` • ${nm}` : ""}${date ? ` • ${date}` : ""}`;
 }
 
-// half-up rounding for decimal start handicaps (e.g. 12.6 -> 13, 12.4 -> 12)
+// ✅ REQUIRED CHANGE: half-up rounding so decimal start handicaps (e.g. 12.6) reset to 13, not 12.
 function roundHalfUp(x: number): number {
   return x >= 0 ? Math.floor(x + 0.5) : Math.ceil(x - 0.5);
+}
+
+function fmt1dp(v: number | null | undefined): string {
+  if (!Number.isFinite(Number(v))) return "—";
+  return (Math.round(Number(v) * 10) / 10).toFixed(1);
 }
 
 const PLAIN_ENGLISH_RULE_V1 =
@@ -110,8 +115,6 @@ const PLAIN_ENGLISH_RULE_V1 =
   "The rounded average Stableford score for the round is calculated across all players who completed the round. Each player’s Stableford score is compared to this average, and the difference is multiplied by one-third. The result is rounded to the nearest whole number, with .5 rounding up, and applied as an adjustment to the player’s PH.\n\n" +
   "The resulting Playing Handicap cannot exceed Starting Handicap + 3, and cannot be lower than half the Starting Handicap, rounded up if the Starting Handicap is odd.\n\n" +
   "If a player does not play a round, their Playing Handicap carries forward unchanged to the next round.";
-
-const APPLEBY_TOUR_ID = "5a80b049-396f-46ec-965e-810e738471b6";
 
 export default function MobileTourMoreRehandicappingPage() {
   const params = useParams<{ id?: string }>();
@@ -141,7 +144,7 @@ export default function MobileTourMoreRehandicappingPage() {
   const [manError, setManError] = useState("");
   const [manMsg, setManMsg] = useState("");
 
-  // Prevent bursts of duplicate refetches
+  // Prevent bursts of duplicate refetches (focus/visibility can fire in quick succession)
   const inFlightRef = useRef(false);
   const lastRunMsRef = useRef(0);
 
@@ -197,6 +200,7 @@ export default function MobileTourMoreRehandicappingPage() {
       const roundIds = rr.map((r) => r.id);
       const playerIds = tps.map((x) => String(x.player_id)).filter(Boolean);
 
+      // round_players: per-round handicap display + needed fields for manual apply
       if (roundIds.length > 0 && playerIds.length > 0) {
         const { data: rpData, error: rpErr } = await supabase
           .from("round_players")
@@ -227,10 +231,12 @@ export default function MobileTourMoreRehandicappingPage() {
     }
   }, [tourId]);
 
+  // Initial load
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
 
+  // Auto-refresh when returning to this page (no button)
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
@@ -325,12 +331,14 @@ export default function MobileTourMoreRehandicappingPage() {
       const { error } = await supabase.from("tours").update({ rehandicapping_enabled: nextEnabled }).eq("id", tour.id);
       if (error) throw error;
 
+      // Keep automatic logic unchanged; run it so the table reflects the new mode.
       const recalcRes = await recalcAndSaveTourHandicaps({ supabase, tourId: tour.id });
       if (!recalcRes.ok) throw new Error(recalcRes.error);
 
       setTour((prev) => (prev ? { ...prev, rehandicapping_enabled: nextEnabled } : prev));
       setAutoMsg(`Saved. Automatic rehandicapping is now ${nextEnabled ? "enabled" : "disabled"}.`);
 
+      // When turning automatic ON, manual UI becomes irrelevant.
       if (nextEnabled) {
         setManualEnabled(false);
         setManSelectedRoundId("");
@@ -374,9 +382,12 @@ export default function MobileTourMoreRehandicappingPage() {
     try {
       const ph = Math.max(0, Math.floor(nextPH));
 
+      // Apply from selected round forward (inclusive)
       const payload = manTargetRoundIds.map((rid) => {
         const existing = rpByRoundPlayer[rid]?.[playerId];
-        const tee = existing?.tee ? normalizeTee(existing.tee) : normalizeTee(players.find((p) => p.id === playerId)?.gender ?? "M");
+        const tee = existing?.tee
+          ? normalizeTee(existing.tee)
+          : normalizeTee(players.find((p) => p.id === playerId)?.gender ?? "M");
         const playing = existing?.playing === true;
 
         return {
@@ -414,11 +425,14 @@ export default function MobileTourMoreRehandicappingPage() {
     setManMsg("");
 
     try {
+      // ✅ REQUIRED CHANGE: use half-up rounding instead of floor()
       const ph = Math.max(0, roundHalfUp(Number(start)));
 
       const payload = manTargetRoundIds.map((rid) => {
         const existing = rpByRoundPlayer[rid]?.[playerId];
-        const tee = existing?.tee ? normalizeTee(existing.tee) : normalizeTee(players.find((p) => p.id === playerId)?.gender ?? "M");
+        const tee = existing?.tee
+          ? normalizeTee(existing.tee)
+          : normalizeTee(players.find((p) => p.id === playerId)?.gender ?? "M");
         const playing = existing?.playing === true;
 
         return {
@@ -465,8 +479,6 @@ export default function MobileTourMoreRehandicappingPage() {
   const pillActive = "border-gray-900 bg-gray-900 text-white";
   const pillIdle = "border-gray-200 bg-white text-gray-900";
 
-  const showAppleby = tourId === APPLEBY_TOUR_ID;
-
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       {/* Header */}
@@ -487,23 +499,6 @@ export default function MobileTourMoreRehandicappingPage() {
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
-            {/* Appleby button (NZ Golf Tour 2026 only) */}
-            {showAppleby ? (
-              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <div className="p-4">
-                  <Link
-                    href={`/m/tours/${tourId}/more/appleby`}
-                    className="h-11 rounded-xl border border-gray-900 bg-gray-900 text-white px-4 text-sm font-semibold flex items-center justify-center active:bg-gray-800"
-                  >
-                    Appleby rehandicapping system →
-                  </Link>
-                  <div className="mt-2 text-[11px] text-gray-500">
-                    View Appleby calculations (read-only) and apply them to round handicaps.
-                  </div>
-                </div>
-              </section>
-            ) : null}
-
             {/* 1) Automatic rehandicapping toggle */}
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b">
@@ -556,7 +551,9 @@ export default function MobileTourMoreRehandicappingPage() {
                   </button>
                 </div>
 
-                {autoError ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{autoError}</div> : null}
+                {autoError ? (
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{autoError}</div>
+                ) : null}
                 {autoMsg ? <div className="text-sm text-green-700">{autoMsg}</div> : null}
               </div>
             </section>
@@ -649,7 +646,9 @@ export default function MobileTourMoreRehandicappingPage() {
                           ) : (
                             <>
                               {manError ? (
-                                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{manError}</div>
+                                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                                  {manError}
+                                </div>
                               ) : null}
 
                               {manMsg ? <div className="text-sm text-green-700">{manMsg}</div> : null}
@@ -679,7 +678,9 @@ export default function MobileTourMoreRehandicappingPage() {
                                           </div>
 
                                           <div className="col-span-3 text-right">
-                                            <div className="text-xs text-gray-600">{Number.isFinite(Number(currentPH)) ? currentPH : "—"}</div>
+                                            <div className="text-xs text-gray-600">
+                                              {Number.isFinite(Number(currentPH)) ? currentPH : "—"}
+                                            </div>
                                           </div>
 
                                           <div className="col-span-3 text-right">
@@ -726,7 +727,9 @@ export default function MobileTourMoreRehandicappingPage() {
                                           </button>
                                         </div>
 
-                                        <div className="mt-1 text-[11px] text-gray-500">Applies from the selected round onward (inclusive).</div>
+                                        <div className="mt-1 text-[11px] text-gray-500">
+                                          Applies from the selected round onward (inclusive).
+                                        </div>
                                       </div>
                                     );
                                   })}
@@ -754,11 +757,16 @@ export default function MobileTourMoreRehandicappingPage() {
                 <div className="p-4 text-sm text-gray-700">No rounds found for this tour.</div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="min-w-[720px] w-full border-collapse">
+                  <table className="min-w-[780px] w-full border-collapse">
                     <thead>
                       <tr className="bg-gray-50">
                         <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
                           Player
+                        </th>
+
+                        {/* ✅ NEW: 2nd column = exact starting handicap (1dp) */}
+                        <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap">
+                          Starting Handicap (exact)
                         </th>
 
                         {roundsSorted.map((r, idx) => (
@@ -770,25 +778,27 @@ export default function MobileTourMoreRehandicappingPage() {
                             {fmtRoundLabel(r, idx)}
                           </th>
                         ))}
-
-                        <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap">
-                          Start (fallback)
-                        </th>
                       </tr>
                     </thead>
 
                     <tbody>
                       {players.map((p) => {
-                        const startFallback = fallbackStartByPlayerId[p.id];
+                        const startExact = p.tourStart ?? p.globalStart ?? null;
+
                         return (
                           <tr key={p.id} className="border-b last:border-b-0">
                             <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
                               {p.name}
                             </td>
 
+                            {/* ✅ NEW: exact start value (1dp), no asterisks */}
+                            <td className="px-3 py-2 text-right text-sm tabular-nums text-gray-700">
+                              {fmt1dp(startExact)}
+                            </td>
+
                             {roundsSorted.map((r) => {
                               const v = hcpByRoundPlayer[r.id]?.[p.id];
-                              const display = Number.isFinite(Number(v)) ? String(v) : startFallback == null ? "—" : `${startFallback}*`;
+                              const display = Number.isFinite(Number(v)) ? String(v) : "—";
 
                               return (
                                 <td key={r.id} className="px-3 py-2 text-right text-sm tabular-nums text-gray-900">
@@ -796,17 +806,11 @@ export default function MobileTourMoreRehandicappingPage() {
                                 </td>
                               );
                             })}
-
-                            <td className="px-3 py-2 text-right text-sm tabular-nums text-gray-700">{startFallback == null ? "—" : startFallback}</td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
-
-                  <div className="px-4 py-3 text-[11px] text-gray-600">
-                    <span className="font-semibold">*</span> fallback value (no round-specific handicap found).
-                  </div>
                 </div>
               )}
             </section>
