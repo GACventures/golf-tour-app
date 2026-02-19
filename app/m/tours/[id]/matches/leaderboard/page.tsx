@@ -198,7 +198,6 @@ export default function MatchesLeaderboardPage() {
     let alive = true;
 
     async function loadRoundsWithFallback() {
-      // We only need ordering + ids; but we also want a display date.
       const baseCols = "id,tour_id,round_no,created_at";
       const cols1 = `${baseCols},round_date,played_on`;
       const cols2 = `${baseCols},played_on`;
@@ -237,14 +236,11 @@ export default function MatchesLeaderboardPage() {
       try {
         if (!tourId || !isLikelyUuid(tourId)) throw new Error("Missing or invalid tour id.");
 
-        // Tour meta
         const { data: tRow, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
 
-        // Rounds
         const rds = await loadRoundsWithFallback();
 
-        // Settings for any rounds (format + teams + double points)
         const { data: sRows, error: sErr } = await supabase
           .from("match_round_settings")
           .select("id,tour_id,round_id,group_a_id,group_b_id,format,double_points,created_at,updated_at")
@@ -256,7 +252,6 @@ export default function MatchesLeaderboardPage() {
           if (r?.round_id) sMap.set(String(r.round_id), r as MatchRoundSettingsRow);
         });
 
-        // Determine teams (group_a/group_b) from *any* settings row (assumed consistent across rounds)
         const anySettings = (sRows ?? [])[0] as any;
         const groupAId = anySettings?.group_a_id ? String(anySettings.group_a_id) : "";
         const groupBId = anySettings?.group_b_id ? String(anySettings.group_b_id) : "";
@@ -265,10 +260,7 @@ export default function MatchesLeaderboardPage() {
         let gB: GroupRow | null = null;
 
         if (groupAId && groupBId) {
-          const { data: gRows, error: gErr } = await supabase
-            .from("tour_groups")
-            .select("id,name")
-            .in("id", [groupAId, groupBId]);
+          const { data: gRows, error: gErr } = await supabase.from("tour_groups").select("id,name").in("id", [groupAId, groupBId]);
           if (gErr) throw gErr;
 
           const byId = new Map<string, GroupRow>();
@@ -278,7 +270,6 @@ export default function MatchesLeaderboardPage() {
           gB = byId.get(groupBId) ?? { id: groupBId, name: "Team B" };
         }
 
-        // Members (ordered)
         async function loadMembers(groupId: string) {
           const { data: mem, error: memErr } = await supabase
             .from("tour_group_members")
@@ -300,7 +291,6 @@ export default function MatchesLeaderboardPage() {
             })
             .filter(Boolean) as Array<{ playerId: string; name: string; gender: Tee | null; order: number }>;
 
-          // stable sort by order then name
           list.sort((a, b) => (a.order !== b.order ? a.order - b.order : a.name.localeCompare(b.name)));
           return list;
         }
@@ -313,15 +303,10 @@ export default function MatchesLeaderboardPage() {
           memB = await loadMembers(gB.id);
         }
 
-        // Round players, scores, courses+pars for all rounds we might need
         const roundIds = rds.map((r) => String(r.id));
         const allPlayerIds = Array.from(new Set([...memA.map((x) => x.playerId), ...memB.map((x) => x.playerId)]));
 
-        // course_id per round + course names (for pars lookup)
-        const { data: rCourseRows, error: rCourseErr } = await supabase
-          .from("rounds")
-          .select("id,course_id,courses(name)")
-          .eq("tour_id", tourId);
+        const { data: rCourseRows, error: rCourseErr } = await supabase.from("rounds").select("id,course_id,courses(name)").eq("tour_id", tourId);
         if (rCourseErr) throw rCourseErr;
 
         const rb = new Map<string, { course_id: string | null; name: string }>();
@@ -332,7 +317,6 @@ export default function MatchesLeaderboardPage() {
           rb.set(String(r.id), { course_id: cid, name: safeName(nm, "Course") });
         });
 
-        // round_players for all rounds & only our team players (fast + consistent)
         const rpByRound = new Map<string, Map<string, RoundPlayerRow>>();
         if (roundIds.length > 0 && allPlayerIds.length > 0) {
           const { data: rpRows, error: rpErr } = await supabase
@@ -354,7 +338,6 @@ export default function MatchesLeaderboardPage() {
           });
         }
 
-        // scores per round (avoid pagination by fetching per round)
         const scByRound = new Map<string, ScoreRow[]>();
         if (roundIds.length > 0 && allPlayerIds.length > 0) {
           for (const rid of roundIds) {
@@ -379,7 +362,6 @@ export default function MatchesLeaderboardPage() {
           }
         }
 
-        // pars for all courses used by those rounds
         const courseIds = Array.from(new Set(Array.from(rb.values()).map((x) => x.course_id).filter(Boolean))) as string[];
         const parsBy = new Map<string, Map<Tee, Map<number, { par: number; si: number }>>>();
 
@@ -401,12 +383,10 @@ export default function MatchesLeaderboardPage() {
           });
         }
 
-        // matches per settings (only needed for matchplay formats)
         const matchesMap = new Map<string, MatchRoundMatchRow[]>();
         const settingIds = Array.from(new Set((sRows ?? []).map((x: any) => String(x.id)).filter(Boolean)));
 
         if (settingIds.length > 0) {
-          // Load all matches for these settings
           const { data: mRows, error: mErr } = await supabase
             .from("match_round_matches")
             .select("id,settings_id,match_no,match_round_match_players(side,slot,player_id)")
@@ -429,7 +409,6 @@ export default function MatchesLeaderboardPage() {
             });
           });
 
-          // Keep each settings group sorted
           for (const [sid, list] of matchesMap.entries()) {
             list.sort((a, b) => a.match_no - b.match_no);
             matchesMap.set(sid, list);
@@ -502,7 +481,7 @@ export default function MatchesLeaderboardPage() {
   }, [membersA, membersB]);
 
   const scoreByRoundPlayerHole = useMemo(() => {
-    const outer = new Map<string, Map<string, ScoreRow>>(); // round_id -> (player|hole -> score)
+    const outer = new Map<string, Map<string, ScoreRow>>();
     for (const [rid, list] of scoresByRound.entries()) {
       const inner = new Map<string, ScoreRow>();
       for (const s of list) inner.set(`${s.player_id}|${s.hole_number}`, s);
@@ -551,17 +530,13 @@ export default function MatchesLeaderboardPage() {
     return sum;
   }
 
-  // Matchplay hole win based on stableford points (P=0; 0/0 halves)
   function matchplayPointsForRound(roundId: string, settings: MatchRoundSettingsRow, matches: MatchRoundMatchRow[]) {
     const pointsByPlayer = new Map<string, number>();
 
-    // defaults
     for (const p of membersA) pointsByPlayer.set(p.playerId, 0);
     for (const p of membersB) pointsByPlayer.set(p.playerId, 0);
 
     const mult = settings.double_points ? 2 : 1;
-
-    let usedMatches = 0;
 
     for (const match of matches) {
       const mp = match.match_round_match_players ?? [];
@@ -573,34 +548,18 @@ export default function MatchesLeaderboardPage() {
       if (settings.format === "INDIVIDUAL_MATCHPLAY") {
         if (!a1 || !b1) continue;
 
-        usedMatches += 1;
         const res = computeMatchplayResult(roundId, [{ side: "A", playerIds: [a1] }, { side: "B", playerIds: [b1] }]);
         applyMatchResultPoints(pointsByPlayer, res, mult);
       } else if (settings.format === "BETTERBALL_MATCHPLAY") {
         if (!a1 || !a2 || !b1 || !b2) continue;
 
-        usedMatches += 1;
         const res = computeMatchplayResult(roundId, [
           { side: "A", playerIds: [a1, a2] },
           { side: "B", playerIds: [b1, b2] },
         ]);
+        // ✅ IMPORTANT: DO NOT SCALE per-player points.
+        // Winners should get 1 (or 2 if double points); ties 0.5 (or 1); losers 0.
         applyMatchResultPoints(pointsByPlayer, res, mult);
-      }
-    }
-
-    // ✅ 4BBB: total available per TEAM for the day is 3 (or 6 if double points),
-    // while still keeping win=1 / tie=0.5 / lose=0 semantics (scaled proportionally).
-    if (settings.format === "BETTERBALL_MATCHPLAY") {
-      if (usedMatches > 0) {
-        // Raw max per team per match = 2 * mult (two players)
-        // Raw max per team for the day = 2 * usedMatches * mult
-        // Desired max per team for the day = 3 * mult
-        // => factor = (3 * mult) / (2 * usedMatches * mult) = 3 / (2 * usedMatches)
-        const factor = 3 / (2 * usedMatches);
-
-        for (const [pid, v] of pointsByPlayer.entries()) {
-          pointsByPlayer.set(pid, v * factor);
-        }
       }
     }
 
@@ -619,7 +578,6 @@ export default function MatchesLeaderboardPage() {
 
     const rpMap = roundPlayersByRound.get(roundId) ?? new Map<string, RoundPlayerRow>();
 
-    // Compute hole-by-hole best stableford for each side (individual = that player)
     let aUp = 0;
     for (let h = 1; h <= 18; h++) {
       const aPts = bestSideStablefordForHole(roundId, courseId, scoreMap, rpMap, sides[0].playerIds, h);
@@ -627,7 +585,6 @@ export default function MatchesLeaderboardPage() {
 
       if (aPts > bPts) aUp += 1;
       else if (bPts > aPts) aUp -= 1;
-      // else halved
     }
 
     const winner: "A" | "B" | "TIE" = aUp > 0 ? "A" : aUp < 0 ? "B" : "TIE";
@@ -696,10 +653,8 @@ export default function MatchesLeaderboardPage() {
     const allTourPlayerIds = Array.from(playerMeta.keys());
     const rpMap = roundPlayersByRound.get(roundId) ?? new Map<string, RoundPlayerRow>();
 
-    // Only players marked playing contribute
     const playingIds = allTourPlayerIds.filter((pid) => rpMap.get(pid)?.playing);
 
-    // No players playing: nobody scores
     const pointsByPlayer = new Map<string, number>();
     for (const pid of allTourPlayerIds) pointsByPlayer.set(pid, 0);
     if (playingIds.length === 0) return pointsByPlayer;
@@ -709,11 +664,10 @@ export default function MatchesLeaderboardPage() {
       total: stablefordTotalForRoundPlayer(roundId, pid),
     }));
 
-    // ✅ NEW RULE: points go to top 5 (and ties)
+    // top 5 (and ties)
     const target = Math.min(5, totals.length);
     if (target <= 0) return pointsByPlayer;
 
-    // Sort descending by total
     totals.sort((a, b) => b.total - a.total);
 
     const cutoffScore = totals[target - 1]?.total ?? null;
@@ -721,9 +675,6 @@ export default function MatchesLeaderboardPage() {
     const above = cutoffScore === null ? [] : totals.filter((x) => x.total > cutoffScore);
     const atCutoff = cutoffScore === null ? [] : totals.filter((x) => x.total === cutoffScore);
 
-    // Points:
-    // - Above cutoff: 1
-    // - At cutoff: 1 if above+atCutoff <= target else fractional so total awarded = target
     const aboveCount = above.length;
     const remaining = target - aboveCount;
 
@@ -742,7 +693,6 @@ export default function MatchesLeaderboardPage() {
   }
 
   const computed = useMemo(() => {
-    // Points per player per round; totals per player + per team
     const roundCols = sortedRounds.map((r, idx) => ({
       roundId: r.id,
       label: `R${r.round_no ?? idx + 1}`,
@@ -754,11 +704,9 @@ export default function MatchesLeaderboardPage() {
 
     const playerIdsA = membersA.map((m) => m.playerId);
     const playerIdsB = membersB.map((m) => m.playerId);
-
     const allPlayerIds = [...playerIdsA, ...playerIdsB];
 
-    // Initialize structures
-    const ptsByPlayerRound = new Map<string, Map<string, number>>(); // player -> (roundId -> pts)
+    const ptsByPlayerRound = new Map<string, Map<string, number>>();
     const totalByPlayer = new Map<string, number>();
     const totalByTeam = new Map<"A" | "B", number>([
       ["A", 0],
@@ -783,25 +731,31 @@ export default function MatchesLeaderboardPage() {
           const m = stablefordWinnersPointsForRound(rid, settings);
           for (const [pid, v] of m.entries()) perPlayerPoints.set(pid, v);
         } else {
-          // matchplay formats
           const matches = matchesBySettings.get(settings.id) ?? [];
           const m = matchplayPointsForRound(rid, settings, matches);
           for (const [pid, v] of m.entries()) perPlayerPoints.set(pid, v);
         }
       }
 
-      // Fill by player, compute team sums
       let sumA = 0;
       let sumB = 0;
 
       for (const pid of allPlayerIds) {
         const v = perPlayerPoints.get(pid) ?? 0;
+
+        // individual totals should reflect actual points earned
         ptsByPlayerRound.get(pid)!.set(rid, v);
         totalByPlayer.set(pid, (totalByPlayer.get(pid) || 0) + v);
 
         const tm = playerMeta.get(pid)?.team ?? null;
         if (tm === "A") sumA += v;
         else if (tm === "B") sumB += v;
+      }
+
+      // ✅ 4BBB team points = (sum of its two players' points) / 2
+      if (settings?.format === "BETTERBALL_MATCHPLAY") {
+        sumA = sumA / 2;
+        sumB = sumB / 2;
       }
 
       teamByRound.set(rid, { A: sumA, B: sumB });
@@ -862,7 +816,6 @@ export default function MatchesLeaderboardPage() {
     return (
       <div className="min-h-dvh bg-white text-gray-900">
         <div className="mx-auto w-full max-w-md px-4 py-6">
-          {/* Header: Matchplay leaderboard + divider (no buttons) */}
           <div className="border-b border-slate-200 pb-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -889,7 +842,6 @@ export default function MatchesLeaderboardPage() {
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
       <div className="mx-auto w-full max-w-md px-4 py-4">
-        {/* Header: Matchplay leaderboard + divider (no Results/Format buttons) */}
         <div className="border-b border-slate-200 pb-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -901,10 +853,8 @@ export default function MatchesLeaderboardPage() {
         <div className="mt-4 overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
           <table className="min-w-max border-collapse">
             <thead>
-              {/* Row 1: blank, Total, R1..Rn */}
               <tr className="bg-gray-50">
                 <th className={`${headerCellBase} ${stickyNameCell} text-left`}></th>
-
                 <th className={`${headerCellBase} text-center`}>Total</th>
 
                 {computed.roundCols.map((c) => (
@@ -914,10 +864,8 @@ export default function MatchesLeaderboardPage() {
                 ))}
               </tr>
 
-              {/* Row 2: blank, blank, format under each round */}
               <tr className="bg-gray-50">
                 <th className={`${headerCellBase} ${stickyNameCell} text-left`}></th>
-
                 <th className={`${headerCellBase} text-center`}></th>
 
                 {computed.roundCols.map((c) => (
@@ -929,7 +877,6 @@ export default function MatchesLeaderboardPage() {
             </thead>
 
             <tbody>
-              {/* TEAM A header row */}
               <tr className="bg-gray-50">
                 <td className={`${bodyCellBase} ${stickyNameCell} font-extrabold text-gray-900 whitespace-nowrap`}>{teamAName}</td>
 
@@ -947,7 +894,6 @@ export default function MatchesLeaderboardPage() {
                 })}
               </tr>
 
-              {/* TEAM A player rows (NO horizontal separators between players) */}
               {membersA.map((p) => {
                 const total = computed.totalByPlayer.get(p.playerId) ?? 0;
 
@@ -969,12 +915,10 @@ export default function MatchesLeaderboardPage() {
                 );
               })}
 
-              {/* Single divider line after final player in Team A */}
               <tr>
                 <td colSpan={2 + computed.roundCols.length} className="h-px bg-gray-200" />
               </tr>
 
-              {/* TEAM B header row */}
               <tr className="bg-gray-50">
                 <td className={`${bodyCellBase} ${stickyNameCell} font-extrabold text-gray-900 whitespace-nowrap`}>{teamBName}</td>
 
@@ -992,7 +936,6 @@ export default function MatchesLeaderboardPage() {
                 })}
               </tr>
 
-              {/* TEAM B player rows */}
               {membersB.map((p) => {
                 const total = computed.totalByPlayer.get(p.playerId) ?? 0;
 
