@@ -42,9 +42,9 @@ const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
 const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
 const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
 
-// ✅ New Zealand Golf Tour 2026 hero override (public/tours/NZ 26 logo.webp)
+// ✅ New Zealand Golf Tour 2026 hero override (public/tours/NZ26-logo.webp)
 const NZ_TOUR_2026_ID = "5a80b049-396f-46ec-965e-810e738471b6";
-const NZ_TOUR_2026_HERO = "/tours/NZ 26 logo.webp";
+const NZ_TOUR_2026_HERO = "/tours/NZ26-logo.webp";
 
 // Only this tour has PDFs for now
 const PDF_TOUR_ID = NZ_TOUR_2026_ID;
@@ -488,85 +488,49 @@ export default function MobileTourLandingPage() {
 
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
         <div className="grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[0]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>
             Daily
             <br />
             Tee times
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[0]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>
             Daily
             <br />
             Results
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[0]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>
             Score
             <br />
             Entry
           </button>
 
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[1]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>
             Leaderboards
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[1]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/competitions`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/competitions`)}>
             Competitions
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/stats`)}>
             Stats
           </button>
 
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[2]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>
             Matchplay
             <br />
             Format
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[2]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>
             Matchplay
             <br />
             Results
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[2]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>
             Matchplay
             <br />
             Leaderboard
           </button>
 
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[3]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/details`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>
             Tour
             <br />
             Details
@@ -576,41 +540,21 @@ export default function MobileTourLandingPage() {
             <br />
             Admin
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[3]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>
             Rehandicapping
           </button>
 
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(0)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(0)}>
             {openingDocIdx === 0 ? "Opening…" : "Itinerary"}
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(1)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(1)}>
             {openingDocIdx === 1 ? "Opening…" : "Accommodation"}
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(2)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(2)}>
             {openingDocIdx === 2 ? "Opening…" : "Dining"}
           </button>
 
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(3)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(3)}>
             {openingDocIdx === 3 ? "Opening…" : (
               <>
                 Player
@@ -619,11 +563,7 @@ export default function MobileTourLandingPage() {
               </>
             )}
           </button>
-          <button
-            type="button"
-            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(4)}
-          >
+          <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(4)}>
             {openingDocIdx === 4 ? "Opening…" : "Comps etc"}
           </button>
 
@@ -650,20 +590,10 @@ export default function MobileTourLandingPage() {
           <div className="flex items-center justify-between px-4 py-3 bg-black/90">
             <div className="text-white text-sm font-semibold truncate">{viewerTitle}</div>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={zoomOut}
-                className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
-                disabled={rendering}
-              >
+              <button type="button" onClick={zoomOut} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20" disabled={rendering}>
                 −
               </button>
-              <button
-                type="button"
-                onClick={zoomIn}
-                className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
-                disabled={rendering}
-              >
+              <button type="button" onClick={zoomIn} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20" disabled={rendering}>
                 +
               </button>
               <button type="button" onClick={closeViewer} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20">
@@ -675,10 +605,7 @@ export default function MobileTourLandingPage() {
           <div
             ref={viewportRef}
             className="w-full h-[calc(100dvh-52px)] bg-white overflow-auto"
-            style={{
-              touchAction: "none",
-              cursor: "grab",
-            }}
+            style={{ touchAction: "none", cursor: "grab" }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={endDrag}
