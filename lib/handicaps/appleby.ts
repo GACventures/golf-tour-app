@@ -52,7 +52,7 @@ type ScoreRow = {
   pickup?: boolean | null;
 };
 
-export type ApplebyRoundKey = 3 | 6 | 9 | 12;
+export type ApplebyRoundKey = number;
 
 export type ApplebyPlayerRow = {
   player_id: string;
@@ -61,17 +61,21 @@ export type ApplebyPlayerRow = {
   start_exact_1dp: number; // tour override if exists else global
   start_seed_int: number; // nearest int, half-up
 
+  // keyed by "applied rounds" (i.e. rounds where Appleby adjustment is applied)
   scoreByRound: Partial<Record<ApplebyRoundKey, number | null>>;
   cutoffByRound: Partial<Record<ApplebyRoundKey, number | null>>;
   isCutoffScoreByRound: Partial<Record<ApplebyRoundKey, boolean>>;
 
   adjStep: Partial<Record<ApplebyRoundKey, number | null>>; // actual applied step (after cap) 1dp
-  adjStepStar: Partial<Record<ApplebyRoundKey, boolean>>; // whether reduced due to +/-3 cap
+  adjStepStar: Partial<Record<ApplebyRoundKey, boolean>>; // whether reduced due to cap
 
   cumAdjAfter: Partial<Record<ApplebyRoundKey, number | null>>; // cumulative after each step 1dp (capped)
   startPlusAfter: Partial<Record<ApplebyRoundKey, number | null>>; // start_exact_1dp + cumAdjAfter 1dp
   startPlusAfterRounded: Partial<Record<ApplebyRoundKey, number | null>>; // nearest int, half-up
 };
+
+const CAP_UP = 4.0;
+const CAP_DOWN = -2.0;
 
 function normalizeTee(v: any): Tee {
   const s = String(v ?? "").trim().toUpperCase();
@@ -122,6 +126,18 @@ function cmpNullableNum(a: number | null, b: number | null) {
   return a - b;
 }
 
+// 4BBB rounds are 1,4,7,10,13,... (every 3rd starting at 1)
+function is4bbbRound(roundNo: number): boolean {
+  return roundNo >= 1 && (roundNo - 1) % 3 === 0;
+}
+
+// Appleby adjustment is applied after all rounds except 4BBB rounds.
+// We also exclude round 1 explicitly (covered by 4BBB rule anyway).
+function isApplebyAppliedRound(roundNo: number): boolean {
+  if (!Number.isFinite(roundNo) || roundNo <= 0) return false;
+  return !is4bbbRound(roundNo);
+}
+
 export async function loadApplebyTourData(opts: {
   supabase: SupabaseClient;
   tourId: string;
@@ -130,6 +146,7 @@ export async function loadApplebyTourData(opts: {
       ok: true;
       tourName: string;
       rounds: RoundRow[];
+      appliedRoundNos: number[];
       players: ApplebyPlayerRow[];
       canUpdate: boolean;
       cannotUpdateReason: string | null;
@@ -172,6 +189,16 @@ export async function loadApplebyTourData(opts: {
       return String(a.id).localeCompare(String(b.id));
     });
 
+    const roundsWithNo = rounds
+      .filter((r) => Number.isFinite(Number(r.round_no)))
+      .map((r) => ({ ...r, round_no_num: Number(r.round_no) }))
+      .sort((a, b) => a.round_no_num - b.round_no_num);
+
+    const roundByNo = new Map<number, RoundRow>();
+    for (const r of roundsWithNo) roundByNo.set(r.round_no_num, r);
+
+    const appliedRoundNos = roundsWithNo.map((r) => r.round_no_num).filter(isApplebyAppliedRound);
+
     // Tour players
     const { data: tpData, error: tpErr } = await supabase
       .from("tour_players")
@@ -212,13 +239,21 @@ export async function loadApplebyTourData(opts: {
     }>;
 
     if (playersBase.length === 0) {
-      return { ok: true, tourName, rounds, players: [], canUpdate: false, cannotUpdateReason: "No players found." };
+      return {
+        ok: true,
+        tourName,
+        rounds,
+        appliedRoundNos,
+        players: [],
+        canUpdate: false,
+        cannotUpdateReason: "No players found.",
+      };
     }
 
     const playerIds = playersBase.map((p) => p.player_id);
+    const roundIds = roundsWithNo.map((r) => r.id);
 
-    // round_players (for playing=true + tee)
-    const roundIds = rounds.map((r) => r.id);
+    // round_players (playing + tee + maybe existing playing_handicap for fallback)
     const { data: rpData, error: rpErr } = await supabase
       .from("round_players")
       .select("round_id,player_id,playing,tee,playing_handicap")
@@ -239,20 +274,8 @@ export async function loadApplebyTourData(opts: {
     const rpKey = (rid: string, pid: string) => `${rid}::${pid}`;
     for (const rp of rpRows) rpByKey.set(rpKey(rp.round_id, rp.player_id), rp);
 
-    // Identify Appleby rounds by round_no
-    const targetNos: ApplebyRoundKey[] = [3, 6, 9, 12];
-    const roundByNo = new Map<number, RoundRow>();
-    for (const r of rounds) {
-      const n = Number(r.round_no);
-      if (Number.isFinite(n)) roundByNo.set(n, r);
-    }
-
-    const targetRounds = targetNos
-      .map((n) => ({ n, r: roundByNo.get(n) ?? null }))
-      .filter((x) => x.r != null) as Array<{ n: ApplebyRoundKey; r: RoundRow }>;
-
-    // If no target rounds exist yet, we still show the page but cannot compute/update
-    if (targetRounds.length === 0) {
+    // If no applied rounds exist yet, show page but cannot compute/update
+    if (appliedRoundNos.length === 0) {
       const emptyPlayers: ApplebyPlayerRow[] = playersBase
         .slice()
         .sort((a, b) => a.name.localeCompare(b.name))
@@ -275,18 +298,26 @@ export async function loadApplebyTourData(opts: {
         ok: true,
         tourName,
         rounds,
+        appliedRoundNos,
         players: emptyPlayers,
         canUpdate: false,
-        cannotUpdateReason: "Rounds 3/6/9/12 not found yet for this tour.",
+        cannotUpdateReason: "No eligible (non-4BBB) rounds found yet for this tour.",
       };
     }
 
-    // Load pars for target course_ids
-    const courseIds = Array.from(new Set(targetRounds.map((x) => String(x.r.course_id ?? "")).filter(Boolean)));
+    // Load pars for all course_ids used by applied rounds
+    const appliedCourseIds = Array.from(
+      new Set(
+        appliedRoundNos
+          .map((n) => String(roundByNo.get(n)?.course_id ?? ""))
+          .filter(Boolean)
+      )
+    );
+
     const { data: parsData, error: parsErr } = await supabase
       .from("pars")
       .select("course_id,hole_number,par,stroke_index,tee")
-      .in("course_id", courseIds);
+      .in("course_id", appliedCourseIds);
 
     if (parsErr) throw parsErr;
 
@@ -300,7 +331,7 @@ export async function loadApplebyTourData(opts: {
       parsByCourseTee[cid][tee][hole] = { par: Number(row.par), si: Number(row.stroke_index) };
     }
 
-    // Helper: tee for a given round/player
+    // Default tee per player
     const defaultTeeByPlayer: Record<string, Tee> = {};
     for (const p of playersBase) defaultTeeByPlayer[p.player_id] = p.gender ? normalizeTee(p.gender) : "M";
 
@@ -315,8 +346,9 @@ export async function loadApplebyTourData(opts: {
       return existing?.playing === true;
     };
 
-    // Load scores round-by-round (avoids hitting 1000 limit for big tours)
+    // Load raw scores for every applied round (page-by-page)
     const scoreMap: Record<string, Record<string, Record<number, string>>> = {};
+
     const holesFilledCount = (roundId: string, playerId: string): number => {
       let n = 0;
       for (let hole = 1; hole <= 18; hole++) {
@@ -326,9 +358,11 @@ export async function loadApplebyTourData(opts: {
       return n;
     };
 
-    for (const tr of targetRounds) {
-      const rid = tr.r.id;
+    for (const roundNo of appliedRoundNos) {
+      const r = roundByNo.get(roundNo);
+      if (!r) continue;
 
+      const rid = r.id;
       scoreMap[rid] = scoreMap[rid] ?? {};
 
       const PAGE_SIZE = 1000;
@@ -380,138 +414,173 @@ export async function loadApplebyTourData(opts: {
       return total;
     };
 
-    // Compute scores for R3/R6/R9/R12 (only playing=true AND 18 holes filled)
-    const scoreByRoundPlayer: Record<ApplebyRoundKey, Record<string, number | null>> = { 3: {}, 6: {}, 9: {}, 12: {} };
+    // Prepare output rows scaffolding
+    const byPlayer: Record<string, ApplebyPlayerRow> = {};
+    for (const p of playersBase) {
+      byPlayer[p.player_id] = {
+        player_id: p.player_id,
+        name: p.name,
+        start_exact_1dp: p.start_exact_1dp,
+        start_seed_int: p.start_seed_int,
+        scoreByRound: {},
+        cutoffByRound: {},
+        isCutoffScoreByRound: {},
+        adjStep: {},
+        adjStepStar: {},
+        cumAdjAfter: {},
+        startPlusAfter: {},
+        startPlusAfterRounded: {},
+      };
+    }
 
-    for (const { n, r } of targetRounds) {
-      const rid = r.id;
-      const courseId = String(r.course_id ?? "");
+    // Sequentially simulate handicap progression + compute adjustments on each applied round
+    // cumAdj tracked per player (1dp)
+    const cumAdjByPlayer: Record<string, number> = {};
+    for (const p of playersBase) cumAdjByPlayer[p.player_id] = 0.0;
+
+    // PH by round number for each player (integer)
+    const phByPlayerRoundNo: Record<string, Record<number, number>> = {};
+    for (const p of playersBase) phByPlayerRoundNo[p.player_id] = {};
+
+    const maxRoundNo = roundsWithNo.length > 0 ? roundsWithNo[roundsWithNo.length - 1].round_no_num : 0;
+
+    // Seed round 1 (if it exists)
+    for (const p of playersBase) {
+      phByPlayerRoundNo[p.player_id][1] = p.start_seed_int;
+    }
+
+    // Helper: compute PH for round n based on previous round
+    const phForRound = (pid: string, roundNo: number): number => {
+      if (roundNo <= 1) return phByPlayerRoundNo[pid]?.[1] ?? byPlayer[pid].start_seed_int;
+
+      const prev = roundNo - 1;
+      const prevPH = phByPlayerRoundNo[pid]?.[prev];
+      const fallbackPrevPH = prevPH ?? phForRound(pid, prev);
+
+      // If previous round is applied, next PH = rounded(start + cumAdjAfter prev)
+      if (isApplebyAppliedRound(prev)) {
+        const cum = cumAdjByPlayer[pid] ?? 0.0;
+        return Math.max(0, roundHalfUp(byPlayer[pid].start_exact_1dp + cum));
+      }
+
+      // If previous round is 4BBB, carry forward unchanged
+      return fallbackPrevPH;
+    };
+
+    // We compute PH for every round in order, but only apply adjustments on applied rounds
+    for (let roundNo = 2; roundNo <= maxRoundNo; roundNo++) {
+      for (const p of playersBase) {
+        phByPlayerRoundNo[p.player_id][roundNo] = phForRound(p.player_id, roundNo);
+      }
+
+      if (!isApplebyAppliedRound(roundNo)) continue;
+
+      const round = roundByNo.get(roundNo);
+      if (!round) {
+        // still record "after" values as current cum even if the round row is missing
+        for (const p of playersBase) {
+          const pid = p.player_id;
+          const row = byPlayer[pid];
+          const cum = round1dp(cumAdjByPlayer[pid] ?? 0.0);
+          row.scoreByRound[roundNo] = null;
+          row.cutoffByRound[roundNo] = null;
+          row.isCutoffScoreByRound[roundNo] = false;
+          row.adjStep[roundNo] = null;
+          row.adjStepStar[roundNo] = false;
+          row.cumAdjAfter[roundNo] = cum;
+          row.startPlusAfter[roundNo] = round1dp(row.start_exact_1dp + cum);
+          row.startPlusAfterRounded[roundNo] = roundHalfUp(row.start_exact_1dp + cum);
+        }
+        continue;
+      }
+
+      const rid = round.id;
+      const courseId = String(round.course_id ?? "");
+
+      // Compute stableford scores for eligible players on this round (playing=true and 18 holes filled)
+      const scoreByPid: Record<string, number | null> = {};
       for (const p of playersBase) {
         const pid = p.player_id;
+
         const okPlaying = isPlaying(rid, pid);
         const filled = holesFilledCount(rid, pid) === 18;
 
         if (!okPlaying || !filled || !courseId) {
-          scoreByRoundPlayer[n][pid] = null;
+          scoreByPid[pid] = null;
           continue;
         }
 
-        // Appleby scores are based on that day’s round playing handicap (integer).
-        // For R3: seed int applies. For R6: by definition it is still the "post R3" handicap etc.
-        // BUT for the Appleby table we only need the stableford result itself; handicap is taken from round_players on that day.
-        // If round_players.playing_handicap exists for that day use it; else fall back to seed int.
-        const rp = rpByKey.get(rpKey(rid, pid));
-        const ph = Number.isFinite(Number(rp?.playing_handicap)) ? Number(rp!.playing_handicap) : p.start_seed_int;
-
+        const ph = phByPlayerRoundNo[pid]?.[roundNo] ?? p.start_seed_int;
         const tot = stablefordTotal(rid, courseId, pid, ph);
-        scoreByRoundPlayer[n][pid] = tot == null ? null : tot;
-      }
-    }
-
-    // Compute cutoff (6th best) per round, and per-player adjustments/cumulative caps
-    const cutoffByRound: Record<ApplebyRoundKey, number | null> = { 3: null, 6: null, 9: null, 12: null };
-
-    for (const key of targetNos) {
-      const roundPresent = targetRounds.some((x) => x.n === key);
-      if (!roundPresent) {
-        cutoffByRound[key] = null;
-        continue;
+        scoreByPid[pid] = tot == null ? null : tot;
       }
 
-      const vals = Object.values(scoreByRoundPlayer[key]).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+      // Cutoff = 6th best among numeric scores
+      const vals = Object.values(scoreByPid).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
       vals.sort((a, b) => b - a);
-      cutoffByRound[key] = vals.length >= 6 ? vals[5] : null;
-    }
+      const cutoff = vals.length >= 6 ? vals[5] : null;
 
-    // Build final per-player rows
-    const rowsOut: ApplebyPlayerRow[] = playersBase
-      .slice()
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((p) => {
+      // Apply per-player step, update cumulative, store row values
+      for (const p of playersBase) {
         const pid = p.player_id;
+        const row = byPlayer[pid];
 
-        const scoreByRound: ApplebyPlayerRow["scoreByRound"] = {};
-        const isCutoffScoreByRound: ApplebyPlayerRow["isCutoffScoreByRound"] = {};
-        const cutoffMap: ApplebyPlayerRow["cutoffByRound"] = {};
-        const adjStep: ApplebyPlayerRow["adjStep"] = {};
-        const adjStepStar: ApplebyPlayerRow["adjStepStar"] = {};
-        const cumAdjAfter: ApplebyPlayerRow["cumAdjAfter"] = {};
-        const startPlusAfter: ApplebyPlayerRow["startPlusAfter"] = {};
-        const startPlusAfterRounded: ApplebyPlayerRow["startPlusAfterRounded"] = {};
+        const sc = scoreByPid[pid] ?? null;
 
-        let cum = 0.0;
+        row.scoreByRound[roundNo] = sc;
+        row.cutoffByRound[roundNo] = cutoff;
+        row.isCutoffScoreByRound[roundNo] = sc != null && cutoff != null && sc === cutoff;
 
-        for (const key of targetNos) {
-          const sc = scoreByRoundPlayer[key]?.[pid] ?? null;
-          const cutoff = cutoffByRound[key];
+        const prevCum = round1dp(cumAdjByPlayer[pid] ?? 0.0);
 
-          scoreByRound[key] = sc;
-          cutoffMap[key] = cutoff;
-
-          const isCutoff = sc != null && cutoff != null && sc === cutoff;
-          isCutoffScoreByRound[key] = isCutoff;
-
-          // If missing info, we cannot adjust at this step
-          if (sc == null || cutoff == null) {
-            adjStep[key] = null;
-            adjStepStar[key] = false;
-            cumAdjAfter[key] = round1dp(cum);
-            startPlusAfter[key] = round1dp(p.start_exact_1dp + cum);
-            startPlusAfterRounded[key] = roundHalfUp(p.start_exact_1dp + cum);
-            continue;
-          }
-
-          // Adjustment rule:
-          // every 1 point difference => 0.1 adjustment, applied to starting handicap
-          // if player beats 6th best => adjustment is negative
-          // so: (cutoff - playerScore) * 0.1
-          const rawStep = round1dp((cutoff - sc) * 0.1);
-
-          const nextCumRaw = round1dp(cum + rawStep);
-          const nextCumClamped = round1dp(clamp(nextCumRaw, -3.0, 3.0));
-
-          const appliedStep = round1dp(nextCumClamped - cum);
-          const starred = appliedStep !== rawStep;
-
-          cum = nextCumClamped;
-
-          adjStep[key] = appliedStep;
-          adjStepStar[key] = starred;
-          cumAdjAfter[key] = round1dp(cum);
-
-          const startPlus = round1dp(p.start_exact_1dp + cum);
-          startPlusAfter[key] = startPlus;
-          startPlusAfterRounded[key] = roundHalfUp(startPlus);
+        // If no cutoff or missing score, no adjustment at this step
+        if (sc == null || cutoff == null) {
+          row.adjStep[roundNo] = null;
+          row.adjStepStar[roundNo] = false;
+          row.cumAdjAfter[roundNo] = prevCum;
+          row.startPlusAfter[roundNo] = round1dp(row.start_exact_1dp + prevCum);
+          row.startPlusAfterRounded[roundNo] = roundHalfUp(row.start_exact_1dp + prevCum);
+          continue;
         }
 
-        return {
-          player_id: pid,
-          name: p.name,
-          start_exact_1dp: p.start_exact_1dp,
-          start_seed_int: p.start_seed_int,
-          scoreByRound,
-          cutoffByRound: cutoffMap,
-          isCutoffScoreByRound,
-          adjStep,
-          adjStepStar,
-          cumAdjAfter,
-          startPlusAfter,
-          startPlusAfterRounded,
-        };
-      });
+        // rawStep = (cutoff - score) * 0.1
+        const rawStep = round1dp((cutoff - sc) * 0.1);
 
-    // Can update only if at least one cutoff exists (i.e. some round has 6 complete players)
-    // and rounds exist (for applying).
-    const anyCutoff = targetNos.some((k) => cutoffByRound[k] != null);
-    const canUpdate = anyCutoff && rounds.length > 0;
+        const nextCumRaw = round1dp(prevCum + rawStep);
+        const nextCumClamped = round1dp(clamp(nextCumRaw, CAP_DOWN, CAP_UP));
+
+        const appliedStep = round1dp(nextCumClamped - prevCum);
+        const starred = appliedStep !== rawStep;
+
+        cumAdjByPlayer[pid] = nextCumClamped;
+
+        row.adjStep[roundNo] = appliedStep;
+        row.adjStepStar[roundNo] = starred;
+        row.cumAdjAfter[roundNo] = nextCumClamped;
+
+        const startPlus = round1dp(row.start_exact_1dp + nextCumClamped);
+        row.startPlusAfter[roundNo] = startPlus;
+        row.startPlusAfterRounded[roundNo] = roundHalfUp(startPlus);
+      }
+    }
+
+    const rowsOut: ApplebyPlayerRow[] = Object.values(byPlayer).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Can update only if at least one applied round has a cutoff
+    const anyCutoff = appliedRoundNos.some((n) => {
+      const anyRow = rowsOut.find((p) => p.cutoffByRound?.[n] != null);
+      return anyRow?.cutoffByRound?.[n] != null;
+    });
+
+    const canUpdate = anyCutoff && roundsWithNo.length > 0;
 
     let cannotUpdateReason: string | null = null;
     if (!anyCutoff) {
       cannotUpdateReason =
-        "Cannot update: need at least 6 complete (18-hole) playing players on one of R3/R6/R9/R12 to establish the 6th-best score.";
+        "Cannot update: need at least 6 complete (18-hole) playing players on a rehandicap round to establish the 6th-best score.";
     }
 
-    return { ok: true, tourName, rounds, players: rowsOut, canUpdate, cannotUpdateReason };
+    return { ok: true, tourName, rounds, appliedRoundNos, players: rowsOut, canUpdate, cannotUpdateReason };
   } catch (e: any) {
     return { ok: false, error: e?.message ?? "Failed to load Appleby data." };
   }
@@ -521,6 +590,7 @@ export async function applyApplebyHandicaps(opts: {
   supabase: SupabaseClient;
   tourId: string;
   rounds: RoundRow[];
+  appliedRoundNos?: number[]; // optional (page can pass; but we can derive)
   players: ApplebyPlayerRow[];
 }): Promise<{ ok: true; updated: number } | { ok: false; error: string }> {
   const { supabase, rounds, players } = opts;
@@ -531,7 +601,11 @@ export async function applyApplebyHandicaps(opts: {
       .map((r) => ({ ...r, round_no_num: Number(r.round_no) }))
       .sort((a, b) => a.round_no_num - b.round_no_num);
 
-    // Load round_players so we preserve playing flag + tee; if missing, default playing=false and tee from gender.
+    if (roundsWithNo.length === 0 || players.length === 0) return { ok: true, updated: 0 };
+
+    const appliedRoundNos = roundsWithNo.map((r) => r.round_no_num).filter(isApplebyAppliedRound);
+
+    // Load round_players so we preserve playing flag + tee
     const roundIds = roundsWithNo.map((r) => r.id);
     const playerIds = players.map((p) => p.player_id);
 
@@ -552,30 +626,36 @@ export async function applyApplebyHandicaps(opts: {
       });
     }
 
-    // Determine the integer handicap to apply for each segment
-    const getSegmentIntForRoundNo = (p: ApplebyPlayerRow, roundNo: number): number => {
-      // R1–R3: no rehandicap => starting handicap rounded to nearest int (half-up)
-      if (roundNo <= 3) return p.start_seed_int;
-
-      const r3 = p.startPlusAfterRounded[3];
-      const r6 = p.startPlusAfterRounded[6];
-      const r9 = p.startPlusAfterRounded[9];
-      const r12 = p.startPlusAfterRounded[12];
-
-      // R4–R6 use post-R3
-      if (roundNo >= 4 && roundNo <= 6) return Number.isFinite(Number(r3)) ? Number(r3) : p.start_seed_int;
-
-      // R7–R9 use post-R6
-      if (roundNo >= 7 && roundNo <= 9) return Number.isFinite(Number(r6)) ? Number(r6) : (Number.isFinite(Number(r3)) ? Number(r3) : p.start_seed_int);
-
-      // R10–R12 use post-R9
-      if (roundNo >= 10 && roundNo <= 12) return Number.isFinite(Number(r9)) ? Number(r9) : (Number.isFinite(Number(r6)) ? Number(r6) : (Number.isFinite(Number(r3)) ? Number(r3) : p.start_seed_int));
-
-      // R13+ use post-R12
-      return Number.isFinite(Number(r12))
-        ? Number(r12)
-        : (Number.isFinite(Number(r9)) ? Number(r9) : (Number.isFinite(Number(r6)) ? Number(r6) : (Number.isFinite(Number(r3)) ? Number(r3) : p.start_seed_int)));
+    // Build PH per player per roundNo using the computed cumAdjAfter from players
+    // Round 1: start_seed_int
+    // Round n>1: if (n-1) is applied -> PH = rounded(start + cumAdjAfter[n-1])
+    //           else carry forward unchanged
+    const cumAdjAfterFor = (p: ApplebyPlayerRow, appliedRoundNo: number): number => {
+      const v = p.cumAdjAfter?.[appliedRoundNo];
+      return Number.isFinite(Number(v)) ? Number(v) : 0.0;
     };
+
+    const phByPlayerRoundNo: Record<string, Record<number, number>> = {};
+    for (const p of players) phByPlayerRoundNo[p.player_id] = { 1: p.start_seed_int };
+
+    const maxRoundNo = roundsWithNo[roundsWithNo.length - 1].round_no_num;
+
+    for (let n = 2; n <= maxRoundNo; n++) {
+      const prev = n - 1;
+      const prevApplied = appliedRoundNos.includes(prev);
+
+      for (const p of players) {
+        const prevPH = phByPlayerRoundNo[p.player_id]?.[prev] ?? p.start_seed_int;
+
+        if (prevApplied) {
+          const cum = cumAdjAfterFor(p, prev);
+          const ph = Math.max(0, roundHalfUp(p.start_exact_1dp + cum));
+          phByPlayerRoundNo[p.player_id][n] = ph;
+        } else {
+          phByPlayerRoundNo[p.player_id][n] = prevPH;
+        }
+      }
+    }
 
     const payload: Array<{
       round_id: string;
@@ -588,12 +668,13 @@ export async function applyApplebyHandicaps(opts: {
 
     for (const r of roundsWithNo) {
       const rn = r.round_no_num;
+
       for (const p of players) {
         const existing = rpByKey.get(rpKey(r.id, p.player_id));
         const playing = existing?.playing === true;
         const tee = existing?.tee ? normalizeTee(existing.tee) : "M";
 
-        const ph = Math.max(0, Math.floor(getSegmentIntForRoundNo(p, rn)));
+        const ph = Math.max(0, Math.floor(phByPlayerRoundNo[p.player_id]?.[rn] ?? p.start_seed_int));
 
         payload.push({
           round_id: r.id,
