@@ -42,17 +42,15 @@ const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
 const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
 const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
 
+// ✅ New Zealand Golf Tour 2026 hero override (public/tours/NZ 26 logo.webp)
+const NZ_TOUR_2026_ID = "5a80b049-396f-46ec-965e-810e738471b6";
+const NZ_TOUR_2026_HERO = "/tours/NZ 26 logo.webp";
+
 // Only this tour has PDFs for now
-const PDF_TOUR_ID = "5a80b049-396f-46ec-965e-810e738471b6";
+const PDF_TOUR_ID = NZ_TOUR_2026_ID;
 const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
 
-const PDF_FILES = [
-  "itinerary.pdf",
-  "accommodation.pdf",
-  "dining.pdf",
-  "profiles.pdf",
-  "comps.pdf",
-] as const;
+const PDF_FILES = ["itinerary.pdf", "accommodation.pdf", "dining.pdf", "profiles.pdf", "comps.pdf"] as const;
 
 /**
  * ✅ TUNING (your request)
@@ -192,11 +190,7 @@ export default function MobileTourLandingPage() {
       setLoading(true);
 
       const [{ data: t }, { data: r }, { data: d }] = await Promise.all([
-        supabase
-          .from("tours")
-          .select("id,name,start_date,end_date,image_url")
-          .eq("id", tourId)
-          .single(),
+        supabase.from("tours").select("id,name,start_date,end_date,image_url").eq("id", tourId).single(),
         supabase.from("rounds").select("id,tour_id,played_on").eq("tour_id", tourId),
         supabase
           .from("tour_documents")
@@ -220,9 +214,13 @@ export default function MobileTourLandingPage() {
   }, [tourId]);
 
   const heroImage = useMemo(() => {
+    // ✅ Force NZ Tour 2026 to use the WebP hero in /public/tours
+    if (tourId === NZ_TOUR_2026_ID) return NZ_TOUR_2026_HERO;
+
     if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
     if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
     if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
+
     return tour?.image_url?.trim() || DEFAULT_HERO;
   }, [tourId, tour?.image_url, tour?.name]);
 
@@ -448,8 +446,7 @@ export default function MobileTourLandingPage() {
     [startInertia]
   );
 
-  const baseBtn =
-    "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
+  const baseBtn = "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
 
   const rowColors = [
     "bg-blue-100 text-gray-900",
@@ -491,60 +488,142 @@ export default function MobileTourLandingPage() {
 
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
         <div className="grid grid-cols-3 gap-2">
-          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>
-            Daily<br />Tee times
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[0]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}
+          >
+            Daily
+            <br />
+            Tee times
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>
-            Daily<br />Results
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[0]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}
+          >
+            Daily
+            <br />
+            Results
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>
-            Score<br />Entry
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[0]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}
+          >
+            Score
+            <br />
+            Entry
           </button>
 
-          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[1]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}
+          >
             Leaderboards
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/competitions`)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[1]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/competitions`)}
+          >
             Competitions
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/stats`)}>
             Stats
           </button>
 
-          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>
-            Matchplay<br />Format
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[2]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}
+          >
+            Matchplay
+            <br />
+            Format
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>
-            Matchplay<br />Results
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[2]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}
+          >
+            Matchplay
+            <br />
+            Results
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>
-            Matchplay<br />Leaderboard
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[2]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}
+          >
+            Matchplay
+            <br />
+            Leaderboard
           </button>
 
-          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>
-            Tour<br />Details
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[3]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/details`)}
+          >
+            Tour
+            <br />
+            Details
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>
-            Tour<br />Admin
+            Tour
+            <br />
+            Admin
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[3]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}
+          >
             Rehandicapping
           </button>
 
-          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(0)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(0)}
+          >
             {openingDocIdx === 0 ? "Opening…" : "Itinerary"}
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(1)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(1)}
+          >
             {openingDocIdx === 1 ? "Opening…" : "Accommodation"}
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(2)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(2)}
+          >
             {openingDocIdx === 2 ? "Opening…" : "Dining"}
           </button>
 
-          <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(3)}>
-            {openingDocIdx === 3 ? "Opening…" : <>Player<br />Profiles</>}
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(3)}
+          >
+            {openingDocIdx === 3 ? "Opening…" : (
+              <>
+                Player
+                <br />
+                Profiles
+              </>
+            )}
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(4)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(4)}
+          >
             {openingDocIdx === 4 ? "Opening…" : "Comps etc"}
           </button>
 
@@ -553,15 +632,15 @@ export default function MobileTourLandingPage() {
             className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
             onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
           >
-            App<br />User Guide
+            App
+            <br />
+            User Guide
           </button>
         </div>
 
         <div className="pt-6 text-center">
           <div className="text-sm font-semibold text-gray-300">Built by GAC Ventures</div>
-          <div className="text-xs italic tracking-wide text-gray-400">
-            Golf · Analytics · Competition
-          </div>
+          <div className="text-xs italic tracking-wide text-gray-400">Golf · Analytics · Competition</div>
         </div>
       </div>
 
@@ -587,11 +666,7 @@ export default function MobileTourLandingPage() {
               >
                 +
               </button>
-              <button
-                type="button"
-                onClick={closeViewer}
-                className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
-              >
+              <button type="button" onClick={closeViewer} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20">
                 Close
               </button>
             </div>
