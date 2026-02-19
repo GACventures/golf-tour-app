@@ -664,15 +664,16 @@ export default function MatchesLeaderboardPage() {
       total: stablefordTotalForRoundPlayer(roundId, pid),
     }));
 
-    // top 5 (and ties)
-    const target = Math.min(5, totals.length);
-    if (target <= 0) return pointsByPlayer;
+    // ✅ RESTORED: best N/2 (plus ties), where N = all players on the tour
+    const N = allTourPlayerIds.length;
+    const target = Math.floor(N / 2);
 
     totals.sort((a, b) => b.total - a.total);
 
-    const cutoffScore = totals[target - 1]?.total ?? null;
+    if (target <= 0) return pointsByPlayer;
 
-    const above = cutoffScore === null ? [] : totals.filter((x) => x.total > cutoffScore);
+    const above = totals.filter((x) => x.total > (totals[target - 1]?.total ?? -Infinity));
+    const cutoffScore = totals[target - 1]?.total ?? null;
     const atCutoff = cutoffScore === null ? [] : totals.filter((x) => x.total === cutoffScore);
 
     const aboveCount = above.length;
