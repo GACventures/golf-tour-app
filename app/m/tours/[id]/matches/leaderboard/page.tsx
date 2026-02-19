@@ -561,6 +561,8 @@ export default function MatchesLeaderboardPage() {
 
     const mult = settings.double_points ? 2 : 1;
 
+    let usedMatches = 0;
+
     for (const match of matches) {
       const mp = match.match_round_match_players ?? [];
       const a1 = mp.find((x) => x.side === "A" && x.slot === 1)?.player_id ?? null;
@@ -568,22 +570,37 @@ export default function MatchesLeaderboardPage() {
       const b1 = mp.find((x) => x.side === "B" && x.slot === 1)?.player_id ?? null;
       const b2 = mp.find((x) => x.side === "B" && x.slot === 2)?.player_id ?? null;
 
-      // INDIVIDUAL_MATCHPLAY expects a1 and b1
-      // BETTERBALL_MATCHPLAY expects a1,a2,b1,b2
       if (settings.format === "INDIVIDUAL_MATCHPLAY") {
         if (!a1 || !b1) continue;
 
+        usedMatches += 1;
         const res = computeMatchplayResult(roundId, [{ side: "A", playerIds: [a1] }, { side: "B", playerIds: [b1] }]);
-        // win=1 lose=0 tie=0.5
         applyMatchResultPoints(pointsByPlayer, res, mult);
       } else if (settings.format === "BETTERBALL_MATCHPLAY") {
         if (!a1 || !a2 || !b1 || !b2) continue;
 
+        usedMatches += 1;
         const res = computeMatchplayResult(roundId, [
           { side: "A", playerIds: [a1, a2] },
           { side: "B", playerIds: [b1, b2] },
         ]);
         applyMatchResultPoints(pointsByPlayer, res, mult);
+      }
+    }
+
+    // ✅ 4BBB: total available per TEAM for the day is 3 (or 6 if double points),
+    // while still keeping win=1 / tie=0.5 / lose=0 semantics (scaled proportionally).
+    if (settings.format === "BETTERBALL_MATCHPLAY") {
+      if (usedMatches > 0) {
+        // Raw max per team per match = 2 * mult (two players)
+        // Raw max per team for the day = 2 * usedMatches * mult
+        // Desired max per team for the day = 3 * mult
+        // => factor = (3 * mult) / (2 * usedMatches * mult) = 3 / (2 * usedMatches)
+        const factor = 3 / (2 * usedMatches);
+
+        for (const [pid, v] of pointsByPlayer.entries()) {
+          pointsByPlayer.set(pid, v * factor);
+        }
       }
     }
 
@@ -692,18 +709,16 @@ export default function MatchesLeaderboardPage() {
       total: stablefordTotalForRoundPlayer(roundId, pid),
     }));
 
-    // winners target = N/2 where N = all players on tour (your rule)
-    const N = allTourPlayerIds.length;
-    const target = Math.floor(N / 2);
+    // ✅ NEW RULE: points go to top 5 (and ties)
+    const target = Math.min(5, totals.length);
+    if (target <= 0) return pointsByPlayer;
 
     // Sort descending by total
     totals.sort((a, b) => b.total - a.total);
 
-    if (target <= 0) return pointsByPlayer;
-
-    // Determine cutoff at position target (1-indexed)
-    const above = totals.filter((x) => x.total > (totals[target - 1]?.total ?? -Infinity));
     const cutoffScore = totals[target - 1]?.total ?? null;
+
+    const above = cutoffScore === null ? [] : totals.filter((x) => x.total > cutoffScore);
     const atCutoff = cutoffScore === null ? [] : totals.filter((x) => x.total === cutoffScore);
 
     // Points:
