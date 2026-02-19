@@ -50,6 +50,7 @@ const NZ_TOUR_2026_HERO = "/tours/NZ26-logo.webp";
 const PDF_TOUR_ID = NZ_TOUR_2026_ID;
 const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
 
+// IMPORTANT: order matches the buttons below (idx is button -> filename)
 const PDF_FILES = ["itinerary.pdf", "accommodation.pdf", "dining.pdf", "profiles.pdf", "comps.pdf"] as const;
 
 /**
@@ -96,6 +97,15 @@ function formatTourDates(start: Date | null, end: Date | null) {
   if (start) return fmtDate(start);
   if (end) return fmtDate(end);
   return "";
+}
+
+// Prefer DB title that matches the clicked pdf filename, else fall back to filename-derived
+function titleFromFilename(filename: string) {
+  return filename.replace(/\.pdf$/i, "").replace(/[-_]+/g, " ").trim();
+}
+
+function normalizePath(p: string) {
+  return String(p ?? "").trim().replace(/\\/g, "/").toLowerCase();
 }
 
 export default function MobileTourLandingPage() {
@@ -308,8 +318,10 @@ export default function MobileTourLandingPage() {
           return;
         }
 
-        const fallbackTitle = filename.replace(".pdf", "");
-        const title = docs?.[idx]?.title?.trim() || fallbackTitle;
+        // ✅ FIX: title must match the clicked PDF filename (docs[] order can differ)
+        const filenameKey = String(filename).toLowerCase();
+        const match = docs.find((d) => normalizePath(d.storage_path).endsWith(`/${filenameKey}`) || normalizePath(d.storage_path).endsWith(filenameKey));
+        const title = (match?.title ?? "").trim() || titleFromFilename(filename);
 
         stopInertia();
         scrollRatioRef.current = { x: 0, y: 0 };
@@ -448,14 +460,7 @@ export default function MobileTourLandingPage() {
 
   const baseBtn = "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
 
-  const rowColors = [
-    "bg-blue-100 text-gray-900",
-    "bg-blue-200 text-gray-900",
-    "bg-blue-300 text-gray-900",
-    "bg-blue-400 text-white",
-    "bg-blue-500 text-white",
-    "bg-blue-600 text-white",
-  ];
+  const rowColors = ["bg-blue-100 text-gray-900", "bg-blue-200 text-gray-900", "bg-blue-300 text-gray-900", "bg-blue-400 text-white", "bg-blue-500 text-white", "bg-blue-600 text-white"];
 
   // Bigger zoom jumps per tap
   const zoomOut = useCallback(() => {
@@ -555,7 +560,9 @@ export default function MobileTourLandingPage() {
           </button>
 
           <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(3)}>
-            {openingDocIdx === 3 ? "Opening…" : (
+            {openingDocIdx === 3 ? (
+              "Opening…"
+            ) : (
               <>
                 Player
                 <br />
