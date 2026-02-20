@@ -126,13 +126,25 @@ function cmpNullableNum(a: number | null, b: number | null) {
   return a - b;
 }
 
-// 4BBB rounds are 1,4,7,10,13,... (every 3rd starting at 1)
+/**
+ * 4BBB round detection.
+ *
+ * Previously we used a generic pattern: 1,4,7,10,13,... (every 3rd starting at 1).
+ * Correction for NZ Golf Tour 2026 Appleby: Round 9 is the 4BBB day (NOT round 10).
+ *
+ * So:
+ * - Round 9 => 4BBB
+ * - Round 10 => NOT 4BBB
+ * - Otherwise fall back to the original pattern.
+ */
 function is4bbbRound(roundNo: number): boolean {
+  if (!Number.isFinite(roundNo) || roundNo <= 0) return false;
+  if (roundNo === 9) return true;
+  if (roundNo === 10) return false;
   return roundNo >= 1 && (roundNo - 1) % 3 === 0;
 }
 
 // Appleby adjustment is applied after all rounds except 4BBB rounds.
-// We also exclude round 1 explicitly (covered by 4BBB rule anyway).
 function isApplebyAppliedRound(roundNo: number): boolean {
   if (!Number.isFinite(roundNo) || roundNo <= 0) return false;
   return !is4bbbRound(roundNo);
@@ -186,7 +198,7 @@ export async function loadApplebyTourData(opts: {
       if (ca && !cb) return -1;
       if (!ca && cb) return 1;
 
-      return String(a.id).localeCompare(String(b.id));
+      return String(a.id).localeCompare(String(a.id));
     });
 
     const roundsWithNo = rounds
