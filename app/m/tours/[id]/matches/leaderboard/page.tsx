@@ -549,7 +549,8 @@ export default function MatchesLeaderboardPage() {
         if (!a1 || !b1) continue;
 
         const res = computeMatchplayResult(roundId, [{ side: "A", playerIds: [a1] }, { side: "B", playerIds: [b1] }]);
-        applyMatchResultPoints(pointsByPlayer, res, mult);
+        // INDIVIDUAL: win=1 each, tie=0.5 each (then * mult)
+        applyMatchResultPoints(pointsByPlayer, res, mult, 1, 0.5);
       } else if (settings.format === "BETTERBALL_MATCHPLAY") {
         if (!a1 || !a2 || !b1 || !b2) continue;
 
@@ -557,9 +558,8 @@ export default function MatchesLeaderboardPage() {
           { side: "A", playerIds: [a1, a2] },
           { side: "B", playerIds: [b1, b2] },
         ]);
-        // ✅ IMPORTANT: DO NOT SCALE per-player points.
-        // Winners should get 1 (or 2 if double points); ties 0.5 (or 1); losers 0.
-        applyMatchResultPoints(pointsByPlayer, res, mult);
+        // 4BBB: team win=1, each winning player=0.5; tie team=0.5, each player=0.25 (then * mult)
+        applyMatchResultPoints(pointsByPlayer, res, mult, 0.5, 0.25);
       }
     }
 
@@ -629,11 +629,13 @@ export default function MatchesLeaderboardPage() {
   function applyMatchResultPoints(
     pointsByPlayer: Map<string, number>,
     res: { sideAPlayers: string[]; sideBPlayers: string[]; winner: "A" | "B" | "TIE" },
-    mult: number
+    mult: number,
+    winPtsEach: number,
+    tiePtsEach: number
   ) {
     if (res.winner === "TIE") {
-      for (const pid of res.sideAPlayers) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + 0.5 * mult);
-      for (const pid of res.sideBPlayers) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + 0.5 * mult);
+      for (const pid of res.sideAPlayers) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + tiePtsEach * mult);
+      for (const pid of res.sideBPlayers) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + tiePtsEach * mult);
       return;
     }
 
@@ -643,7 +645,7 @@ export default function MatchesLeaderboardPage() {
     const winners = winSide === "A" ? res.sideAPlayers : res.sideBPlayers;
     const losers = loseSide === "A" ? res.sideAPlayers : res.sideBPlayers;
 
-    for (const pid of winners) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + 1 * mult);
+    for (const pid of winners) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + winPtsEach * mult);
     for (const pid of losers) pointsByPlayer.set(pid, (pointsByPlayer.get(pid) || 0) + 0 * mult);
   }
 
@@ -753,12 +755,8 @@ export default function MatchesLeaderboardPage() {
         else if (tm === "B") sumB += v;
       }
 
-      // ✅ 4BBB team points = (sum of its two players' points) / 2
-      if (settings?.format === "BETTERBALL_MATCHPLAY") {
-        sumA = sumA / 2;
-        sumB = sumB / 2;
-      }
-
+      // ✅ Team points are the sum of player points for ALL formats.
+      // For 4BBB this works because each winning player gets 0.5 (team=1), ties 0.25 (team=0.5).
       teamByRound.set(rid, { A: sumA, B: sumB });
       totalByTeam.set("A", (totalByTeam.get("A") || 0) + sumA);
       totalByTeam.set("B", (totalByTeam.get("B") || 0) + sumB);
