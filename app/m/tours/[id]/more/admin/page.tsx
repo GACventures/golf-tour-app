@@ -244,10 +244,7 @@ export default function MobileTourAdminPage() {
           .filter(Boolean) as any[];
 
         // courses limited to those used by rounds in this tour
-        const { data: roundCourseData, error: roundCourseErr } = await supabase
-          .from("rounds")
-          .select("course_id")
-          .eq("tour_id", tourId);
+        const { data: roundCourseData, error: roundCourseErr } = await supabase.from("rounds").select("course_id").eq("tour_id", tourId);
         if (roundCourseErr) throw roundCourseErr;
 
         const courseIds = Array.from(
@@ -473,9 +470,9 @@ export default function MobileTourAdminPage() {
       );
 
       setSaveMsg(
-        `Saved ${updates.length} change${updates.length === 1 ? "" : "s"}. Rehandicapping recalculated and updated ${recalcRes.updated} round_player row${
-          recalcRes.updated === 1 ? "" : "s"
-        }.`
+        `Saved ${updates.length} change${updates.length === 1 ? "" : "s"}. Rehandicapping recalculated and updated ${
+          recalcRes.updated
+        } round_player row${recalcRes.updated === 1 ? "" : "s"}.`
       );
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Save failed.");
@@ -562,7 +559,7 @@ export default function MobileTourAdminPage() {
   }
 
   // -------------------------
-  // Manual tee time editor
+  // Manual tee time editor (groupings)
   // -------------------------
 
   const playerNameById = useMemo(() => {
@@ -843,12 +840,18 @@ export default function MobileTourAdminPage() {
   const chooserBtnActive = "border-gray-900 bg-gray-900 text-white";
   const chooserBtnIdle = "border-gray-200 bg-white text-gray-900";
 
+  const smallBtn =
+    "h-9 rounded-xl border px-3 text-sm font-semibold shadow-sm active:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60";
+  const smallBtnPrimary = `${smallBtn} border-gray-900 bg-gray-900 text-white active:bg-gray-800`;
+  const smallBtnSecondary = `${smallBtn} border-gray-200 bg-white text-gray-900`;
+
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       {/* Header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">Tour Admin</div>
+          {tour?.name ? <div className="mt-0.5 text-xs text-gray-600 truncate">{tour.name}</div> : null}
         </div>
       </div>
 
@@ -944,7 +947,6 @@ export default function MobileTourAdminPage() {
               </>
             ) : activeSection === "course" ? (
               <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                {/* (unchanged) */}
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Course par &amp; stroke index (global)</div>
                 </div>
@@ -1101,14 +1103,269 @@ export default function MobileTourAdminPage() {
               </section>
             ) : (
               <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                {/* (unchanged tee-time section) */}
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Tee time groups (manual)</div>
+                  <div className="mt-1 text-xs text-gray-600">
+                    Build tee-time <span className="font-semibold">groupings</span> for a round (group order + player order). Last saved wins.
+                  </div>
                 </div>
 
                 <div className="p-4 space-y-3">
-                  {/* ... rest unchanged ... */}
-                  {/* Your tee-time code continues exactly as you pasted it */}
+                  {/* Round selector */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-semibold text-gray-700" htmlFor="ttRoundSelect">
+                      Select round
+                    </label>
+                    <select
+                      id="ttRoundSelect"
+                      className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                      value={ttSelectedRoundId}
+                      onChange={(e) => {
+                        const rid = e.target.value;
+                        setTtError("");
+                        setTtMsg("");
+                        setTtGroups([]);
+                        setTtSelectedRoundId(rid);
+                        if (rid && isLikelyUuid(rid)) void loadManualTeeTimes(rid);
+                      }}
+                    >
+                      <option value="">Select a round…</option>
+                      {roundOptions.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {roundLabel(r)}
+                        </option>
+                      ))}
+                    </select>
+
+                    {!ttSelectedRoundId ? (
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                        Choose a round to load/edit tee-time groups.
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {ttLoading ? (
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading groups…</div>
+                  ) : null}
+
+                  {ttError ? (
+                    <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{ttError}</div>
+                  ) : null}
+
+                  {ttMsg ? <div className="text-sm text-green-700">{ttMsg}</div> : null}
+
+                  {/* Controls row */}
+                  <div className="flex items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      onClick={ttAddGroup}
+                      disabled={!ttSelectedRoundId || ttLoading}
+                      className={smallBtnSecondary}
+                    >
+                      + Add group
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={ttSave}
+                      disabled={!ttSelectedRoundId || ttLoading || ttSaving}
+                      className={smallBtnPrimary}
+                    >
+                      {ttSaving ? "Saving…" : "Save groups"}
+                    </button>
+                  </div>
+
+                  {/* Unassigned */}
+                  {ttSelectedRoundId ? (
+                    <div className="rounded-2xl border border-gray-200 bg-white">
+                      <div className="p-3 border-b bg-gray-50 rounded-t-2xl">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-semibold text-gray-900">Unassigned players</div>
+                          <div className="text-xs text-gray-600">
+                            {ttUnassigned.length} player{ttUnassigned.length === 1 ? "" : "s"}
+                          </div>
+                        </div>
+
+                        <div className="mt-2 flex items-center gap-2">
+                          <div className="text-xs text-gray-700 font-semibold">Add to group</div>
+                          <select
+                            className="h-9 rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                            value={String(ttAddTargetGroupNo)}
+                            onChange={(e) => setTtAddTargetGroupNo(Math.max(1, Number(e.target.value)))}
+                            disabled={ttGroups.length === 0}
+                            aria-label="Target group number"
+                          >
+                            {ttGroups.length === 0 ? (
+                              <option value="1">1</option>
+                            ) : (
+                              ttGroups
+                                .slice()
+                                .sort((a, b) => a.groupNo - b.groupNo)
+                                .map((g) => (
+                                  <option key={g.groupNo} value={String(g.groupNo)}>
+                                    {g.groupNo}
+                                  </option>
+                                ))
+                            )}
+                          </select>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (ttGroups.length === 0) ttAddGroup();
+                            }}
+                            className={smallBtnSecondary}
+                          >
+                            {ttGroups.length === 0 ? "Create first group" : "OK"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="p-3 space-y-2">
+                        {ttGroups.length === 0 ? (
+                          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                            Add a group first, then assign players.
+                          </div>
+                        ) : ttUnassigned.length === 0 ? (
+                          <div className="text-sm text-gray-700">All tour players are assigned to a group.</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {ttUnassigned.map((p) => (
+                              <div key={p.id} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 py-2">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => ttAddPlayerToGroup(p.id, ttAddTargetGroupNo)}
+                                  className={smallBtnSecondary}
+                                >
+                                  Add
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Groups */}
+                  {ttSelectedRoundId ? (
+                    <div className="space-y-3">
+                      {ttGroups.length === 0 ? (
+                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                          No groups yet for this round. Click <span className="font-semibold">Add group</span> to begin.
+                        </div>
+                      ) : (
+                        ttGroups
+                          .slice()
+                          .sort((a, b) => a.groupNo - b.groupNo)
+                          .map((g) => {
+                            const canUp = g.groupNo > 1;
+                            const canDown = g.groupNo < ttGroups.length;
+
+                            return (
+                              <div key={g.key} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                                <div className="p-3 border-b bg-gray-50 rounded-t-2xl">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="text-sm font-semibold text-gray-900">Group {g.groupNo}</div>
+
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => ttMoveGroup(g.groupNo, "up")}
+                                        disabled={!canUp}
+                                        className={smallBtnSecondary}
+                                        title="Move group up"
+                                      >
+                                        ↑
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => ttMoveGroup(g.groupNo, "down")}
+                                        disabled={!canDown}
+                                        className={smallBtnSecondary}
+                                        title="Move group down"
+                                      >
+                                        ↓
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => ttDeleteGroup(g.groupNo)}
+                                        className={`${smallBtnSecondary} border-red-200 text-red-700`}
+                                        title="Delete group"
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="mt-1 text-xs text-gray-600">
+                                    {g.playerIds.length} player{g.playerIds.length === 1 ? "" : "s"}
+                                  </div>
+                                </div>
+
+                                <div className="p-3 space-y-2">
+                                  {g.playerIds.length === 0 ? (
+                                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                                      No players assigned yet. Add from the Unassigned list.
+                                    </div>
+                                  ) : (
+                                    g.playerIds.map((pid, idx) => {
+                                      const name = playerNameById.get(pid) ?? "(player)";
+                                      const canUpP = idx > 0;
+                                      const canDownP = idx < g.playerIds.length - 1;
+
+                                      return (
+                                        <div
+                                          key={`${g.key}_${pid}_${idx}`}
+                                          className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 py-2"
+                                        >
+                                          <div className="min-w-0">
+                                            <div className="truncate text-sm font-semibold text-gray-900">{name}</div>
+                                            <div className="text-[11px] text-gray-500">Seat {idx + 1}</div>
+                                          </div>
+
+                                          <div className="flex items-center gap-2">
+                                            <button
+                                              type="button"
+                                              onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "up")}
+                                              disabled={!canUpP}
+                                              className={smallBtnSecondary}
+                                              title="Move player up"
+                                            >
+                                              ↑
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => ttMovePlayerWithinGroup(g.groupNo, pid, "down")}
+                                              disabled={!canDownP}
+                                              className={smallBtnSecondary}
+                                              title="Move player down"
+                                            >
+                                              ↓
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => ttRemovePlayer(g.groupNo, pid)}
+                                              className={`${smallBtnSecondary} border-red-200 text-red-700`}
+                                              title="Remove player from group"
+                                            >
+                                              Remove
+                                            </button>
+                                          </div>
+                                        </div>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               </section>
             )}
