@@ -148,8 +148,6 @@ type HoleFxState =
   | { stage: "in"; dir: "next" | "prev" };
 
 // --- shots given helper ---
-// For handicap >= 0: standard allocation by SI (1..18)
-// For handicap < 0: "plus" handicap => negative shots on easiest holes (SI high)
 function shotsGivenForHole(playingHandicap: number, strokeIndex: number): number {
   const hcp = Number.isFinite(Number(playingHandicap)) ? Number(playingHandicap) : 0;
   const si = Number.isFinite(Number(strokeIndex)) ? Number(strokeIndex) : 0;
@@ -203,11 +201,10 @@ export default function MobileScoreEntryAltPage() {
   const [holeFx, setHoleFx] = useState<HoleFxState>({ stage: "idle", dir: null });
   const fxTimerRef = useRef<number | null>(null);
 
-  // Hole number pulse state (for HOLE box)
+  // Hole number pulse state
   const [holePulse, setHolePulse] = useState<"idle" | "up" | "down">("idle");
   const pulseTimerRef = useRef<number | null>(null);
 
-  // Tweakable timings
   const SWIPE_MS = 420;
   const PULSE_UP_MS = 140;
   const PULSE_HOLD_MS = 120;
@@ -219,7 +216,6 @@ export default function MobileScoreEntryAltPage() {
       fxTimerRef.current = null;
     }
   }
-
   function clearPulseTimer() {
     if (pulseTimerRef.current) {
       window.clearTimeout(pulseTimerRef.current);
@@ -266,24 +262,16 @@ export default function MobileScoreEntryAltPage() {
     const base = `transform ${SWIPE_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)`;
     const off = "105%";
 
-    if (holeFx.stage === "idle") {
-      return { transform: "translateX(0)", transition: base, willChange: "transform" };
-    }
-
+    if (holeFx.stage === "idle") return { transform: "translateX(0)", transition: base, willChange: "transform" };
     if (holeFx.stage === "out") {
       const x = holeFx.dir === "next" ? `-${off}` : off;
       return { transform: `translateX(${x})`, transition: base, willChange: "transform" };
     }
-
     if (holeFx.stage === "inSnap") {
       const x = holeFx.dir === "next" ? off : `-${off}`;
       return { transform: `translateX(${x})`, transition: "none", willChange: "transform" };
     }
-
-    if (holeFx.stage === "in") {
-      return { transform: "translateX(0)", transition: base, willChange: "transform" };
-    }
-
+    if (holeFx.stage === "in") return { transform: "translateX(0)", transition: base, willChange: "transform" };
     return { transform: "translateX(0)", transition: base, willChange: "transform" };
   }, [holeFx, SWIPE_MS]);
 
@@ -834,15 +822,30 @@ export default function MobileScoreEntryAltPage() {
 
   // --- UI helpers ---
 
-  // ✅ One-row hole info (compact)
+  // One-row hole info (compact)
   function HoleRowEntryOnly() {
+    const holeScale = holePulse === "up" ? 1.12 : holePulse === "down" ? 1.0 : 1.0;
+    const holeStyle: React.CSSProperties = {
+      transform: `scale(${holeScale})`,
+      transition:
+        holePulse === "up"
+          ? `transform ${PULSE_UP_MS}ms ease-out`
+          : holePulse === "down"
+            ? `transform ${PULSE_DOWN_MS}ms ease-in`
+            : "none",
+      transformOrigin: "center",
+      willChange: "transform",
+    };
+
     return (
       <div className="px-4 pb-2">
         <div className="rounded-xl border border-slate-300 bg-white px-3 py-2">
           <div className="flex items-center justify-between gap-2 text-slate-900">
             <div className="flex items-center gap-2">
               <div className="text-xs font-extrabold tracking-wide text-slate-600">HOLE</div>
-              <div className="text-2xl font-black leading-none">{hole}</div>
+              <div className="text-2xl font-black leading-none" style={holeStyle}>
+                {hole}
+              </div>
             </div>
 
             <div className="flex items-center gap-3 text-[11px] text-slate-700">
@@ -1015,15 +1018,22 @@ export default function MobileScoreEntryAltPage() {
     const grossDisplay = pickup ? "P" : raw && raw !== "P" ? raw : "—";
     const prefixOn = prefix1ByPid[pid] === true;
 
-    // ✅ much more distinctive backgrounds
-    const outerBg = isBuddy ? "bg-emerald-200 border-emerald-300" : "bg-indigo-200 border-indigo-300";
-    const headerClass = isBuddy ? "bg-emerald-700" : "bg-indigo-700";
+    // Distinct section backgrounds (player 1 vs player 2)
+    const sectionBg = isBuddy ? "bg-emerald-200 border-emerald-300" : "bg-indigo-200 border-indigo-300";
 
-    // keypad palette (par highlight stays)
-    const keypadBg = isBuddy ? "bg-emerald-100 border-emerald-300" : "bg-indigo-100 border-indigo-300";
-    const btnBase = isBuddy ? "border-emerald-300" : "border-indigo-300";
-    const btnBg = isBuddy ? "bg-emerald-50" : "bg-indigo-50";
-    const btnText = "text-slate-900";
+    // ✅ Name box colours by tee (M=pale blue, F=pink)
+    const nameHeader =
+      tee === "F"
+        ? "bg-pink-200 text-slate-900 border-pink-300"
+        : "bg-sky-200 text-slate-900 border-sky-300";
+
+    // ✅ Keypad panel colours by tee (similar to name header)
+    const keypadPanel =
+      tee === "F" ? "bg-pink-100 border-pink-300" : "bg-sky-100 border-sky-300";
+
+    // Button base (also tee-themed)
+    const btnBaseBorder = tee === "F" ? "border-pink-300" : "border-sky-300";
+    const btnBaseBg = tee === "F" ? "bg-pink-50" : "bg-sky-50";
 
     const parShade = "bg-amber-200 border-amber-400 text-slate-900";
 
@@ -1037,7 +1047,7 @@ export default function MobileScoreEntryAltPage() {
           className={[
             "h-14 rounded-xl border text-xl font-black active:scale-[0.99] disabled:opacity-50",
             wide ? "col-span-2" : "",
-            shaded ? parShade : `${btnBg} ${btnBase} ${btnText}`,
+            shaded ? parShade : `${btnBaseBg} ${btnBaseBorder} text-slate-900`,
           ].join(" ")}
         >
           {text}
@@ -1045,59 +1055,74 @@ export default function MobileScoreEntryAltPage() {
       );
     }
 
-    function StatRow(props2: { label: string; value: React.ReactNode }) {
-      // ✅ aligned boxes by using fixed width on the value cell
+    // ✅ Align stat value boxes to the RIGHT edge of the keypad
+    // We do that by making each stat row a "justify-between" flex row
+    // inside the same px-3 container used by keypad.
+    function StatRow(props2: { label: string; value: React.ReactNode; variant?: "normal" | "black" }) {
+      const variant = props2.variant ?? "normal";
+      const valueBox =
+        variant === "black"
+          ? "bg-black text-white border-black"
+          : "bg-white text-slate-900 border-slate-300";
+
       return (
-        <div className="grid grid-cols-[1fr_96px] items-center gap-3">
+        <div className="flex items-center justify-between gap-3">
           <div className="text-sm font-extrabold text-slate-700">{props2.label}</div>
-          <div className="w-[96px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-center">
-            <div className="text-2xl font-black text-slate-900 leading-tight">{props2.value}</div>
+
+          {/* fixed width, right-aligned; right edge matches keypad right edge */}
+          <div className={`w-[108px] rounded-xl border px-3 py-2 text-center ${valueBox}`}>
+            <div className="text-2xl font-black leading-tight">{props2.value}</div>
           </div>
         </div>
       );
     }
 
     return (
-      <div className={`rounded-2xl border shadow-sm overflow-hidden ${outerBg}`}>
+      <div className={`rounded-2xl border shadow-sm overflow-hidden ${sectionBg}`}>
         <div className="rounded-2xl overflow-hidden bg-white/75">
-          <div className={`${headerClass} px-3 py-2 text-white text-sm font-bold text-center`}>
+          {/* Name/tee header: pale blue (M) / pink (F) */}
+          <div className={`px-3 py-2 text-sm font-extrabold text-center border-b ${nameHeader}`}>
             <div className="truncate">
-              {label} <span className="opacity-90">(HC: {hcp} · Tee: {tee})</span>
+              {label} <span className="opacity-80">(HC: {hcp} · Tee: {tee})</span>
             </div>
           </div>
 
           <div className="p-3 space-y-3">
-            {/* Shots/Strokes stack */}
+            {/* Shots/Strokes stack (strokes box black) */}
             <div className="rounded-xl border border-slate-300 bg-white px-3 py-3 space-y-2">
               <StatRow label="Shots" value={Number.isFinite(shotsGiven) ? shotsGiven : 0} />
-              <StatRow label="Strokes" value={grossDisplay} />
+              <StatRow label="Strokes" value={grossDisplay} variant="black" />
             </div>
 
-            {/* keypad with colour */}
-            <div className={`rounded-xl border ${keypadBg} px-3 py-3`}>
+            {/* Keypad (numbers corrected) */}
+            <div className={`rounded-xl border px-3 py-3 ${keypadPanel}`}>
               <div className="text-xs font-extrabold text-slate-700 mb-2 text-center">STROKES</div>
 
               <div className="grid grid-cols-3 gap-2">
+                {/* Row 1: 1 2 3 */}
+                <KeyButton text="1" onClick={() => pressDigit(pid, 1)} shaded={par === 1} disabled={isLocked} />
                 <KeyButton text="2" onClick={() => pressDigit(pid, 2)} shaded={par === 2} disabled={isLocked} />
                 <KeyButton text="3" onClick={() => pressDigit(pid, 3)} shaded={par === 3} disabled={isLocked} />
-                <KeyButton text="4" onClick={() => pressDigit(pid, 4)} shaded={par === 4} disabled={isLocked} />
 
+                {/* Row 2: 4 5 6 */}
+                <KeyButton text="4" onClick={() => pressDigit(pid, 4)} shaded={par === 4} disabled={isLocked} />
                 <KeyButton text="5" onClick={() => pressDigit(pid, 5)} shaded={par === 5} disabled={isLocked} />
                 <KeyButton text="6" onClick={() => pressDigit(pid, 6)} shaded={par === 6} disabled={isLocked} />
-                <KeyButton text="7" onClick={() => pressDigit(pid, 7)} shaded={par === 7} disabled={isLocked} />
 
+                {/* Row 3: 7 8 9 */}
+                <KeyButton text="7" onClick={() => pressDigit(pid, 7)} shaded={par === 7} disabled={isLocked} />
                 <KeyButton text="8" onClick={() => pressDigit(pid, 8)} shaded={par === 8} disabled={isLocked} />
                 <KeyButton text="9" onClick={() => pressDigit(pid, 9)} shaded={par === 9} disabled={isLocked} />
-                <KeyButton text="1" onClick={() => pressDigit(pid, 1)} shaded={par === 1} disabled={isLocked} />
 
+                {/* Row 4 unchanged: 1- 0 P */}
                 <button
                   type="button"
                   onClick={() => pressPrefix1(pid)}
                   disabled={isLocked}
                   className={[
                     "h-14 rounded-xl border text-xl font-black active:scale-[0.99] disabled:opacity-50",
-                    btnBase,
-                    prefixOn ? "bg-slate-900 text-white border-slate-900" : `${btnBg} ${btnText}`,
+                    btnBaseBorder,
+                    prefixOn ? "bg-slate-900 text-white border-slate-900" : `${btnBaseBg} text-slate-900`,
                   ].join(" ")}
                 >
                   1-
@@ -1111,15 +1136,15 @@ export default function MobileScoreEntryAltPage() {
                   disabled={isLocked}
                   className={[
                     "h-14 rounded-xl border text-xl font-black active:scale-[0.99] disabled:opacity-50",
-                    btnBase,
-                    pickup ? "bg-slate-900 text-white border-slate-900" : `${btnBg} ${btnText}`,
+                    btnBaseBorder,
+                    pickup ? "bg-slate-900 text-white border-slate-900" : `${btnBaseBg} text-slate-900`,
                   ].join(" ")}
                 >
                   P
                 </button>
               </div>
 
-              {/* ✅ keep Clear hole, remove other text */}
+              {/* keep Clear hole only */}
               <div className="mt-2 flex justify-start text-xs text-slate-700">
                 <button type="button" className="underline" onClick={() => clearHole(pid)} disabled={isLocked}>
                   Clear hole
@@ -1127,7 +1152,7 @@ export default function MobileScoreEntryAltPage() {
               </div>
             </div>
 
-            {/* stableford below keypad */}
+            {/* Stableford below keypad: hole black, total grey */}
             <div className="rounded-xl border border-slate-300 bg-white px-3 py-2">
               <div className="text-xs font-extrabold tracking-wide text-slate-600 text-center">STABLEFORD POINTS</div>
 
@@ -1137,7 +1162,7 @@ export default function MobileScoreEntryAltPage() {
 
                 <button
                   type="button"
-                  className="rounded-lg border border-slate-300 bg-slate-50 py-2 text-2xl font-black text-slate-900"
+                  className="rounded-lg border border-black bg-black py-2 text-2xl font-black text-white"
                   disabled
                 >
                   {holePts}
@@ -1145,7 +1170,7 @@ export default function MobileScoreEntryAltPage() {
 
                 <button
                   type="button"
-                  className="rounded-lg border border-slate-900 bg-slate-900 py-2 text-2xl font-black text-white active:scale-[0.99]"
+                  className="rounded-lg border border-slate-400 bg-slate-300 py-2 text-2xl font-black text-slate-900 active:scale-[0.99]"
                   onClick={() => openInPageSummaryFor(pid)}
                   aria-label="Open summary"
                 >
@@ -1225,7 +1250,7 @@ export default function MobileScoreEntryAltPage() {
 
       {tab === "entry" ? <HoleRowEntryOnly /> : <SummaryPlayerToggleTop />}
 
-      {/* ✅ remove visible Entry/Summary wording block (no tabs) */}
+      {/* no Entry/Summary tab UI */}
 
       <div
         className="px-4 py-3 space-y-3 overflow-y-auto"
