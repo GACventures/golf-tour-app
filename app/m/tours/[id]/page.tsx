@@ -4,9 +4,10 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-// PDF.js (worker served from /public)
-import * as pdfjsLib from "pdfjs-dist";
-(pdfjsLib as any).GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+// ✅ IMPORTANT:
+// Do NOT import pdfjs-dist at module scope.
+// It can evaluate code that uses DOMMatrix during SSR / build and crash.
+// We'll dynamically import it only when the viewer is opened / rendered.
 
 type TourRow = {
   id: string;
@@ -149,6 +150,9 @@ export default function MobileTourLandingPage() {
   // Preserve scroll position proportionally when zoom changes
   const scrollRatioRef = useRef<{ x: number; y: number } | null>(null);
 
+  // ✅ Hold the pdfjs module once loaded (client only)
+  const pdfjsRef = useRef<any>(null);
+
   const stopInertia = useCallback(() => {
     if (inertiaRafRef.current != null) {
       cancelAnimationFrame(inertiaRafRef.current);
@@ -245,6 +249,23 @@ export default function MobileTourLandingPage() {
   const end = parseDate(tour?.end_date || derivedDates.end);
   const dateLabel = formatTourDates(start, end);
 
+  // ✅ Lazy-load PDF.js only when we actually need to render.
+  async function getPdfJs(): Promise<any> {
+    if (pdfjsRef.current) return pdfjsRef.current;
+
+    // Dynamic import ensures this only runs in the browser (client component runtime)
+    const mod = await import("pdfjs-dist");
+    const pdfjs = (mod as any).default ?? mod;
+
+    // worker served from /public
+    try {
+      (pdfjs as any).GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+    } catch {}
+
+    pdfjsRef.current = pdfjs;
+    return pdfjs;
+  }
+
   // Load + render first page whenever viewerSrc or zoom changes
   useEffect(() => {
     let cancelled = false;
@@ -258,7 +279,10 @@ export default function MobileTourLandingPage() {
       setRendering(true);
 
       try {
-        const loadingTask = (pdfjsLib as any).getDocument(viewerSrc);
+        const pdfjs = await getPdfJs();
+        if (cancelled) return;
+
+        const loadingTask = (pdfjs as any).getDocument(viewerSrc);
         const pdf = await loadingTask.promise;
         if (cancelled) return;
 
@@ -320,7 +344,11 @@ export default function MobileTourLandingPage() {
 
         // ✅ FIX: title must match the clicked PDF filename (docs[] order can differ)
         const filenameKey = String(filename).toLowerCase();
-        const match = docs.find((d) => normalizePath(d.storage_path).endsWith(`/${filenameKey}`) || normalizePath(d.storage_path).endsWith(filenameKey));
+        const match = docs.find(
+          (d) =>
+            normalizePath(d.storage_path).endsWith(`/${filenameKey}`) ||
+            normalizePath(d.storage_path).endsWith(filenameKey)
+        );
         const title = (match?.title ?? "").trim() || titleFromFilename(filename);
 
         stopInertia();
@@ -460,7 +488,14 @@ export default function MobileTourLandingPage() {
 
   const baseBtn = "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
 
-  const rowColors = ["bg-blue-100 text-gray-900", "bg-blue-200 text-gray-900", "bg-blue-300 text-gray-900", "bg-blue-400 text-white", "bg-blue-500 text-white", "bg-blue-600 text-white"];
+  const rowColors = [
+    "bg-blue-100 text-gray-900",
+    "bg-blue-200 text-gray-900",
+    "bg-blue-300 text-gray-900",
+    "bg-blue-400 text-white",
+    "bg-blue-500 text-white",
+    "bg-blue-600 text-white",
+  ];
 
   // Bigger zoom jumps per tap
   const zoomOut = useCallback(() => {
@@ -493,17 +528,29 @@ export default function MobileTourLandingPage() {
 
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
         <div className="grid grid-cols-3 gap-2">
-          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[0]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}
+          >
             Daily
             <br />
             Tee times
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[0]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}
+          >
             Daily
             <br />
             Results
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[0]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}
+          >
             Score
             <br />
             Entry
@@ -597,10 +644,20 @@ export default function MobileTourLandingPage() {
           <div className="flex items-center justify-between px-4 py-3 bg-black/90">
             <div className="text-white text-sm font-semibold truncate">{viewerTitle}</div>
             <div className="flex items-center gap-2">
-              <button type="button" onClick={zoomOut} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20" disabled={rendering}>
+              <button
+                type="button"
+                onClick={zoomOut}
+                className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
+                disabled={rendering}
+              >
                 −
               </button>
-              <button type="button" onClick={zoomIn} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20" disabled={rendering}>
+              <button
+                type="button"
+                onClick={zoomIn}
+                className="text-white text-sm px-3 py-2 rounded-lg border border-white/20"
+                disabled={rendering}
+              >
                 +
               </button>
               <button type="button" onClick={closeViewer} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20">
