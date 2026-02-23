@@ -528,7 +528,6 @@ export default function MobileScoreEntryAltPage() {
 
   function togglePickup(pid: string, holeNumber: number) {
     const raw = scores[pid]?.[holeNumber] ?? "";
-    // pickup is stored as "P" in local state (same as classic input)
     setRaw(pid, holeNumber, raw === "P" ? "" : "P");
     setPrefix1ByPid((prev) => ({ ...prev, [pid]: false }));
   }
@@ -634,7 +633,6 @@ export default function MobileScoreEntryAltPage() {
         if (error) throw error;
       }
 
-      // Keep existing rehandicap behaviour (logic unchanged), but no on-screen diagnostics
       try {
         const tid = await fetchTourIdForRound(roundId);
         if (tid) {
@@ -795,13 +793,10 @@ export default function MobileScoreEntryAltPage() {
   }
 
   function handleBack() {
-    // If user is on Summary tab, go back to Entry tab instead of leaving the page
     if (tab === "summary") {
       setTab("entry");
       return;
     }
-
-    // Otherwise (Entry tab), use the existing behaviour
     goBackToSelect();
   }
 
@@ -818,7 +813,6 @@ export default function MobileScoreEntryAltPage() {
     const cur = normalizeRawInput(scores[pid]?.[hole] ?? "");
     if (cur === "P") {
       // overwrite pickup if user starts entering a number
-      // (same as classic feel)
     }
 
     const usePrefix = prefix1ByPid[pid] === true;
@@ -838,7 +832,6 @@ export default function MobileScoreEntryAltPage() {
 
     const usePrefix = prefix1ByPid[pid] === true;
     if (usePrefix) {
-      // 1- then 0 => 10
       setRaw(pid, hole, "10");
       setPrefix1ByPid((prev) => ({ ...prev, [pid]: false }));
       return;
@@ -1049,16 +1042,9 @@ export default function MobileScoreEntryAltPage() {
     const prefixOn = prefix1ByPid[pid] === true;
 
     const headerClass = teeForPlayer(pid) === "F" ? "bg-pink-500" : "bg-sky-600";
-
     const parShade = "bg-amber-200 border-amber-400 text-slate-900";
 
-    function KeyButton(props2: {
-      text: string;
-      onClick: () => void;
-      shaded?: boolean;
-      disabled?: boolean;
-      wide?: boolean;
-    }) {
+    function KeyButton(props2: { text: string; onClick: () => void; shaded?: boolean; disabled?: boolean; wide?: boolean }) {
       const { text, onClick, shaded, disabled, wide } = props2;
       return (
         <button
@@ -1076,162 +1062,121 @@ export default function MobileScoreEntryAltPage() {
       );
     }
 
-    return (
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-        <div className={`${headerClass} px-3 py-2 text-white text-sm font-bold text-center`}>
-          <div className="truncate">
-            {label} <span className="opacity-90">(HC: {hcp} · Tee: {tee})</span>
+    function StatRow(props2: { label: string; value: React.ReactNode }) {
+      return (
+        <div className="grid grid-cols-[1fr_auto] items-center gap-3">
+          <div className="text-sm font-bold text-slate-700">{props2.label}</div>
+          <div className="min-w-[88px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-center">
+            <div className="text-2xl font-black text-slate-900 leading-tight">{props2.value}</div>
           </div>
         </div>
+      );
+    }
 
-        <div className="p-3 space-y-3">
-          {/* Shots + Strokes row */}
-          <div className="flex items-center justify-center gap-4">
-            <div className="w-[120px] rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-center">
-              <div className="text-xs font-bold text-slate-600">Shots</div>
-              <div className="text-2xl font-black text-slate-900">{Number.isFinite(shotsGiven) ? shotsGiven : 0}</div>
-            </div>
-
-            <div className="w-[120px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-center">
-              <div className="text-xs font-bold text-slate-600">Strokes</div>
-              <div className="text-2xl font-black text-slate-900">{grossDisplay}</div>
-            </div>
-          </div>
-
-          {/* Stableford points block */}
-          <div className="rounded-xl border border-slate-300 bg-white px-3 py-2">
-            <div className="text-xs font-bold tracking-wide text-slate-600 text-center">STABLEFORD POINTS</div>
-
-            <div className="mt-2 grid grid-cols-2 gap-2 text-center">
-              <div className="text-[11px] font-bold text-slate-600">Hole</div>
-              <div className="text-[11px] font-bold text-slate-600">Total</div>
-
-              <button
-                type="button"
-                className="rounded-lg border border-slate-300 bg-slate-50 py-2 text-2xl font-black text-slate-900"
-                onClick={() => {
-                  // no-op: hole points display only
-                }}
-                disabled
-              >
-                {holePts}
-              </button>
-
-              <button
-                type="button"
-                className="rounded-lg border border-slate-900 bg-slate-900 py-2 text-2xl font-black text-white active:scale-[0.99]"
-                onClick={() => openInPageSummaryFor(pid)}
-                aria-label="Open summary"
-              >
-                {totalPts}
-              </button>
+    return (
+      // ✅ tinted background container per player (helps visually group data)
+      <div
+        className={[
+          "rounded-2xl border shadow-sm overflow-hidden",
+          isBuddy ? "border-emerald-200 bg-emerald-50" : "border-sky-200 bg-sky-50",
+        ].join(" ")}
+      >
+        {/* inner card */}
+        <div className="rounded-2xl overflow-hidden bg-white/70">
+          <div className={`${headerClass} px-3 py-2 text-white text-sm font-bold text-center`}>
+            <div className="truncate">
+              {label} <span className="opacity-90">(HC: {hcp} · Tee: {tee})</span>
             </div>
           </div>
 
-          {/* keypad */}
-          <div>
-            <div className="text-xs font-bold text-slate-600 mb-2 text-center">STROKES</div>
-
-            <div className="grid grid-cols-3 gap-2">
-              <KeyButton
-                text="2"
-                onClick={() => pressDigit(pid, 2)}
-                shaded={par === 2}
-                disabled={isLocked}
-              />
-              <KeyButton
-                text="3"
-                onClick={() => pressDigit(pid, 3)}
-                shaded={par === 3}
-                disabled={isLocked}
-              />
-              <KeyButton
-                text="4"
-                onClick={() => pressDigit(pid, 4)}
-                shaded={par === 4}
-                disabled={isLocked}
-              />
-
-              <KeyButton
-                text="5"
-                onClick={() => pressDigit(pid, 5)}
-                shaded={par === 5}
-                disabled={isLocked}
-              />
-              <KeyButton
-                text="6"
-                onClick={() => pressDigit(pid, 6)}
-                shaded={par === 6}
-                disabled={isLocked}
-              />
-              <KeyButton
-                text="7"
-                onClick={() => pressDigit(pid, 7)}
-                shaded={par === 7}
-                disabled={isLocked}
-              />
-
-              <KeyButton
-                text="8"
-                onClick={() => pressDigit(pid, 8)}
-                shaded={par === 8}
-                disabled={isLocked}
-              />
-              <KeyButton
-                text="9"
-                onClick={() => pressDigit(pid, 9)}
-                shaded={par === 9}
-                disabled={isLocked}
-              />
-              <KeyButton
-                text="1"
-                onClick={() => pressDigit(pid, 1)}
-                shaded={par === 1}
-                disabled={isLocked}
-              />
-
-              <button
-                type="button"
-                onClick={() => pressPrefix1(pid)}
-                disabled={isLocked}
-                className={[
-                  "h-14 rounded-xl border text-xl font-black active:scale-[0.99] disabled:opacity-50",
-                  prefixOn ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-300 text-slate-900",
-                ].join(" ")}
-              >
-                1-
-              </button>
-
-              <KeyButton
-                text="0"
-                onClick={() => pressZero(pid)}
-                shaded={par === 0}
-                disabled={isLocked}
-              />
-
-              <button
-                type="button"
-                onClick={() => togglePickup(pid, hole)}
-                disabled={isLocked}
-                className={[
-                  "h-14 rounded-xl border text-xl font-black active:scale-[0.99] disabled:opacity-50",
-                  pickup ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-300 text-slate-900",
-                ].join(" ")}
-              >
-                P
-              </button>
+          <div className="p-3 space-y-3">
+            {/* ✅ Shots then box, then Strokes then box (stacked rows) */}
+            <div className="rounded-xl border border-slate-300 bg-white px-3 py-3 space-y-2">
+              <StatRow label="Shots" value={Number.isFinite(shotsGiven) ? shotsGiven : 0} />
+              <StatRow label="Strokes" value={grossDisplay} />
             </div>
 
-            <div className="mt-2 flex justify-between text-xs text-slate-600">
-              <button type="button" className="underline" onClick={() => clearHole(pid)} disabled={isLocked}>
-                Clear hole
-              </button>
+            {/* keypad */}
+            <div>
+              <div className="text-xs font-bold text-slate-600 mb-2 text-center">STROKES</div>
 
-              {isBuddy ? (
-                <span className="text-slate-500">Buddy = cross-check only</span>
-              ) : (
-                <span className="text-slate-500">Me = official</span>
-              )}
+              <div className="grid grid-cols-3 gap-2">
+                <KeyButton text="2" onClick={() => pressDigit(pid, 2)} shaded={par === 2} disabled={isLocked} />
+                <KeyButton text="3" onClick={() => pressDigit(pid, 3)} shaded={par === 3} disabled={isLocked} />
+                <KeyButton text="4" onClick={() => pressDigit(pid, 4)} shaded={par === 4} disabled={isLocked} />
+
+                <KeyButton text="5" onClick={() => pressDigit(pid, 5)} shaded={par === 5} disabled={isLocked} />
+                <KeyButton text="6" onClick={() => pressDigit(pid, 6)} shaded={par === 6} disabled={isLocked} />
+                <KeyButton text="7" onClick={() => pressDigit(pid, 7)} shaded={par === 7} disabled={isLocked} />
+
+                <KeyButton text="8" onClick={() => pressDigit(pid, 8)} shaded={par === 8} disabled={isLocked} />
+                <KeyButton text="9" onClick={() => pressDigit(pid, 9)} shaded={par === 9} disabled={isLocked} />
+                <KeyButton text="1" onClick={() => pressDigit(pid, 1)} shaded={par === 1} disabled={isLocked} />
+
+                <button
+                  type="button"
+                  onClick={() => pressPrefix1(pid)}
+                  disabled={isLocked}
+                  className={[
+                    "h-14 rounded-xl border text-xl font-black active:scale-[0.99] disabled:opacity-50",
+                    prefixOn ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-300 text-slate-900",
+                  ].join(" ")}
+                >
+                  1-
+                </button>
+
+                <KeyButton text="0" onClick={() => pressZero(pid)} shaded={par === 0} disabled={isLocked} />
+
+                <button
+                  type="button"
+                  onClick={() => togglePickup(pid, hole)}
+                  disabled={isLocked}
+                  className={[
+                    "h-14 rounded-xl border text-xl font-black active:scale-[0.99] disabled:opacity-50",
+                    pickup ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-300 text-slate-900",
+                  ].join(" ")}
+                >
+                  P
+                </button>
+              </div>
+
+              <div className="mt-2 flex justify-between text-xs text-slate-600">
+                <button type="button" className="underline" onClick={() => clearHole(pid)} disabled={isLocked}>
+                  Clear hole
+                </button>
+
+                {isBuddy ? <span className="text-slate-500">Buddy = cross-check only</span> : <span className="text-slate-500">Me = official</span>}
+              </div>
+            </div>
+
+            {/* ✅ Stableford points block moved BELOW keypad */}
+            <div className="rounded-xl border border-slate-300 bg-white px-3 py-2">
+              <div className="text-xs font-bold tracking-wide text-slate-600 text-center">STABLEFORD POINTS</div>
+
+              <div className="mt-2 grid grid-cols-2 gap-2 text-center">
+                <div className="text-[11px] font-bold text-slate-600">Hole</div>
+                <div className="text-[11px] font-bold text-slate-600">Total</div>
+
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-300 bg-slate-50 py-2 text-2xl font-black text-slate-900"
+                  onClick={() => {
+                    // no-op: hole points display only
+                  }}
+                  disabled
+                >
+                  {holePts}
+                </button>
+
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-900 bg-slate-900 py-2 text-2xl font-black text-white active:scale-[0.99]"
+                  onClick={() => openInPageSummaryFor(pid)}
+                  aria-label="Open summary"
+                >
+                  {totalPts}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1287,16 +1232,12 @@ export default function MobileScoreEntryAltPage() {
 
   return (
     <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden">
-      {/* top bar */}
-      <div className="h-14 px-4 flex items-center justify-between border-b border-slate-200">
-        <button
-          type="button"
-          className="flex items-center gap-2 text-lg font-bold text-slate-900"
-          onClick={handleBack}
-          aria-label="Back"
-        >
-          <span className="text-2xl leading-none">‹</span>
-          <span>Back</span>
+      {/* ✅ NO standard header/top bar */}
+
+      {/* lightweight in-page controls (not a header) */}
+      <div className="px-4 pt-3 pb-1 flex items-center justify-between">
+        <button type="button" className="text-sm font-bold text-slate-900 underline" onClick={handleBack} aria-label="Back">
+          Back
         </button>
 
         <button
@@ -1311,7 +1252,7 @@ export default function MobileScoreEntryAltPage() {
 
       {tab === "entry" ? <HoleBoxEntryOnly /> : <SummaryPlayerToggleTop />}
 
-      {/* tabs (same as classic) */}
+      {/* tabs */}
       <div className="px-4">
         <div className="rounded-md border border-slate-300 overflow-hidden flex bg-white">
           <button
@@ -1334,7 +1275,7 @@ export default function MobileScoreEntryAltPage() {
       {/* content */}
       <div
         className="px-4 py-3 space-y-3 overflow-y-auto"
-        style={{ height: "calc(100dvh - 56px - 84px)" }}
+        style={{ height: "calc(100dvh - 12px - 44px - 84px)" }}
         onTouchStart={tab === "entry" ? onTouchStart : undefined}
         onTouchEnd={tab === "entry" ? onTouchEnd : undefined}
       >
