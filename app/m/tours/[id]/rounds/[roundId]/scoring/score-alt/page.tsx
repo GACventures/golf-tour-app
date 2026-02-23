@@ -156,13 +156,10 @@ function shotsGivenForHole(playingHandicap: number, strokeIndex: number): number
   if (!si || si < 1 || si > 18) return 0;
 
   if (hcp >= 0) {
-    // e.g. 18 => 1 each hole; 36 => 2 each hole; 8 with SI 12 => 0
     return Math.floor((hcp + 18 - si) / 18);
   }
 
-  // plus handicap: negative shots on easiest holes (higher SI)
   const abs = Math.abs(hcp);
-  // e.g. hcp=-2 => -1 on SI 17-18
   return -Math.floor((abs + si - 1) / 18);
 }
 
@@ -210,7 +207,7 @@ export default function MobileScoreEntryAltPage() {
   const [holePulse, setHolePulse] = useState<"idle" | "up" | "down">("idle");
   const pulseTimerRef = useRef<number | null>(null);
 
-  // Tweakable timings (same feel as classic)
+  // Tweakable timings
   const SWIPE_MS = 420;
   const PULSE_UP_MS = 140;
   const PULSE_HOLD_MS = 120;
@@ -244,7 +241,7 @@ export default function MobileScoreEntryAltPage() {
     }, PULSE_UP_MS + PULSE_HOLD_MS);
   }
 
-  // Lock page scroll/bounce for this screen only (focus mode)
+  // Lock page scroll/bounce for this screen only
   useEffect(() => {
     const html = document.documentElement;
     const body = document.body;
@@ -291,9 +288,6 @@ export default function MobileScoreEntryAltPage() {
   }, [holeFx, SWIPE_MS]);
 
   // Preferred tee logic:
-  // 1) round_players.tee
-  // 2) players.gender
-  // 3) default M
   function teeForPlayer(pid: string): Tee {
     if (!pid) return "M";
 
@@ -423,7 +417,7 @@ export default function MobileScoreEntryAltPage() {
           meScoreRows = (sData ?? []) as ScoreRow[];
         }
 
-        // Buddy-check scores: buddy_scores for (round, owner=me, buddy=buddy)
+        // Buddy-check scores
         let buddyCheckRows: BuddyScoreRow[] = [];
         if (meId && buddyId) {
           const { data: bData, error: bErr } = await supabase
@@ -736,17 +730,14 @@ export default function MobileScoreEntryAltPage() {
     const nextHole = clamp(hole + (dir === "next" ? 1 : -1), 1, 18);
     if (nextHole === hole) return;
 
-    // buddy-check save (hole being left)
     if (!isLocked && buddyId) {
       await saveBuddyCheckHole(hole);
     }
 
-    // official ME save
     if (!isLocked && !saving && isDirty()) {
       await saveAll();
     }
 
-    // clear any pending "1-" prefix when moving holes
     setPrefix1ByPid({});
 
     animateHoleChange(dir);
@@ -810,11 +801,6 @@ export default function MobileScoreEntryAltPage() {
   function pressDigit(pid: string, digit: number) {
     if (isLocked) return;
 
-    const cur = normalizeRawInput(scores[pid]?.[hole] ?? "");
-    if (cur === "P") {
-      // overwrite pickup if user starts entering a number
-    }
-
     const usePrefix = prefix1ByPid[pid] === true;
     const next = usePrefix ? 10 + digit : digit;
 
@@ -837,7 +823,6 @@ export default function MobileScoreEntryAltPage() {
       return;
     }
 
-    // without prefix, 0 means "clear"
     setRaw(pid, hole, "");
   }
 
@@ -848,35 +833,24 @@ export default function MobileScoreEntryAltPage() {
   }
 
   // --- UI helpers ---
-  function HoleBoxEntryOnly() {
-    const holeScale = holePulse === "up" ? 1.18 : holePulse === "down" ? 1.0 : 1.0;
 
-    const holeStyle: React.CSSProperties = {
-      transform: `scale(${holeScale})`,
-      transition:
-        holePulse === "up"
-          ? `transform ${PULSE_UP_MS}ms ease-out`
-          : holePulse === "down"
-            ? `transform ${PULSE_DOWN_MS}ms ease-in`
-            : "none",
-      transformOrigin: "center",
-      willChange: "transform",
-    };
-
+  // ✅ One-row hole info (compact)
+  function HoleRowEntryOnly() {
     return (
       <div className="px-4 pb-2">
-        <div className="flex items-center justify-center">
-          <div className={`w-[230px] rounded-md border ${borderLight} bg-white text-slate-900 text-center py-2`}>
-            <div className="text-xs font-semibold tracking-wide text-slate-600">HOLE</div>
-            <div className="text-4xl font-black leading-tight" style={holeStyle}>
-              {hole}
+        <div className="rounded-xl border border-slate-300 bg-white px-3 py-2">
+          <div className="flex items-center justify-between gap-2 text-slate-900">
+            <div className="flex items-center gap-2">
+              <div className="text-xs font-extrabold tracking-wide text-slate-600">HOLE</div>
+              <div className="text-2xl font-black leading-none">{hole}</div>
             </div>
-            <div className="text-[11px] text-slate-600">
-              <div>
-                <span className="font-semibold">M:</span> Par {holeInfoM.par || "—"} · SI {holeInfoM.si || "—"}
+
+            <div className="flex items-center gap-3 text-[11px] text-slate-700">
+              <div className="whitespace-nowrap">
+                <span className="font-bold">M:</span> Par {holeInfoM.par || "—"} · SI {holeInfoM.si || "—"}
               </div>
-              <div>
-                <span className="font-semibold">F:</span> Par {holeInfoF.par || "—"} · SI {holeInfoF.si || "—"}
+              <div className="whitespace-nowrap">
+                <span className="font-bold">F:</span> Par {holeInfoF.par || "—"} · SI {holeInfoF.si || "—"}
               </div>
             </div>
           </div>
@@ -1041,7 +1015,16 @@ export default function MobileScoreEntryAltPage() {
     const grossDisplay = pickup ? "P" : raw && raw !== "P" ? raw : "—";
     const prefixOn = prefix1ByPid[pid] === true;
 
-    const headerClass = teeForPlayer(pid) === "F" ? "bg-pink-500" : "bg-sky-600";
+    // ✅ much more distinctive backgrounds
+    const outerBg = isBuddy ? "bg-emerald-200 border-emerald-300" : "bg-indigo-200 border-indigo-300";
+    const headerClass = isBuddy ? "bg-emerald-700" : "bg-indigo-700";
+
+    // keypad palette (par highlight stays)
+    const keypadBg = isBuddy ? "bg-emerald-100 border-emerald-300" : "bg-indigo-100 border-indigo-300";
+    const btnBase = isBuddy ? "border-emerald-300" : "border-indigo-300";
+    const btnBg = isBuddy ? "bg-emerald-50" : "bg-indigo-50";
+    const btnText = "text-slate-900";
+
     const parShade = "bg-amber-200 border-amber-400 text-slate-900";
 
     function KeyButton(props2: { text: string; onClick: () => void; shaded?: boolean; disabled?: boolean; wide?: boolean }) {
@@ -1054,7 +1037,7 @@ export default function MobileScoreEntryAltPage() {
           className={[
             "h-14 rounded-xl border text-xl font-black active:scale-[0.99] disabled:opacity-50",
             wide ? "col-span-2" : "",
-            shaded ? parShade : "bg-white border-slate-300 text-slate-900",
+            shaded ? parShade : `${btnBg} ${btnBase} ${btnText}`,
           ].join(" ")}
         >
           {text}
@@ -1063,10 +1046,11 @@ export default function MobileScoreEntryAltPage() {
     }
 
     function StatRow(props2: { label: string; value: React.ReactNode }) {
+      // ✅ aligned boxes by using fixed width on the value cell
       return (
-        <div className="grid grid-cols-[1fr_auto] items-center gap-3">
-          <div className="text-sm font-bold text-slate-700">{props2.label}</div>
-          <div className="min-w-[88px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-center">
+        <div className="grid grid-cols-[1fr_96px] items-center gap-3">
+          <div className="text-sm font-extrabold text-slate-700">{props2.label}</div>
+          <div className="w-[96px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-center">
             <div className="text-2xl font-black text-slate-900 leading-tight">{props2.value}</div>
           </div>
         </div>
@@ -1074,15 +1058,8 @@ export default function MobileScoreEntryAltPage() {
     }
 
     return (
-      // ✅ tinted background container per player (helps visually group data)
-      <div
-        className={[
-          "rounded-2xl border shadow-sm overflow-hidden",
-          isBuddy ? "border-emerald-200 bg-emerald-50" : "border-sky-200 bg-sky-50",
-        ].join(" ")}
-      >
-        {/* inner card */}
-        <div className="rounded-2xl overflow-hidden bg-white/70">
+      <div className={`rounded-2xl border shadow-sm overflow-hidden ${outerBg}`}>
+        <div className="rounded-2xl overflow-hidden bg-white/75">
           <div className={`${headerClass} px-3 py-2 text-white text-sm font-bold text-center`}>
             <div className="truncate">
               {label} <span className="opacity-90">(HC: {hcp} · Tee: {tee})</span>
@@ -1090,15 +1067,15 @@ export default function MobileScoreEntryAltPage() {
           </div>
 
           <div className="p-3 space-y-3">
-            {/* ✅ Shots then box, then Strokes then box (stacked rows) */}
+            {/* Shots/Strokes stack */}
             <div className="rounded-xl border border-slate-300 bg-white px-3 py-3 space-y-2">
               <StatRow label="Shots" value={Number.isFinite(shotsGiven) ? shotsGiven : 0} />
               <StatRow label="Strokes" value={grossDisplay} />
             </div>
 
-            {/* keypad */}
-            <div>
-              <div className="text-xs font-bold text-slate-600 mb-2 text-center">STROKES</div>
+            {/* keypad with colour */}
+            <div className={`rounded-xl border ${keypadBg} px-3 py-3`}>
+              <div className="text-xs font-extrabold text-slate-700 mb-2 text-center">STROKES</div>
 
               <div className="grid grid-cols-3 gap-2">
                 <KeyButton text="2" onClick={() => pressDigit(pid, 2)} shaded={par === 2} disabled={isLocked} />
@@ -1119,7 +1096,8 @@ export default function MobileScoreEntryAltPage() {
                   disabled={isLocked}
                   className={[
                     "h-14 rounded-xl border text-xl font-black active:scale-[0.99] disabled:opacity-50",
-                    prefixOn ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-300 text-slate-900",
+                    btnBase,
+                    prefixOn ? "bg-slate-900 text-white border-slate-900" : `${btnBg} ${btnText}`,
                   ].join(" ")}
                 >
                   1-
@@ -1133,25 +1111,25 @@ export default function MobileScoreEntryAltPage() {
                   disabled={isLocked}
                   className={[
                     "h-14 rounded-xl border text-xl font-black active:scale-[0.99] disabled:opacity-50",
-                    pickup ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-300 text-slate-900",
+                    btnBase,
+                    pickup ? "bg-slate-900 text-white border-slate-900" : `${btnBg} ${btnText}`,
                   ].join(" ")}
                 >
                   P
                 </button>
               </div>
 
-              <div className="mt-2 flex justify-between text-xs text-slate-600">
+              {/* ✅ keep Clear hole, remove other text */}
+              <div className="mt-2 flex justify-start text-xs text-slate-700">
                 <button type="button" className="underline" onClick={() => clearHole(pid)} disabled={isLocked}>
                   Clear hole
                 </button>
-
-                {isBuddy ? <span className="text-slate-500">Buddy = cross-check only</span> : <span className="text-slate-500">Me = official</span>}
               </div>
             </div>
 
-            {/* ✅ Stableford points block moved BELOW keypad */}
+            {/* stableford below keypad */}
             <div className="rounded-xl border border-slate-300 bg-white px-3 py-2">
-              <div className="text-xs font-bold tracking-wide text-slate-600 text-center">STABLEFORD POINTS</div>
+              <div className="text-xs font-extrabold tracking-wide text-slate-600 text-center">STABLEFORD POINTS</div>
 
               <div className="mt-2 grid grid-cols-2 gap-2 text-center">
                 <div className="text-[11px] font-bold text-slate-600">Hole</div>
@@ -1160,9 +1138,6 @@ export default function MobileScoreEntryAltPage() {
                 <button
                   type="button"
                   className="rounded-lg border border-slate-300 bg-slate-50 py-2 text-2xl font-black text-slate-900"
-                  onClick={() => {
-                    // no-op: hole points display only
-                  }}
                   disabled
                 >
                   {holePts}
@@ -1232,9 +1207,7 @@ export default function MobileScoreEntryAltPage() {
 
   return (
     <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden">
-      {/* ✅ NO standard header/top bar */}
-
-      {/* lightweight in-page controls (not a header) */}
+      {/* no standard header */}
       <div className="px-4 pt-3 pb-1 flex items-center justify-between">
         <button type="button" className="text-sm font-bold text-slate-900 underline" onClick={handleBack} aria-label="Back">
           Back
@@ -1250,38 +1223,18 @@ export default function MobileScoreEntryAltPage() {
         </button>
       </div>
 
-      {tab === "entry" ? <HoleBoxEntryOnly /> : <SummaryPlayerToggleTop />}
+      {tab === "entry" ? <HoleRowEntryOnly /> : <SummaryPlayerToggleTop />}
 
-      {/* tabs */}
-      <div className="px-4">
-        <div className="rounded-md border border-slate-300 overflow-hidden flex bg-white">
-          <button
-            type="button"
-            onClick={() => setTab("entry")}
-            className={`flex-1 py-2 text-sm font-semibold ${tab === "entry" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}
-          >
-            Entry
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("summary")}
-            className={`flex-1 py-2 text-sm font-semibold ${tab === "summary" ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"}`}
-          >
-            Summary
-          </button>
-        </div>
-      </div>
+      {/* ✅ remove visible Entry/Summary wording block (no tabs) */}
 
-      {/* content */}
       <div
         className="px-4 py-3 space-y-3 overflow-y-auto"
-        style={{ height: "calc(100dvh - 12px - 44px - 84px)" }}
+        style={{ height: "calc(100dvh - 12px - 44px - 56px)" }}
         onTouchStart={tab === "entry" ? onTouchStart : undefined}
         onTouchEnd={tab === "entry" ? onTouchEnd : undefined}
       >
         {tab === "entry" ? (
           <div style={fxStyle} className="space-y-3">
-            {/* side-by-side panels */}
             <div className="grid grid-cols-2 gap-3 items-start">
               <PlayerPanel pid={meId} label={meName} hcp={meHcp} tee={meTee} isBuddy={false} />
               {buddyId ? (
