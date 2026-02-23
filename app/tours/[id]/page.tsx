@@ -1,92 +1,83 @@
-// app/tours/[id]/page.tsx
+// app/m/tours/[id]/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
-import Link from "next/link";
-
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-type Tour = {
+type TourRow = {
   id: string;
-  name: string;
-  start_date: string | null; // YYYY-MM-DD
-  end_date: string | null; // YYYY-MM-DD
-};
-
-type Course = { id: string; name: string; tour_id: string | null };
-
-// ✅ start_handicap is now numeric(5,1) in DB -> treat as number
-type Player = { id: string; name: string; start_handicap: number | null };
-
-type TourPlayerRow = {
-  tour_id: string;
-  player_id: string;
-  starting_handicap: number | null; // ✅ numeric(5,1) in DB (tour override)
-  players: Player | Player[] | null; // global
-};
-
-type Round = {
-  id: string;
-  tour_id: string;
-  course_id: string | null;
   name: string | null;
-  round_no: number | null;
-  created_at: string | null;
-  played_on: string | null; // date
+  start_date: string | null;
+  end_date: string | null;
+  image_url?: string | null;
 };
 
-type RoundGroup = { id: string; round_id: string; tee_time: string | null };
-
-type TourGroupRow = {
+type RoundRow = {
   id: string;
   tour_id: string;
-  scope: "tour" | "round";
-  type: "pair" | "team";
-  name: string | null;
-  round_id: string | null;
-  created_at?: string | null;
+  played_on: string | null;
 };
 
-type TourGroupMemberRow = { group_id: string; player_id: string };
-
-type TourGroupingSettings = {
+type TourDocRow = {
+  id: string;
   tour_id: string;
-
-  default_team_best_m: number | null;
-
-  individual_mode: "ALL" | "BEST_N" | string;
-  individual_best_n: number | null;
-  individual_final_required: boolean;
-
-  pair_mode: "ALL" | "BEST_Q" | string;
-  pair_best_q: number | null;
-  pair_final_required: boolean;
+  title: string;
+  storage_bucket: string;
+  storage_path: string;
+  sort_order: number;
 };
 
-function normalizePlayerJoin(val: any): Player | null {
-  if (!val) return null;
-  const p = Array.isArray(val) ? val[0] : val;
-  if (!p) return null;
+const DEFAULT_HERO = "/tours/tour-landing-hero-cartoon.webp";
 
-  const id = p.id != null ? String(p.id) : "";
-  const name = p.name != null ? String(p.name) : "";
-  const sh = Number.isFinite(Number(p.start_handicap)) ? Number(p.start_handicap) : null;
+const JAPAN_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
+const JAPAN_HERO = "/tours/japan-poster_mobile_1080w.webp";
 
-  if (!id) return null;
-  return { id, name: name || "(missing player)", start_handicap: sh };
+const PORTUGAL_TOUR_ID = "b5e5b90d-0ae5-4be5-a3cd-3ef1c73cb6b5";
+const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
+
+const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
+const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
+
+// ✅ New Zealand Golf Tour 2026 hero override (public/tours/NZ26-logo.webp)
+const NZ_TOUR_2026_ID = "5a80b049-396f-46ec-965e-810e738471b6";
+const NZ_TOUR_2026_HERO = "/tours/NZ26-logo.webp";
+
+// Only this tour has PDFs for now
+const PDF_TOUR_ID = NZ_TOUR_2026_ID;
+const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
+
+// IMPORTANT: order matches the buttons below (idx is button -> filename)
+const PDF_FILES = ["itinerary.pdf", "accommodation.pdf", "dining.pdf", "profiles.pdf", "comps.pdf"] as const;
+
+/**
+ * ✅ TUNING (your request)
+ * - 2 taps max to readable: zoom doubles each tap (1 → 2 → 4)
+ * - Pan much faster: stronger pan multiplier
+ * - Momentum/inertia on release
+ */
+const ZOOM_IN_MULTIPLIER = 2.0; // 1.0 -> 2.0 -> 4.0
+const ZOOM_OUT_MULTIPLIER = 1 / ZOOM_IN_MULTIPLIER;
+const MIN_ZOOM = 0.6;
+const MAX_ZOOM = 6.0;
+
+const PAN_SPEED = 3.5; // faster per swipe
+
+// Inertia tuning
+const INERTIA_FRICTION = 0.92; // closer to 1 = longer glide
+const INERTIA_STOP_SPEED = 20; // px/sec threshold to stop
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
 }
 
-function parseDateOnly(value: string | null): Date | null {
+function parseDate(value: string | null): Date | null {
   if (!value) return null;
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function fmtDate(value: string | null) {
-  if (!value) return "TBD";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value);
+function fmtDate(d: Date) {
   return d.toLocaleDateString(undefined, {
     weekday: "short",
     day: "2-digit",
@@ -95,868 +86,609 @@ function fmtDate(value: string | null) {
   });
 }
 
-// IMPORTANT: for rounds display — if played_on missing, show TBC (not created_at)
-function fmtRoundPlayedOn(played_on: string | null) {
-  if (!played_on) return "TBC";
-  const d = new Date(played_on);
-  if (Number.isNaN(d.getTime())) return String(played_on);
-  return d.toLocaleDateString(undefined, {
-    weekday: "short",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-function fmtRuleIndividual(s: TourGroupingSettings | null) {
-  if (!s) return "All rounds";
-  const mode = String(s.individual_mode ?? "ALL").toUpperCase();
-  if (mode !== "BEST_N") return "All rounds";
-  const n = Number.isFinite(Number(s.individual_best_n)) ? Number(s.individual_best_n) : 0;
-  const fr = s.individual_final_required === true;
-  if (n > 0) return fr ? `Best ${n} rounds (Final required)` : `Best ${n} rounds`;
-  return fr ? "Best N rounds (Final required)" : "Best N rounds";
-}
-
-function fmtRulePairs(s: TourGroupingSettings | null) {
-  if (!s) return "All rounds";
-  const mode = String(s.pair_mode ?? "ALL").toUpperCase();
-  if (mode !== "BEST_Q") return "All rounds";
-  const q = Number.isFinite(Number(s.pair_best_q)) ? Number(s.pair_best_q) : 0;
-  const fr = s.pair_final_required === true;
-  if (q > 0) return fr ? `Best ${q} rounds (Final required)` : `Best ${q} rounds`;
-  return fr ? "Best Q rounds (Final required)" : "Best Q rounds";
-}
-
-function fmtRuleTeams(s: TourGroupingSettings | null) {
-  const y = Number.isFinite(Number(s?.default_team_best_m)) ? Number(s?.default_team_best_m) : 1;
-  return `Best ${y} per hole, −1 per zero (all rounds)`;
-}
-
-// ✅ One-decimal helpers
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
-}
-
-function parseOneDecimalOrNull(raw: string): number | null {
-  const s = String(raw ?? "").trim();
-  if (!s) return null;
-
-  // allow "12", "12.", "12.3"
-  const n = Number(s);
-  if (!Number.isFinite(n)) return null;
-
-  // clamp to >= 0 and round to 1dp
-  return round1(Math.max(0, n));
-}
-
-function fmt1(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(Number(n))) return "—";
-  return round1(Number(n)).toFixed(1);
-}
-
-function equal1(a: number | null, b: number | null): boolean {
-  if (a == null && b == null) return true;
-  if (a == null || b == null) return false;
-  return round1(a) === round1(b);
-}
-
-export default function TourPage() {
-  const params = useParams<{ id: string }>();
-  const tourId = params.id;
-
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  const [tour, setTour] = useState<Tour | null>(null);
-  const [coursesById, setCoursesById] = useState<Record<string, Course>>({});
-  const [tourPlayers, setTourPlayers] = useState<TourPlayerRow[]>([]);
-  const [rounds, setRounds] = useState<Round[]>([]);
-  const [roundTeeTimeByRoundId, setRoundTeeTimeByRoundId] = useState<Record<string, string>>({});
-
-  const [tourGroups, setTourGroups] = useState<TourGroupRow[]>([]);
-  const [tourGroupMembers, setTourGroupMembers] = useState<TourGroupMemberRow[]>([]);
-  const [eventSettings, setEventSettings] = useState<TourGroupingSettings | null>(null);
-
-  // Rename tour UI state
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState("");
-  const [nameSaving, setNameSaving] = useState(false);
-  const [nameMsg, setNameMsg] = useState<string>("");
-
-  // Tour dates editing
-  const [editingDates, setEditingDates] = useState(false);
-  const [startDateDraft, setStartDateDraft] = useState<string>(""); // YYYY-MM-DD or ""
-  const [endDateDraft, setEndDateDraft] = useState<string>(""); // YYYY-MM-DD or ""
-  const [datesSaving, setDatesSaving] = useState(false);
-  const [datesMsg, setDatesMsg] = useState<string>("");
-
-  // Starting handicaps (tour override editor)
-  const [hcpDraftByPlayerId, setHcpDraftByPlayerId] = useState<Record<string, string>>({});
-  const [hcpSaving, setHcpSaving] = useState(false);
-  const [hcpMsg, setHcpMsg] = useState<string>("");
-
-  async function loadAll() {
-    setLoading(true);
-    setError("");
-    setNameMsg("");
-    setDatesMsg("");
-    setHcpMsg("");
-
-    try {
-      // Tour
-      const { data: tourData, error: tourErr } = await supabase
-        .from("tours")
-        .select("id,name,start_date,end_date")
-        .eq("id", tourId)
-        .maybeSingle();
-
-      if (tourErr) throw new Error(tourErr.message);
-      if (!tourData) throw new Error("Tour not found (or you do not have access).");
-
-      const t = tourData as Tour;
-      setTour(t);
-      setNameDraft(t.name ?? "");
-      setStartDateDraft(t.start_date ?? "");
-      setEndDateDraft(t.end_date ?? "");
-
-      // Settings
-      const { data: sData, error: sErr } = await supabase
-        .from("tour_grouping_settings")
-        .select(
-          "tour_id, default_team_best_m, individual_mode, individual_best_n, individual_final_required, pair_mode, pair_best_q, pair_final_required"
-        )
-        .eq("tour_id", tourId)
-        .maybeSingle();
-
-      if (sErr) throw new Error(sErr.message);
-      setEventSettings((sData ?? null) as TourGroupingSettings | null);
-
-      // Rounds
-      const { data: roundData, error: roundErr } = await supabase
-        .from("rounds")
-        .select("id,tour_id,course_id,name,round_no,created_at,played_on")
-        .eq("tour_id", tourId)
-        .order("created_at", { ascending: true });
-
-      if (roundErr) throw new Error(roundErr.message);
-
-      const roundList = (roundData ?? []) as Round[];
-      setRounds(roundList);
-
-      // Courses referenced by rounds
-      const courseIds = Array.from(new Set(roundList.map((r) => r.course_id).filter(Boolean))) as string[];
-      if (courseIds.length) {
-        const { data: cData, error: cErr } = await supabase.from("courses").select("id,name,tour_id").in("id", courseIds);
-        if (cErr) throw new Error(cErr.message);
-
-        const map: Record<string, Course> = {};
-        for (const c of cData ?? []) {
-          const id = String((c as any).id);
-          map[id] = { id, name: String((c as any).name), tour_id: (c as any).tour_id ?? null };
-        }
-        setCoursesById(map);
-      } else {
-        setCoursesById({});
-      }
-
-      // Tee times: earliest from round_groups
-      const roundIds = roundList.map((r) => r.id);
-      if (roundIds.length) {
-        const { data: rgData, error: rgErr } = await supabase
-          .from("round_groups")
-          .select("id,round_id,tee_time")
-          .in("round_id", roundIds);
-
-        if (rgErr) throw new Error(rgErr.message);
-
-        const earliest: Record<string, string> = {};
-        for (const row of (rgData ?? []) as any[]) {
-          const rid = String(row.round_id);
-          const tt = row.tee_time ? String(row.tee_time) : "";
-          if (!tt) continue;
-          if (!earliest[rid] || tt < earliest[rid]) earliest[rid] = tt;
-        }
-        setRoundTeeTimeByRoundId(earliest);
-      } else {
-        setRoundTeeTimeByRoundId({});
-      }
-
-      // Tour players (global start handicap is players.start_handicap)
-      const { data: tpData, error: tpErr } = await supabase
-        .from("tour_players")
-        .select("tour_id,player_id,starting_handicap, players(id,name,start_handicap)")
-        .eq("tour_id", tourId)
-        .order("name", { ascending: true, foreignTable: "players" });
-
-      if (tpErr) throw new Error(tpErr.message);
-
-      const normalizedTP: TourPlayerRow[] = (tpData ?? []).map((row: any) => {
-        const playerObj = normalizePlayerJoin(row.players);
-
-        const starting_handicap =
-          row.starting_handicap == null
-            ? null
-            : Number.isFinite(Number(row.starting_handicap))
-            ? Number(row.starting_handicap)
-            : null;
-
-        return {
-          tour_id: String(row.tour_id),
-          player_id: String(row.player_id),
-          starting_handicap,
-          players: playerObj,
-        };
-      });
-
-      setTourPlayers(normalizedTP);
-
-      // init drafts (prefer tour override if present, else global) -> store as 1dp strings
-      const draft: Record<string, string> = {};
-      for (const r of normalizedTP) {
-        const p = normalizePlayerJoin(r.players);
-        if (!p) continue;
-
-        const tourVal = r.starting_handicap;
-        const globalVal = p.start_handicap;
-
-        const effective =
-          tourVal !== null && tourVal !== undefined
-            ? Number(tourVal)
-            : globalVal !== null && globalVal !== undefined
-            ? Number(globalVal)
-            : 0;
-
-        draft[p.id] = round1(effective).toFixed(1);
-      }
-      setHcpDraftByPlayerId(draft);
-
-      // Pairs/Teams groups (tour scope)
-      const { data: gData, error: gErr } = await supabase
-        .from("tour_groups")
-        .select("id,tour_id,scope,type,name,round_id,created_at")
-        .eq("tour_id", tourId)
-        .eq("scope", "tour")
-        .in("type", ["pair", "team"])
-        .order("type", { ascending: true })
-        .order("created_at", { ascending: true });
-
-      if (gErr) throw new Error(gErr.message);
-
-      const glist = (gData ?? []) as TourGroupRow[];
-      setTourGroups(glist);
-
-      const groupIds = glist.map((g) => g.id);
-      if (!groupIds.length) {
-        setTourGroupMembers([]);
-        setLoading(false);
-        return;
-      }
-
-      const { data: mData, error: mErr } = await supabase
-        .from("tour_group_members")
-        .select("group_id,player_id")
-        .in("group_id", groupIds);
-
-      if (mErr) throw new Error(mErr.message);
-
-      setTourGroupMembers((mData ?? []) as TourGroupMemberRow[]);
-    } catch (e: any) {
-      setError(e?.message ?? "Unknown error");
-    } finally {
-      setLoading(false);
-    }
+function formatTourDates(start: Date | null, end: Date | null) {
+  if (start && end) {
+    if (start.toDateString() === end.toDateString()) return fmtDate(start);
+    return `${fmtDate(start)} – ${fmtDate(end)}`;
   }
+  if (start) return fmtDate(start);
+  if (end) return fmtDate(end);
+  return "";
+}
+
+// Prefer DB title that matches the clicked pdf filename, else fall back to filename-derived
+function titleFromFilename(filename: string) {
+  return filename.replace(/\.pdf$/i, "").replace(/[-_]+/g, " ").trim();
+}
+
+function normalizePath(p: string) {
+  return String(p ?? "").trim().replace(/\\/g, "/").toLowerCase();
+}
+
+export default function MobileTourLandingPage() {
+  const params = useParams<{ id: string }>();
+  const router = useRouter();
+  const tourId = (params?.id ?? "").trim();
+
+  const [tour, setTour] = useState<TourRow | null>(null);
+  const [rounds, setRounds] = useState<RoundRow[]>([]);
+  const [docs, setDocs] = useState<TourDocRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // PDF viewer state
+  const [openingDocIdx, setOpeningDocIdx] = useState<number | null>(null);
+  const [viewerTitle, setViewerTitle] = useState<string>("Document");
+  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
+  const [zoom, setZoom] = useState<number>(1.0);
+  const [rendering, setRendering] = useState<boolean>(false);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Viewport for pan (we pan via scrollLeft/scrollTop)
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+
+  // Drag state
+  const isDraggingRef = useRef(false);
+  const dragStartXRef = useRef(0);
+  const dragStartYRef = useRef(0);
+  const dragStartScrollLeftRef = useRef(0);
+  const dragStartScrollTopRef = useRef(0);
+
+  // Velocity tracking for inertia (px/sec)
+  const lastMoveTimeRef = useRef<number>(0);
+  const lastMoveXRef = useRef<number>(0);
+  const lastMoveYRef = useRef<number>(0);
+  const velocityXRef = useRef<number>(0);
+  const velocityYRef = useRef<number>(0);
+
+  const inertiaRafRef = useRef<number | null>(null);
+
+  // Preserve scroll position proportionally when zoom changes
+  const scrollRatioRef = useRef<{ x: number; y: number } | null>(null);
+
+  // ✅ PDF.js loaded lazily on client only (prevents DOMMatrix SSR crash)
+  const pdfjsRef = useRef<any>(null);
+  const [pdfjsReady, setPdfjsReady] = useState(false);
 
   useEffect(() => {
-    void loadAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let alive = true;
+
+    async function loadPdfJs() {
+      try {
+        // Only run in browser
+        if (typeof window === "undefined") return;
+
+        const mod: any = await import("pdfjs-dist");
+        const lib = mod?.default ?? mod;
+
+        // worker served from /public
+        lib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+
+        pdfjsRef.current = lib;
+        if (alive) setPdfjsReady(true);
+      } catch {
+        // If PDF.js fails to load, we just won't open docs
+        if (alive) setPdfjsReady(false);
+      }
+    }
+
+    loadPdfJs();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const stopInertia = useCallback(() => {
+    if (inertiaRafRef.current != null) {
+      cancelAnimationFrame(inertiaRafRef.current);
+      inertiaRafRef.current = null;
+    }
+  }, []);
+
+  const captureScrollRatio = useCallback(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    const maxX = Math.max(1, vp.scrollWidth - vp.clientWidth);
+    const maxY = Math.max(1, vp.scrollHeight - vp.clientHeight);
+
+    scrollRatioRef.current = {
+      x: vp.scrollLeft / maxX,
+      y: vp.scrollTop / maxY,
+    };
+  }, []);
+
+  const restoreScrollRatio = useCallback(() => {
+    const vp = viewportRef.current;
+    const ratio = scrollRatioRef.current;
+    if (!vp || !ratio) return;
+
+    const maxX = Math.max(0, vp.scrollWidth - vp.clientWidth);
+    const maxY = Math.max(0, vp.scrollHeight - vp.clientHeight);
+
+    vp.scrollLeft = ratio.x * maxX;
+    vp.scrollTop = ratio.y * maxY;
+  }, []);
+
+  const closeViewer = useCallback(() => {
+    stopInertia();
+    setViewerSrc(null);
+    setZoom(1.0);
+    scrollRatioRef.current = null;
+
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext("2d");
+      if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
+  }, [stopInertia]);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function loadAll() {
+      setLoading(true);
+
+      const [{ data: t }, { data: r }, { data: d }] = await Promise.all([
+        supabase.from("tours").select("id,name,start_date,end_date,image_url").eq("id", tourId).single(),
+        supabase.from("rounds").select("id,tour_id,played_on").eq("tour_id", tourId),
+        supabase
+          .from("tour_documents")
+          .select("id,tour_id,title,storage_bucket,storage_path,sort_order")
+          .eq("tour_id", tourId)
+          .order("sort_order", { ascending: true }),
+      ]);
+
+      if (!alive) return;
+
+      setTour(t as TourRow);
+      setRounds((r ?? []) as RoundRow[]);
+      setDocs((d ?? []) as TourDocRow[]);
+      setLoading(false);
+    }
+
+    if (tourId) loadAll();
+    return () => {
+      alive = false;
+    };
   }, [tourId]);
 
-  const playersInThisTour = useMemo(() => {
-    return (tourPlayers ?? [])
-      .map((r) => {
-        const p = normalizePlayerJoin(r.players);
-        if (!p) return null;
+  const heroImage = useMemo(() => {
+    // ✅ Force NZ Tour 2026 to use the WebP hero in /public/tours
+    if (tourId === NZ_TOUR_2026_ID) return NZ_TOUR_2026_HERO;
 
-        const global = Number.isFinite(Number(p.start_handicap)) ? Number(p.start_handicap) : 0;
-        const override = r.starting_handicap;
-        const effective = override !== null && override !== undefined ? Number(override) : global;
+    if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
+    if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
+    if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
 
-        return {
-          id: p.id,
-          name: p.name,
-          globalStart: global,
-          overrideStart: override,
-          effectiveStart: effective,
-        };
-      })
-      .filter(Boolean) as Array<{
-      id: string;
-      name: string;
-      globalStart: number;
-      overrideStart: number | null;
-      effectiveStart: number;
-    }>;
-  }, [tourPlayers]);
+    return tour?.image_url?.trim() || DEFAULT_HERO;
+  }, [tourId, tour?.image_url, tour?.name]);
 
-  const playerNameById = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const p of playersInThisTour) m.set(p.id, p.name);
-    return m;
-  }, [playersInThisTour]);
-
-  const membersByGroup = useMemo(() => {
-    const m = new Map<string, string[]>();
-    for (const row of tourGroupMembers) {
-      if (!m.has(row.group_id)) m.set(row.group_id, []);
-      m.get(row.group_id)!.push(row.player_id);
-    }
-    return m;
-  }, [tourGroupMembers]);
-
-  const tourPairs = useMemo(() => tourGroups.filter((g) => g.scope === "tour" && g.type === "pair"), [tourGroups]);
-  const tourTeams = useMemo(() => tourGroups.filter((g) => g.scope === "tour" && g.type === "team"), [tourGroups]);
-
-  function labelForGroup(g: TourGroupRow) {
-    const fallback = `${g.type === "pair" ? "Pair" : "Team"} ${g.id.slice(0, 6)}`;
-    const ids = membersByGroup.get(g.id) ?? [];
-
-    const storedName = (g.name ?? "").trim();
-    if (storedName) return storedName;
-
-    if (g.type === "pair" && ids.length >= 2) {
-      const a = playerNameById.get(ids[0]) ?? ids[0];
-      const b = playerNameById.get(ids[1]) ?? ids[1];
-      return `${a} / ${b}`;
-    }
-
-    return fallback;
-  }
-
-  function membersLabel(g: TourGroupRow) {
-    const ids = membersByGroup.get(g.id) ?? [];
-    if (!ids.length) return "—";
-    return ids.map((pid) => playerNameById.get(pid) ?? pid).join(g.type === "pair" ? " / " : ", ");
-  }
-
-  // --- Tour date suggestion defaults ---
-  const suggestedTourStartEnd = useMemo(() => {
-    const played = rounds
-      .map((r) => r.played_on)
-      .filter(Boolean)
-      .map((s) => String(s));
-
-    if (!played.length) return { start: null as string | null, end: null as string | null };
-
+  const derivedDates = useMemo(() => {
+    const played = rounds.map((r) => r.played_on).filter(Boolean) as string[];
+    if (!played.length) return { start: null, end: null };
     played.sort();
-    return { start: played[0] ?? null, end: played[played.length - 1] ?? null };
+    return { start: played[0], end: played[played.length - 1] };
   }, [rounds]);
 
-  const effectiveTourStart = (tour?.start_date ?? "").trim() || suggestedTourStartEnd.start;
-  const effectiveTourEnd = (tour?.end_date ?? "").trim() || suggestedTourStartEnd.end;
+  const start = parseDate(tour?.start_date || derivedDates.start);
+  const end = parseDate(tour?.end_date || derivedDates.end);
+  const dateLabel = formatTourDates(start, end);
 
-  const tourDatesLabel = useMemo(() => {
-    if (!effectiveTourStart && !effectiveTourEnd) return "TBD";
-    if (effectiveTourStart && effectiveTourEnd) {
-      if (effectiveTourStart === effectiveTourEnd) return fmtDate(effectiveTourStart);
-      return `${fmtDate(effectiveTourStart)} – ${fmtDate(effectiveTourEnd)}`;
-    }
-    if (effectiveTourStart) return fmtDate(effectiveTourStart);
-    return fmtDate(effectiveTourEnd);
-  }, [effectiveTourStart, effectiveTourEnd]);
+  // Load + render first page whenever viewerSrc or zoom changes
+  useEffect(() => {
+    let cancelled = false;
 
-  async function saveTourName() {
-    setNameMsg("");
-    const next = nameDraft.trim();
-    if (!next) {
-      setNameMsg("Name cannot be blank.");
-      return;
-    }
-    if (!tourId) return;
+    async function loadAndRender() {
+      const pdfjsLib = pdfjsRef.current;
+      if (!viewerSrc || !canvasRef.current) return;
+      if (!pdfjsLib) return;
 
-    setNameSaving(true);
-    try {
-      const { error: upErr } = await supabase.from("tours").update({ name: next }).eq("id", tourId);
-      if (upErr) throw new Error(upErr.message);
+      // Save current pan position before resize
+      captureScrollRatio();
 
-      setTour((prev) => (prev ? { ...prev, name: next } : prev));
-      setEditingName(false);
-      setNameMsg("Saved ✓");
-    } catch (e: any) {
-      setNameMsg(e?.message ?? "Failed to save.");
-    } finally {
-      setNameSaving(false);
-    }
-  }
+      setRendering(true);
 
-  function cancelEditName() {
-    setEditingName(false);
-    setNameMsg("");
-    setNameDraft(tour?.name ?? "");
-  }
+      try {
+        const loadingTask = pdfjsLib.getDocument(viewerSrc);
+        const pdf = await loadingTask.promise;
+        if (cancelled) return;
 
-  async function saveTourDates() {
-    setDatesMsg("");
-    if (!tourId) return;
+        const page = await pdf.getPage(1);
+        if (cancelled) return;
 
-    const s = startDateDraft.trim() || null;
-    const e = endDateDraft.trim() || null;
+        const viewport = page.getViewport({ scale: zoom });
+        const canvas = canvasRef.current!;
+        const ctx = canvas.getContext("2d")!;
 
-    if (s && e) {
-      const sd = parseDateOnly(s);
-      const ed = parseDateOnly(e);
-      if (!sd || !ed) {
-        setDatesMsg("Please enter valid dates.");
-        return;
-      }
-      if (sd.getTime() > ed.getTime()) {
-        setDatesMsg("Start date must be on/before end date.");
-        return;
-      }
-    } else {
-      if (s && !parseDateOnly(s)) {
-        setDatesMsg("Start date is invalid.");
-        return;
-      }
-      if (e && !parseDateOnly(e)) {
-        setDatesMsg("End date is invalid.");
-        return;
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const renderTask = page.render({ canvasContext: ctx, viewport });
+        await renderTask.promise;
+
+        requestAnimationFrame(() => {
+          restoreScrollRatio();
+        });
+      } catch {
+        alert(NOT_AVAILABLE_MESSAGE);
+        closeViewer();
+      } finally {
+        if (!cancelled) setRendering(false);
       }
     }
 
-    setDatesSaving(true);
-    try {
-      const { error: upErr } = await supabase.from("tours").update({ start_date: s, end_date: e }).eq("id", tourId);
-      if (upErr) throw new Error(upErr.message);
+    loadAndRender();
 
-      setTour((prev) => (prev ? { ...prev, start_date: s, end_date: e } : prev));
-      setEditingDates(false);
-      setDatesMsg("Saved ✓");
-    } catch (ex: any) {
-      setDatesMsg(ex?.message ?? "Failed to save dates.");
-    } finally {
-      setDatesSaving(false);
-    }
-  }
+    return () => {
+      cancelled = true;
+    };
+  }, [viewerSrc, zoom, closeViewer, captureScrollRatio, restoreScrollRatio, pdfjsReady]);
 
-  function cancelEditDates() {
-    setEditingDates(false);
-    setDatesMsg("");
-    setStartDateDraft(tour?.start_date ?? "");
-    setEndDateDraft(tour?.end_date ?? "");
-  }
+  const openDocByIndex = useCallback(
+    async (idx: number) => {
+      if (tourId !== PDF_TOUR_ID) {
+        alert(NOT_AVAILABLE_MESSAGE);
+        return;
+      }
+      if (!pdfjsRef.current) {
+        alert("PDF viewer not ready yet. Please try again.");
+        return;
+      }
 
-  async function saveStartingHandicaps() {
-    setHcpMsg("");
-    if (!tourId) return;
+      const filename = PDF_FILES[idx];
+      if (!filename) {
+        alert(NOT_AVAILABLE_MESSAGE);
+        return;
+      }
 
-    setHcpSaving(true);
-    try {
-      // Store NULL when equals global (to mean “use global”)
-      const payload = playersInThisTour.map((p) => {
-        const draftStr = hcpDraftByPlayerId[p.id] ?? "";
-        const draft = parseOneDecimalOrNull(draftStr);
+      setOpeningDocIdx(idx);
 
-        if (draft === null) {
-          return { tour_id: tourId, player_id: p.id, starting_handicap: null };
+      try {
+        const routeUrl = `/m/tours/${tourId}/pdf/${encodeURIComponent(filename)}`;
+        const head = await fetch(routeUrl, { method: "HEAD", cache: "no-store" });
+        if (!head.ok) {
+          alert(NOT_AVAILABLE_MESSAGE);
+          return;
         }
-        if (equal1(draft, p.globalStart)) {
-          return { tour_id: tourId, player_id: p.id, starting_handicap: null };
-        }
-        return { tour_id: tourId, player_id: p.id, starting_handicap: draft };
-      });
 
-      const { error: upErr } = await supabase.from("tour_players").upsert(payload, {
-        onConflict: "tour_id,player_id",
-      });
-      if (upErr) throw new Error(upErr.message);
+        // ✅ FIX: title must match the clicked PDF filename (docs[] order can differ)
+        const filenameKey = String(filename).toLowerCase();
+        const match = docs.find(
+          (d) => normalizePath(d.storage_path).endsWith(`/${filenameKey}`) || normalizePath(d.storage_path).endsWith(filenameKey)
+        );
+        const title = (match?.title ?? "").trim() || titleFromFilename(filename);
 
-      setHcpMsg("Saved ✓");
-      await loadAll();
-    } catch (e: any) {
-      setHcpMsg(e?.message ?? "Failed to save starting handicaps.");
-    } finally {
-      setHcpSaving(false);
-    }
-  }
+        stopInertia();
+        scrollRatioRef.current = { x: 0, y: 0 };
 
-  if (loading) return <div style={{ padding: 16 }}>Loading tour…</div>;
+        setViewerTitle(title);
+        setZoom(1.0);
+        setViewerSrc(routeUrl);
 
-  if (error)
-    return (
-      <div style={{ padding: 16 }}>
-        <div style={{ color: "crimson", fontWeight: 700 }}>Error</div>
-        <div style={{ marginTop: 8 }}>{error}</div>
-      </div>
-    );
+        requestAnimationFrame(() => {
+          const vp = viewportRef.current;
+          if (vp) {
+            vp.scrollLeft = 0;
+            vp.scrollTop = 0;
+          }
+        });
+      } catch {
+        alert(NOT_AVAILABLE_MESSAGE);
+      } finally {
+        setOpeningDocIdx(null);
+      }
+    },
+    [tourId, docs, stopInertia]
+  );
+
+  // Inertia loop
+  const startInertia = useCallback(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    stopInertia();
+
+    let lastT = performance.now();
+
+    const tick = (t: number) => {
+      const dt = Math.max(0.001, (t - lastT) / 1000);
+      lastT = t;
+
+      // Apply velocity (px/sec)
+      const vx = velocityXRef.current;
+      const vy = velocityYRef.current;
+
+      // Stop if very slow
+      const speed = Math.hypot(vx, vy);
+      if (speed < INERTIA_STOP_SPEED) {
+        inertiaRafRef.current = null;
+        captureScrollRatio();
+        return;
+      }
+
+      vp.scrollLeft -= vx * dt;
+      vp.scrollTop -= vy * dt;
+
+      // Friction
+      velocityXRef.current = vx * INERTIA_FRICTION;
+      velocityYRef.current = vy * INERTIA_FRICTION;
+
+      inertiaRafRef.current = requestAnimationFrame(tick);
+    };
+
+    inertiaRafRef.current = requestAnimationFrame(tick);
+  }, [stopInertia, captureScrollRatio]);
+
+  // Drag-to-pan handlers
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const vp = viewportRef.current;
+      if (!vp) return;
+
+      stopInertia();
+
+      isDraggingRef.current = true;
+      dragStartXRef.current = e.clientX;
+      dragStartYRef.current = e.clientY;
+      dragStartScrollLeftRef.current = vp.scrollLeft;
+      dragStartScrollTopRef.current = vp.scrollTop;
+
+      const now = performance.now();
+      lastMoveTimeRef.current = now;
+      lastMoveXRef.current = e.clientX;
+      lastMoveYRef.current = e.clientY;
+      velocityXRef.current = 0;
+      velocityYRef.current = 0;
+
+      try {
+        (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+      } catch {}
+
+      e.preventDefault();
+    },
+    [stopInertia]
+  );
+
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current) return;
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    const dx = e.clientX - dragStartXRef.current;
+    const dy = e.clientY - dragStartYRef.current;
+
+    // Faster panning
+    vp.scrollLeft = dragStartScrollLeftRef.current - dx * PAN_SPEED;
+    vp.scrollTop = dragStartScrollTopRef.current - dy * PAN_SPEED;
+
+    // Velocity estimate (px/sec) from last move
+    const now = performance.now();
+    const dtMs = Math.max(1, now - lastMoveTimeRef.current);
+    const stepX = e.clientX - lastMoveXRef.current;
+    const stepY = e.clientY - lastMoveYRef.current;
+
+    // Convert finger motion to scroll velocity (invert + apply PAN_SPEED)
+    velocityXRef.current = (stepX * PAN_SPEED * 1000) / dtMs;
+    velocityYRef.current = (stepY * PAN_SPEED * 1000) / dtMs;
+
+    lastMoveTimeRef.current = now;
+    lastMoveXRef.current = e.clientX;
+    lastMoveYRef.current = e.clientY;
+
+    e.preventDefault();
+  }, []);
+
+  const endDrag = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!isDraggingRef.current) return;
+      isDraggingRef.current = false;
+
+      try {
+        (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+      } catch {}
+
+      // Start inertia after release
+      startInertia();
+    },
+    [startInertia]
+  );
+
+  const baseBtn = "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
+
+  const rowColors = [
+    "bg-blue-100 text-gray-900",
+    "bg-blue-200 text-gray-900",
+    "bg-blue-300 text-gray-900",
+    "bg-blue-400 text-white",
+    "bg-blue-500 text-white",
+    "bg-blue-600 text-white",
+  ];
+
+  // Bigger zoom jumps per tap
+  const zoomOut = useCallback(() => {
+    captureScrollRatio();
+    setZoom((z) => clamp(Number((z * ZOOM_OUT_MULTIPLIER).toFixed(3)), MIN_ZOOM, MAX_ZOOM));
+  }, [captureScrollRatio]);
+
+  const zoomIn = useCallback(() => {
+    captureScrollRatio();
+    setZoom((z) => clamp(Number((z * ZOOM_IN_MULTIPLIER).toFixed(3)), MIN_ZOOM, MAX_ZOOM));
+  }, [captureScrollRatio]);
 
   return (
-    <div style={{ padding: 16 }}>
-      {/* Title row + edit */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        {!editingName ? (
-          <div>
-            <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>{tour?.name ?? "Tour"}</h1>
-
-            {/* Tour dates summary + edit */}
-            <div style={{ marginTop: 6, color: "#444", fontSize: 13, fontWeight: 700 }}>
-              Dates: <span style={{ fontWeight: 800 }}>{tourDatesLabel}</span>
-              {!tour?.start_date || !tour?.end_date ? (
-                <span style={{ marginLeft: 8, fontWeight: 600, color: "#666" }}>(default based on rounds)</span>
-              ) : null}
-            </div>
-
-            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setNameDraft(tour?.name ?? "");
-                  setEditingName(true);
-                  setNameMsg("");
-                }}
-                style={btnThin}
-              >
-                Edit name
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setStartDateDraft(tour?.start_date ?? (suggestedTourStartEnd.start ?? ""));
-                  setEndDateDraft(tour?.end_date ?? (suggestedTourStartEnd.end ?? ""));
-                  setEditingDates(true);
-                  setDatesMsg("");
-                }}
-                style={btnThin}
-              >
-                Edit dates
-              </button>
-
-              {(nameMsg || datesMsg) && (
-                <span
-                  style={{
-                    marginLeft: 6,
-                    fontSize: 12,
-                    color: (nameMsg + datesMsg).startsWith("Saved") ? "#2e7d32" : "crimson",
-                  }}
-                >
-                  {nameMsg || datesMsg}
-                </span>
-              )}
-            </div>
-          </div>
+    <div className="min-h-dvh bg-black text-white">
+      <div className="px-4 pt-4 pb-3 max-w-md mx-auto">
+        {loading ? (
+          <div className="h-6 w-48 bg-white/30 rounded" />
         ) : (
-          <div style={{ width: "min(520px, 100%)" }}>
-            <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Edit tour name</h1>
-
-            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <input value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} placeholder="Tour name" style={inputWide} disabled={nameSaving} />
-              <button type="button" onClick={() => void saveTourName()} disabled={nameSaving} style={btnPrimary(nameSaving)}>
-                {nameSaving ? "Saving…" : "Save"}
-              </button>
-              <button type="button" onClick={cancelEditName} disabled={nameSaving} style={btnThin}>
-                Cancel
-              </button>
-            </div>
-
-            {nameMsg && <div style={{ marginTop: 8, fontSize: 12, color: nameMsg.startsWith("Saved") ? "#2e7d32" : "crimson" }}>{nameMsg}</div>}
-          </div>
+          <>
+            <div className="text-2xl font-extrabold">{tour?.name || "Tour"}</div>
+            <div className="text-sm text-white/80">{dateLabel || "Dates TBD"}</div>
+          </>
         )}
-
-        {editingDates ? (
-          <div style={{ width: "min(560px, 100%)" }}>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Edit tour dates</h2>
-            <div style={{ marginTop: 8, fontSize: 12, color: "#666" }}>
-              Suggested default: <strong>{suggestedTourStartEnd.start ? fmtDate(suggestedTourStartEnd.start) : "TBD"}</strong> {" – "}
-              <strong>{suggestedTourStartEnd.end ? fmtDate(suggestedTourStartEnd.end) : "TBD"}</strong>
-            </div>
-
-            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-              <div>
-                <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Start date</div>
-                <input type="date" value={startDateDraft} onChange={(e) => setStartDateDraft(e.target.value)} style={inputDate} disabled={datesSaving} />
-              </div>
-
-              <div>
-                <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>End date</div>
-                <input type="date" value={endDateDraft} onChange={(e) => setEndDateDraft(e.target.value)} style={inputDate} disabled={datesSaving} />
-              </div>
-
-              <button type="button" onClick={() => void saveTourDates()} disabled={datesSaving} style={btnPrimary(datesSaving)}>
-                {datesSaving ? "Saving…" : "Save dates"}
-              </button>
-              <button type="button" onClick={cancelEditDates} disabled={datesSaving} style={btnThin}>
-                Cancel
-              </button>
-            </div>
-
-            {datesMsg && <div style={{ marginTop: 8, fontSize: 12, color: datesMsg.startsWith("Saved") ? "#2e7d32" : "crimson" }}>{datesMsg}</div>}
-          </div>
-        ) : null}
       </div>
 
-      {/* Players */}
-      <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Players</h2>
-
-      <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ color: "#333" }}>
-          Total: <strong>{playersInThisTour.length}</strong>
-        </div>
-
-        <Link href={`/tours/${tourId}/players`}>Manage players (this tour) →</Link>
-
-        <button type="button" onClick={() => void saveStartingHandicaps()} disabled={hcpSaving || playersInThisTour.length === 0} style={btnThin}>
-          {hcpSaving ? "Saving…" : "Save starting handicaps"}
-        </button>
-
-        {hcpMsg && <div style={{ fontSize: 12, color: hcpMsg.startsWith("Saved") ? "#2e7d32" : "crimson" }}>{hcpMsg}</div>}
+      <div className="relative h-[26vh] bg-black">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={heroImage} alt="" className="h-full w-full object-cover" />
       </div>
 
-      {playersInThisTour.length === 0 ? (
-        <div style={{ marginTop: 8, color: "#555" }}>No players yet.</div>
-      ) : (
-        <div style={{ marginTop: 10, overflowX: "auto" }}>
-          <table style={{ borderCollapse: "collapse", minWidth: 760, width: "100%" }}>
-            <thead>
-              <tr>
-                <th style={thLeft}>Player</th>
-                <th style={thRight}>Global start</th>
-                <th style={thRight}>Tour start (editable)</th>
-                <th style={thRight}>Effective</th>
-              </tr>
-            </thead>
-            <tbody>
-              {playersInThisTour.map((p) => {
-                const draft = hcpDraftByPlayerId[p.id] ?? round1(p.effectiveStart).toFixed(1);
-                const draftNum = parseOneDecimalOrNull(draft);
-                const effective = draftNum === null ? p.globalStart : draftNum;
-                const isOverride = draftNum !== null && !equal1(draftNum, p.globalStart);
+      <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>
+            Daily
+            <br />
+            Tee times
+          </button>
+          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>
+            Daily
+            <br />
+            Results
+          </button>
+          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>
+            Score
+            <br />
+            Entry
+          </button>
 
-                return (
-                  <tr key={p.id}>
-                    <td style={tdLeft}>
-                      <div style={{ fontWeight: 700 }}>{p.name}</div>
-                      <div style={{ fontSize: 12, color: "#666" }}>{isOverride ? "Using tour override" : "Using global"}</div>
-                    </td>
+          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>
+            Leaderboards
+          </button>
+          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/competitions`)}>
+            Competitions
+          </button>
+          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/stats`)}>
+            Stats
+          </button>
 
-                    <td style={tdRight}>{fmt1(p.globalStart)}</td>
+          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>
+            Matchplay
+            <br />
+            Format
+          </button>
+          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>
+            Matchplay
+            <br />
+            Results
+          </button>
+          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>
+            Matchplay
+            <br />
+            Leaderboard
+          </button>
 
-                    <td style={tdRight}>
-                      <input
-                        value={draft}
-                        onChange={(e) => setHcpDraftByPlayerId((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                        placeholder={fmt1(p.globalStart)}
-                        style={inputSmallRight}
-                        disabled={hcpSaving}
-                        inputMode="decimal"
-                      />
-                      <div style={{ fontSize: 11, color: "#777", marginTop: 4 }}>Blank = global</div>
-                    </td>
+          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>
+            Tour
+            <br />
+            Details
+          </button>
+          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>
+            Tour
+            <br />
+            Admin
+          </button>
+          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>
+            Rehandicapping
+          </button>
 
-                    <td style={tdRight}>{fmt1(effective)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(0)}
+          >
+            {openingDocIdx === 0 ? "Opening…" : "Itinerary"}
+          </button>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(1)}
+          >
+            {openingDocIdx === 1 ? "Opening…" : "Accommodation"}
+          </button>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(2)}
+          >
+            {openingDocIdx === 2 ? "Opening…" : "Dining"}
+          </button>
 
-      {/* Events */}
-      <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Events</h2>
-      <div style={{ marginTop: 8, color: "#333" }}>
-        <div>
-          <strong>Individual</strong> — Stableford total &nbsp;·&nbsp; <span style={{ color: "#555" }}>{fmtRuleIndividual(eventSettings)}</span>
-        </div>
-        <div style={{ marginTop: 6 }}>
-          <strong>Pairs</strong> — Better Ball Stableford &nbsp;·&nbsp; <span style={{ color: "#555" }}>{fmtRulePairs(eventSettings)}</span>
-        </div>
-        <div style={{ marginTop: 6 }}>
-          <strong>Teams</strong> — {fmtRuleTeams(eventSettings)}
-        </div>
-
-        <div style={{ marginTop: 10 }}>
-          <Link href={`/tours/${tourId}/events/manage`}>Manage events →</Link>
-        </div>
-      </div>
-
-      {/* Pairs & Teams */}
-      <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Pairs &amp; Teams</h2>
-      <div style={{ marginTop: 8 }}>
-        <div style={{ color: "#333" }}>
-          Pairs: <strong>{tourPairs.length}</strong> &nbsp;|&nbsp; Teams: <strong>{tourTeams.length}</strong>
-        </div>
-
-        {tourPairs.length === 0 && tourTeams.length === 0 ? (
-          <div style={{ marginTop: 6, color: "#555" }}>No pairs or teams yet.</div>
-        ) : (
-          <div style={{ marginTop: 10 }}>
-            {tourPairs.length > 0 && (
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Pairs</div>
-                <ul style={{ marginTop: 0 }}>
-                  {tourPairs.map((g) => (
-                    <li key={g.id}>
-                      <strong>{labelForGroup(g)}</strong> <span style={{ color: "#666" }}>({membersLabel(g)})</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(3)}
+          >
+            {openingDocIdx === 3 ? (
+              "Opening…"
+            ) : (
+              <>
+                Player
+                <br />
+                Profiles
+              </>
             )}
+          </button>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(4)}
+          >
+            {openingDocIdx === 4 ? "Opening…" : "Comps etc"}
+          </button>
 
-            {tourTeams.length > 0 && (
-              <div>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Teams</div>
-                <ul style={{ marginTop: 0 }}>
-                  {tourTeams.map((g) => (
-                    <li key={g.id}>
-                      <strong>{labelForGroup(g)}</strong> <span style={{ color: "#666" }}>({membersLabel(g)})</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
+          <button
+            type="button"
+            className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
+            onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
+          >
+            App
+            <br />
+            User Guide
+          </button>
+        </div>
 
-        <div style={{ marginTop: 8 }}>
-          <Link href={`/tours/${tourId}/groups`}>Manage pairs &amp; teams →</Link>
+        <div className="pt-6 text-center">
+          <div className="text-sm font-semibold text-gray-300">Built by GAC Ventures</div>
+          <div className="text-xs italic tracking-wide text-gray-400">Golf · Analytics · Competition</div>
         </div>
       </div>
 
-      {/* Rounds */}
-      <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Rounds</h2>
-      <div style={{ marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ color: "#333" }}>
-          Total: <strong>{rounds.length}</strong>
-        </div>
-        <Link href={`/tours/${tourId}/rounds`}>Manage rounds →</Link>
-      </div>
-
-      {rounds.length === 0 ? (
-        <div style={{ marginTop: 8, color: "#555" }}>No rounds yet.</div>
-      ) : (
-        <div style={{ marginTop: 10, overflowX: "auto" }}>
-          <table style={{ borderCollapse: "collapse", minWidth: 860, width: "100%" }}>
-            <thead>
-              <tr>
-                <th style={thLeft}>Round</th>
-                <th style={thLeft}>Course</th>
-                <th style={thLeft}>Date</th>
-                <th style={thLeft}>Tee time</th>
-                <th style={thLeft}>Links</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rounds.map((r, idx) => {
-                const roundNo = r.round_no ?? idx + 1;
-                const courseName = r.course_id ? coursesById[r.course_id]?.name : null;
-                const dateLabel = fmtRoundPlayedOn(r.played_on); // <-- TBC if null
-                const tee = roundTeeTimeByRoundId[r.id] ?? "—";
-
-                return (
-                  <tr key={r.id}>
-                    <td style={tdLeft}>
-                      <div style={{ fontWeight: 800 }}>Round {roundNo}</div>
-                      {r.name?.trim() ? <div style={{ fontSize: 12, color: "#666" }}>{r.name.trim()}</div> : null}
-                    </td>
-                    <td style={tdLeft}>{courseName ?? (r.course_id ?? "—")}</td>
-                    <td style={tdLeft}>{dateLabel}</td>
-                    <td style={tdLeft}>{tee}</td>
-                    <td style={tdLeft}>
-                      <Link href={`/rounds/${r.id}`}>Open</Link>
-                      <span style={{ color: "#bbb" }}> · </span>
-                      <Link href={`/rounds/${r.id}/groups`}>Groupings</Link>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-
-          <div style={{ marginTop: 8, fontSize: 12, color: "#666" }}>
-            Date shows <strong>TBC</strong> unless <code>rounds.played_on</code> is set.
+      {/* PDF overlay with zoom + fast pan + inertia */}
+      {viewerSrc && (
+        <div className="fixed inset-0 z-50 bg-black">
+          <div className="flex items-center justify-between px-4 py-3 bg-black/90">
+            <div className="text-white text-sm font-semibold truncate">{viewerTitle}</div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={zoomOut} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20" disabled={rendering}>
+                −
+              </button>
+              <button type="button" onClick={zoomIn} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20" disabled={rendering}>
+                +
+              </button>
+              <button type="button" onClick={closeViewer} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20">
+                Close
+              </button>
+            </div>
           </div>
-          <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
-            Tee time shown is the earliest tee time from round groups (if any).
+
+          <div
+            ref={viewportRef}
+            className="w-full h-[calc(100dvh-52px)] bg-white overflow-auto"
+            style={{ touchAction: "none", cursor: "grab" }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            onPointerLeave={endDrag}
+          >
+            <div className="p-4">
+              <canvas ref={canvasRef} className="block" />
+            </div>
           </div>
         </div>
       )}
     </div>
   );
 }
-
-const btnThin: React.CSSProperties = {
-  padding: "6px 10px",
-  borderRadius: 10,
-  border: "1px solid #ddd",
-  background: "white",
-  cursor: "pointer",
-  fontSize: 13,
-  fontWeight: 700,
-};
-
-function btnPrimary(disabled: boolean): React.CSSProperties {
-  return {
-    padding: "10px 12px",
-    borderRadius: 10,
-    border: "1px solid #111",
-    background: disabled ? "#f5f5f5" : "#111",
-    color: disabled ? "#111" : "white",
-    cursor: disabled ? "default" : "pointer",
-    fontSize: 14,
-    fontWeight: 800,
-  };
-}
-
-const inputWide: React.CSSProperties = {
-  flex: "1 1 280px",
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid #ccc",
-  fontSize: 14,
-};
-
-const inputDate: React.CSSProperties = {
-  padding: "9px 10px",
-  borderRadius: 10,
-  border: "1px solid #ccc",
-  fontSize: 14,
-};
-
-const inputSmallRight: React.CSSProperties = {
-  width: 110,
-  padding: "6px 8px",
-  borderRadius: 10,
-  border: "1px solid #ccc",
-  textAlign: "right",
-};
-
-const thLeft: React.CSSProperties = {
-  textAlign: "left",
-  padding: "10px 8px",
-  borderBottom: "1px solid #ddd",
-  whiteSpace: "nowrap",
-};
-
-const thRight: React.CSSProperties = {
-  textAlign: "right",
-  padding: "10px 8px",
-  borderBottom: "1px solid #ddd",
-  whiteSpace: "nowrap",
-};
-
-const tdLeft: React.CSSProperties = {
-  textAlign: "left",
-  padding: "10px 8px",
-  borderBottom: "1px solid #eee",
-  verticalAlign: "top",
-};
-
-const tdRight: React.CSSProperties = {
-  textAlign: "right",
-  padding: "10px 8px",
-  borderBottom: "1px solid #eee",
-  verticalAlign: "top",
-};
