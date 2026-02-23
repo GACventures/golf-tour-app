@@ -27,22 +27,30 @@ export default function TourLayout({ children }: { children: React.ReactNode }) 
     return pathname === base || pathname === `${base}/`;
   }, [pathname, tourId]);
 
-  // ✅ Option A: exclude layout chrome for score entry page only
+  // ✅ Exclude layout chrome for score entry pages (classic + alt)
   const isScoreEntryPage = useMemo(() => {
     if (!tourId) return false;
+
     const base = `/m/tours/${tourId}/rounds/`;
     if (!pathname.startsWith(base)) return false;
 
-    // Expected: /m/tours/{tourId}/rounds/{roundId}/scoring/score
-    // So: take the remainder after ".../rounds/"
-    const rest = pathname.slice(base.length); // "{roundId}/scoring/score" (possibly with trailing slash)
+    // Expected:
+    // /m/tours/{tourId}/rounds/{roundId}/scoring/score
+    // /m/tours/{tourId}/rounds/{roundId}/scoring/score-alt
+    //
+    // After ".../rounds/" we get: "{roundId}/scoring/{leaf}(/* optional)"
+    const rest = pathname.slice(base.length);
     const parts = rest.split("/").filter(Boolean);
 
-    if (parts.length !== 3) return false;
-    const [roundId, a, b] = parts;
+    // Must have at least: [roundId, "scoring", "score" | "score-alt"]
+    if (parts.length < 3) return false;
+
+    const [roundId, a, leaf] = parts;
 
     if (!roundId || !isLikelyUuid(roundId)) return false;
-    return a === "scoring" && b === "score";
+    if (a !== "scoring") return false;
+
+    return leaf === "score" || leaf === "score-alt";
   }, [pathname, tourId]);
 
   const [tourName, setTourName] = useState<string>("Tour");
