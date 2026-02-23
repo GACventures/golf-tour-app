@@ -34,9 +34,16 @@ type RoundGroupPlayerRow = {
   seat: number | null;
 };
 
+type ScoreEntryLayout = "classic" | "alt";
+
 function asSingle<T>(v: T | T[] | null | undefined): T | null {
   if (!v) return null;
   return Array.isArray(v) ? v[0] ?? null : v;
+}
+
+function normalizeLayout(v: unknown): ScoreEntryLayout {
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "alt" ? "alt" : "classic";
 }
 
 export default function MobileRoundScoringSelectPage() {
@@ -59,6 +66,9 @@ export default function MobileRoundScoringSelectPage() {
   const [meId, setMeId] = useState("");
   const [buddyId, setBuddyId] = useState("");
 
+  // ✅ Tour-level score entry layout (classic | alt)
+  const [scoreEntryLayout, setScoreEntryLayout] = useState<ScoreEntryLayout>("classic");
+
   // Tracks if the user explicitly chose a buddy (so we don't overwrite their choice)
   const buddyManuallySetRef = useRef(false);
 
@@ -72,6 +82,21 @@ export default function MobileRoundScoringSelectPage() {
       setErrorMsg("");
 
       try {
+        // ✅ Load tour layout first (small, independent query)
+        // If this fails, we safely fall back to classic.
+        const { data: tData, error: tErr } = await supabase
+          .from("tours")
+          .select("score_entry_layout")
+          .eq("id", tourId)
+          .single();
+
+        if (!tErr && alive) {
+          setScoreEntryLayout(normalizeLayout((tData as any)?.score_entry_layout));
+        } else if (tErr) {
+          console.warn("tour score_entry_layout load error:", tErr);
+          if (alive) setScoreEntryLayout("classic");
+        }
+
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,name,course_id,is_locked,played_on,round_no,courses(name)")
@@ -221,11 +246,19 @@ export default function MobileRoundScoringSelectPage() {
 
   const targetUrl = useMemo(() => {
     if (!meId) return "";
+
     const qs = new URLSearchParams();
     qs.set("meId", meId);
     if (buddyId && buddyId !== meId) qs.set("buddyId", buddyId);
-    return `/m/tours/${tourId}/rounds/${roundId}/scoring/score?${qs.toString()}`;
-  }, [tourId, roundId, meId, buddyId]);
+
+    // ✅ Decide classic vs alt here
+    const base =
+      scoreEntryLayout === "alt"
+        ? `/m/tours/${tourId}/rounds/${roundId}/scoring/score-alt`
+        : `/m/tours/${tourId}/rounds/${roundId}/scoring/score`;
+
+    return `${base}?${qs.toString()}`;
+  }, [tourId, roundId, meId, buddyId, scoreEntryLayout]);
 
   const buddyLabel = useMemo(() => {
     if (!meId) return "Buddy (optional)";
@@ -262,6 +295,9 @@ export default function MobileRoundScoringSelectPage() {
             </span>
           </div>
 
+          {/* Optional: tiny debug hint for testers (won’t affect scoring logic) */}
+          <div className="mt-1 text-xs text-gray-500">Layout: {scoreEntryLayout}</div>
+
           {errorMsg ? <div className="mt-2 text-sm text-red-600">{errorMsg}</div> : null}
         </div>
 
@@ -278,8 +314,7 @@ export default function MobileRoundScoringSelectPage() {
         <div className="mt-4 rounded-2xl border p-4 text-sm space-y-2 bg-white">
           <div className="font-semibold">No playing players</div>
           <div className="text-gray-700">
-            This mode only allows selecting players marked <code>playing=true</code> in{" "}
-            <code>round_players</code>.
+            This mode only allows selecting players marked <code>playing=true</code> in <code>round_players</code>.
           </div>
         </div>
       ) : (
