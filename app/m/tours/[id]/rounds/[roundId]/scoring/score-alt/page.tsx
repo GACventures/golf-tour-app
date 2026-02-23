@@ -820,7 +820,7 @@ export default function MobileScoreEntryAltPage() {
 
   // --- UI helpers ---
 
-  // One-row hole info (compact, SI-only)
+  // One-row hole info (SI-only)
   function HoleRowEntryOnly() {
     const holeScale = holePulse === "up" ? 1.12 : holePulse === "down" ? 1.0 : 1.0;
     const holeStyle: React.CSSProperties = {
@@ -1003,7 +1003,6 @@ export default function MobileScoreEntryAltPage() {
     const par = info?.par ?? 0;
 
     const shotsGiven = shotsGivenForHole(hcp, si);
-
     const holePts = pickup ? 0 : pointsFor(pid, hole);
 
     const totalPts = useMemo(() => sumPoints(pid, 1, 18), [pid, scores, parsByTee, meHcp, buddyHcp]);
@@ -1012,16 +1011,10 @@ export default function MobileScoreEntryAltPage() {
     const grossDisplay = pickup ? "P" : raw && raw !== "P" ? raw : "—";
     const prefixOn = prefix1ByPid[pid] === true;
 
-    // Distinct section backgrounds (player 1 vs player 2)
     const sectionBg = isBuddy ? "bg-emerald-200 border-emerald-300" : "bg-indigo-200 border-indigo-300";
-
-    // Name box colours by tee (M=pale blue, F=pink)
-    const nameHeader = tee === "F" ? "bg-pink-200 text-slate-900 border-pink-300" : "bg-sky-200 text-slate-900 border-sky-300";
-
-    // Keypad panel colours by tee (similar to name header)
+    const nameHeader =
+      tee === "F" ? "bg-pink-200 text-slate-900 border-pink-300" : "bg-sky-200 text-slate-900 border-sky-300";
     const keypadPanel = tee === "F" ? "bg-pink-100 border-pink-300" : "bg-sky-100 border-sky-300";
-
-    // Button base (also tee-themed)
     const btnBaseBorder = tee === "F" ? "border-pink-300" : "border-sky-300";
     const btnBaseBg = tee === "F" ? "bg-pink-50" : "bg-sky-50";
 
@@ -1044,11 +1037,19 @@ export default function MobileScoreEntryAltPage() {
       );
     }
 
-    function StatBox(props2: { label: string; value: React.ReactNode; variant?: "white" | "black" }) {
+    // ✅ Update: add a "outline" variant for bold border strokes box
+    function StatBox(props2: { label: string; value: React.ReactNode; variant?: "white" | "black" | "outline" }) {
       const variant = props2.variant ?? "white";
-      const box = variant === "black" ? "bg-black text-white border-black" : "bg-white text-slate-900 border-slate-300";
+
+      const box =
+        variant === "black"
+          ? "bg-black text-white border-black"
+          : variant === "outline"
+            ? "bg-white text-slate-900 border-2 border-slate-900"
+            : "bg-white text-slate-900 border border-slate-300";
+
       return (
-        <div className={`rounded-xl border ${box} px-3 py-2 text-center`}>
+        <div className={`rounded-xl ${box} px-3 py-2 text-center`}>
           <div className="text-xs font-extrabold tracking-wide opacity-80">{props2.label}</div>
           <div className="mt-1 text-2xl font-black leading-tight">{props2.value}</div>
         </div>
@@ -1065,18 +1066,14 @@ export default function MobileScoreEntryAltPage() {
           </div>
 
           <div className="p-3 space-y-3">
-            {/* 2x2 stats block
-                ✅ FIX: swap top-row order so TOP-LEFT = Par and TOP-RIGHT = Shots
-            */}
+            {/* 2x2 stats block */}
             <div className="grid grid-cols-2 gap-2">
-              {/* TOP-LEFT: Par (FIXED) */}
               <StatBox label="Par" value={par || "—"} variant="white" />
-              {/* TOP-RIGHT: Shots (FIXED) */}
               <StatBox label="Shots" value={Number.isFinite(shotsGiven) ? shotsGiven : 0} variant="white" />
 
-              {/* Bottom-left: Strokes (black) */}
-              <StatBox label="Strokes" value={grossDisplay} variant="black" />
-              {/* Bottom-right: Points (white per latest instruction) */}
+              {/* ✅ Change 1: Strokes box white with bold outline */}
+              <StatBox label="Strokes" value={grossDisplay} variant="outline" />
+
               <StatBox label="Points" value={holePts} variant="white" />
             </div>
 
@@ -1085,22 +1082,18 @@ export default function MobileScoreEntryAltPage() {
               <div className="text-xs font-extrabold text-slate-700 mb-2 text-center">STROKES</div>
 
               <div className="grid grid-cols-3 gap-2">
-                {/* Row 1: 1 2 3 */}
                 <KeyButton text="1" onClick={() => pressDigit(pid, 1)} shaded={par === 1} disabled={isLocked} />
                 <KeyButton text="2" onClick={() => pressDigit(pid, 2)} shaded={par === 2} disabled={isLocked} />
                 <KeyButton text="3" onClick={() => pressDigit(pid, 3)} shaded={par === 3} disabled={isLocked} />
 
-                {/* Row 2: 4 5 6 */}
                 <KeyButton text="4" onClick={() => pressDigit(pid, 4)} shaded={par === 4} disabled={isLocked} />
                 <KeyButton text="5" onClick={() => pressDigit(pid, 5)} shaded={par === 5} disabled={isLocked} />
                 <KeyButton text="6" onClick={() => pressDigit(pid, 6)} shaded={par === 6} disabled={isLocked} />
 
-                {/* Row 3: 7 8 9 */}
                 <KeyButton text="7" onClick={() => pressDigit(pid, 7)} shaded={par === 7} disabled={isLocked} />
                 <KeyButton text="8" onClick={() => pressDigit(pid, 8)} shaded={par === 8} disabled={isLocked} />
                 <KeyButton text="9" onClick={() => pressDigit(pid, 9)} shaded={par === 9} disabled={isLocked} />
 
-                {/* Row 4 unchanged: 1- 0 P */}
                 <button
                   type="button"
                   onClick={() => pressPrefix1(pid)}
@@ -1137,7 +1130,7 @@ export default function MobileScoreEntryAltPage() {
               </div>
             </div>
 
-            {/* Total block (Shots white, Points black) */}
+            {/* TOTAL block */}
             <div className="rounded-xl border border-slate-300 bg-white px-3 py-2">
               <div className="text-xs font-extrabold tracking-wide text-slate-700 text-center">TOTAL</div>
 
@@ -1149,9 +1142,10 @@ export default function MobileScoreEntryAltPage() {
                   {totalShots}
                 </div>
 
+                {/* ✅ Change 2: Total points from black to pale grey */}
                 <button
                   type="button"
-                  className="rounded-lg border border-black bg-black py-2 text-2xl font-black text-white active:scale-[0.99]"
+                  className="rounded-lg border border-slate-300 bg-slate-200 py-2 text-2xl font-black text-slate-900 active:scale-[0.99]"
                   onClick={() => openInPageSummaryFor(pid)}
                   aria-label="Open summary"
                 >
@@ -1213,7 +1207,6 @@ export default function MobileScoreEntryAltPage() {
 
   return (
     <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden">
-      {/* no standard header */}
       <div className="px-4 pt-3 pb-1 flex items-center justify-between">
         <button type="button" className="text-sm font-bold text-slate-900 underline" onClick={handleBack} aria-label="Back">
           Back
@@ -1223,17 +1216,13 @@ export default function MobileScoreEntryAltPage() {
           type="button"
           onClick={() => void saveAll()}
           disabled={saving || isLocked}
-          className={`px-3 py-2 rounded-md text-sm font-bold text-white ${
-            saving || isLocked ? "bg-slate-500" : "bg-sky-600"
-          }`}
+          className={`px-3 py-2 rounded-md text-sm font-bold text-white ${saving || isLocked ? "bg-slate-500" : "bg-sky-600"}`}
         >
           {saving ? "Saving…" : isLocked ? "Locked" : "Save (Me)"}
         </button>
       </div>
 
       {tab === "entry" ? <HoleRowEntryOnly /> : <SummaryPlayerToggleTop />}
-
-      {/* no Entry/Summary tab UI */}
 
       <div
         className="px-4 py-3 space-y-3 overflow-y-auto"
