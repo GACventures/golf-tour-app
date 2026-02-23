@@ -1,12 +1,9 @@
+// app/m/tours/[id]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-
-// PDF.js (worker served from /public)
-import * as pdfjsLib from "pdfjs-dist";
-(pdfjsLib as any).GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
 type TourRow = {
   id: string;
@@ -149,6 +146,38 @@ export default function MobileTourLandingPage() {
   // Preserve scroll position proportionally when zoom changes
   const scrollRatioRef = useRef<{ x: number; y: number } | null>(null);
 
+  // ✅ PDF.js loaded lazily on client only (prevents DOMMatrix SSR crash)
+  const pdfjsRef = useRef<any>(null);
+  const [pdfjsReady, setPdfjsReady] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function loadPdfJs() {
+      try {
+        // Only run in browser
+        if (typeof window === "undefined") return;
+
+        const mod: any = await import("pdfjs-dist");
+        const lib = mod?.default ?? mod;
+
+        // worker served from /public
+        lib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+
+        pdfjsRef.current = lib;
+        if (alive) setPdfjsReady(true);
+      } catch {
+        // If PDF.js fails to load, we just won't open docs
+        if (alive) setPdfjsReady(false);
+      }
+    }
+
+    loadPdfJs();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const stopInertia = useCallback(() => {
     if (inertiaRafRef.current != null) {
       cancelAnimationFrame(inertiaRafRef.current);
@@ -250,7 +279,9 @@ export default function MobileTourLandingPage() {
     let cancelled = false;
 
     async function loadAndRender() {
+      const pdfjsLib = pdfjsRef.current;
       if (!viewerSrc || !canvasRef.current) return;
+      if (!pdfjsLib) return;
 
       // Save current pan position before resize
       captureScrollRatio();
@@ -258,7 +289,7 @@ export default function MobileTourLandingPage() {
       setRendering(true);
 
       try {
-        const loadingTask = (pdfjsLib as any).getDocument(viewerSrc);
+        const loadingTask = pdfjsLib.getDocument(viewerSrc);
         const pdf = await loadingTask.promise;
         if (cancelled) return;
 
@@ -293,12 +324,16 @@ export default function MobileTourLandingPage() {
     return () => {
       cancelled = true;
     };
-  }, [viewerSrc, zoom, closeViewer, captureScrollRatio, restoreScrollRatio]);
+  }, [viewerSrc, zoom, closeViewer, captureScrollRatio, restoreScrollRatio, pdfjsReady]);
 
   const openDocByIndex = useCallback(
     async (idx: number) => {
       if (tourId !== PDF_TOUR_ID) {
         alert(NOT_AVAILABLE_MESSAGE);
+        return;
+      }
+      if (!pdfjsRef.current) {
+        alert("PDF viewer not ready yet. Please try again.");
         return;
       }
 
@@ -320,7 +355,9 @@ export default function MobileTourLandingPage() {
 
         // ✅ FIX: title must match the clicked PDF filename (docs[] order can differ)
         const filenameKey = String(filename).toLowerCase();
-        const match = docs.find((d) => normalizePath(d.storage_path).endsWith(`/${filenameKey}`) || normalizePath(d.storage_path).endsWith(filenameKey));
+        const match = docs.find(
+          (d) => normalizePath(d.storage_path).endsWith(`/${filenameKey}`) || normalizePath(d.storage_path).endsWith(filenameKey)
+        );
         const title = (match?.title ?? "").trim() || titleFromFilename(filename);
 
         stopInertia();
@@ -460,7 +497,14 @@ export default function MobileTourLandingPage() {
 
   const baseBtn = "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
 
-  const rowColors = ["bg-blue-100 text-gray-900", "bg-blue-200 text-gray-900", "bg-blue-300 text-gray-900", "bg-blue-400 text-white", "bg-blue-500 text-white", "bg-blue-600 text-white"];
+  const rowColors = [
+    "bg-blue-100 text-gray-900",
+    "bg-blue-200 text-gray-900",
+    "bg-blue-300 text-gray-900",
+    "bg-blue-400 text-white",
+    "bg-blue-500 text-white",
+    "bg-blue-600 text-white",
+  ];
 
   // Bigger zoom jumps per tap
   const zoomOut = useCallback(() => {
@@ -549,17 +593,33 @@ export default function MobileTourLandingPage() {
             Rehandicapping
           </button>
 
-          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(0)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(0)}
+          >
             {openingDocIdx === 0 ? "Opening…" : "Itinerary"}
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(1)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(1)}
+          >
             {openingDocIdx === 1 ? "Opening…" : "Accommodation"}
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(2)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(2)}
+          >
             {openingDocIdx === 2 ? "Opening…" : "Dining"}
           </button>
 
-          <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(3)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(3)}
+          >
             {openingDocIdx === 3 ? (
               "Opening…"
             ) : (
@@ -570,7 +630,11 @@ export default function MobileTourLandingPage() {
               </>
             )}
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(4)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(4)}
+          >
             {openingDocIdx === 4 ? "Opening…" : "Comps etc"}
           </button>
 
