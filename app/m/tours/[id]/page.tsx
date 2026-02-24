@@ -39,29 +39,25 @@ const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
 const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
 const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
 
-// ✅ New Zealand Golf Tour 2026 hero override
 const NZ_TOUR_2026_ID = "5a80b049-396f-46ec-965e-810e738471b6";
 const NZ_TOUR_2026_HERO = "/tours/NZ26-logo.webp";
 
 // Only this tour has PDFs for now
 const PDF_TOUR_ID = NZ_TOUR_2026_ID;
 const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
-
-// IMPORTANT: order matches the buttons below (idx is button -> filename)
 const PDF_FILES = ["itinerary.pdf", "accommodation.pdf", "dining.pdf", "profiles.pdf", "comps.pdf"] as const;
 
-/** Map-like interaction tuning */
+// Interaction
 const MIN_SCALE = 0.6;
 const MAX_SCALE = 6.0;
 
-// How aggressively to re-render the PDF after interactive scaling
+// Debounced refine
 const RERENDER_DEBOUNCE_MS = 140;
-// Only re-render if the interactive scale differs enough from last render scale
-const RERENDER_THRESHOLD_RATIO = 1.25;
+const RERENDER_THRESHOLD_RATIO = 1.20;
 
-// Inertia tuning (optional nice-to-have)
-const INERTIA_FRICTION = 0.92; // closer to 1 = longer glide
-const INERTIA_STOP_SPEED = 18; // px/sec threshold to stop
+// Inertia
+const INERTIA_FRICTION = 0.92;
+const INERTIA_STOP_SPEED = 18;
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -92,7 +88,6 @@ function formatTourDates(start: Date | null, end: Date | null) {
   return "";
 }
 
-// Prefer DB title that matches the clicked pdf filename, else fall back to filename-derived
 function titleFromFilename(filename: string) {
   return filename.replace(/\.pdf$/i, "").replace(/[-_]+/g, " ").trim();
 }
@@ -113,50 +108,52 @@ export default function MobileTourLandingPage() {
   const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // PDF viewer state
+  // PDF overlay state
   const [openingDocIdx, setOpeningDocIdx] = useState<number | null>(null);
   const [viewerTitle, setViewerTitle] = useState<string>("Document");
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const [rendering, setRendering] = useState<boolean>(false);
 
-  // pdfjs
+  // PDF.js
   const pdfjsRef = useRef<any>(null);
   const [pdfjsReady, setPdfjsReady] = useState(false);
 
-  // Refs for DOM nodes
+  // DOM refs
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // PDF state refs (avoid re-renders during pinch)
+  // PDF refs
   const pdfDocRef = useRef<any>(null);
   const pdfPageRef = useRef<any>(null);
 
-  // Transform refs (map-like)
+  // Transform refs (interactive “map”)
   const scaleRef = useRef<number>(1);
   const txRef = useRef<number>(0);
   const tyRef = useRef<number>(0);
 
-  // Canvas "world" size at last render (CSS pixels)
+  // “World” size in CSS px (IMPORTANT: now stays constant)
   const worldWRef = useRef<number>(0);
   const worldHRef = useRef<number>(0);
 
-  // PDF render scale bookkeeping (so we only repaint when needed)
-  const lastRenderScaleRef = useRef<number>(1);
+  // Base CSS fit scale (used to render consistent CSS size)
+  const baseCssScaleRef = useRef<number>(1);
+
+  // Last quality render multiplier (so we don’t thrash)
+  const lastQualityRef = useRef<number>(1);
+
+  // Debounce timer
   const rerenderTimerRef = useRef<number | null>(null);
 
-  // Pointer tracking
+  // Pointers & gesture tracking
   const pointersRef = useRef<Map<number, Pt>>(new Map());
   const gestureRef = useRef<{
     mode: "none" | "pan" | "pinch";
     startScale: number;
     startTx: number;
     startTy: number;
-    startMid: Pt;
     startDist: number;
-    // world-point under the gesture midpoint at start
     anchorWorld: Pt;
-    // velocity for inertia (px/sec) in screen space
     vx: number;
     vy: number;
     lastMoveT: number;
@@ -166,7 +163,6 @@ export default function MobileTourLandingPage() {
     startScale: 1,
     startTx: 0,
     startTy: 0,
-    startMid: { x: 0, y: 0 },
     startDist: 1,
     anchorWorld: { x: 0, y: 0 },
     vx: 0,
@@ -179,37 +175,23 @@ export default function MobileTourLandingPage() {
 
   useEffect(() => {
     let alive = true;
-
     async function loadPdfJs() {
       try {
         if (typeof window === "undefined") return;
-
         const mod: any = await import("pdfjs-dist");
         const lib = mod?.default ?? mod;
-
-        // worker served from /public
         lib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-
         pdfjsRef.current = lib;
         if (alive) setPdfjsReady(true);
       } catch {
         if (alive) setPdfjsReady(false);
       }
     }
-
     loadPdfJs();
     return () => {
       alive = false;
     };
   }, []);
-
-  const heroImage = useMemo(() => {
-    if (tourId === NZ_TOUR_2026_ID) return NZ_TOUR_2026_HERO;
-    if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
-    if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
-    if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
-    return tour?.image_url?.trim() || DEFAULT_HERO;
-  }, [tourId, tour?.image_url, tour?.name]);
 
   useEffect(() => {
     let alive = true;
@@ -241,6 +223,14 @@ export default function MobileTourLandingPage() {
     };
   }, [tourId]);
 
+  const heroImage = useMemo(() => {
+    if (tourId === NZ_TOUR_2026_ID) return NZ_TOUR_2026_HERO;
+    if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
+    if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
+    if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
+    return tour?.image_url?.trim() || DEFAULT_HERO;
+  }, [tourId, tour?.image_url, tour?.name]);
+
   const derivedDates = useMemo(() => {
     const played = rounds.map((r) => r.played_on).filter(Boolean) as string[];
     if (!played.length) return { start: null, end: null };
@@ -269,7 +259,6 @@ export default function MobileTourLandingPage() {
   const applyTransform = useCallback(() => {
     const el = contentRef.current;
     if (!el) return;
-    // Use translate3d for better compositing on mobile
     el.style.transform = `translate3d(${txRef.current}px, ${tyRef.current}px, 0) scale(${scaleRef.current})`;
   }, []);
 
@@ -292,13 +281,11 @@ export default function MobileTourLandingPage() {
     const scaledW = worldW * nextScale;
     const scaledH = worldH * nextScale;
 
-    // If content smaller than viewport, center it (no drifting into blank space)
     let minTx: number, maxTx: number, minTy: number, maxTy: number;
 
     if (scaledW <= vw) {
       minTx = maxTx = (vw - scaledW) / 2;
     } else {
-      // allow panning but keep at least edge visible
       minTx = vw - scaledW;
       maxTx = 0;
     }
@@ -316,19 +303,7 @@ export default function MobileTourLandingPage() {
     };
   }, []);
 
-  const setTransformClamped = useCallback(
-    (tx: number, ty: number, scale: number) => {
-      const clamped = clampToBounds(tx, ty, scale);
-      txRef.current = clamped.tx;
-      tyRef.current = clamped.ty;
-      scaleRef.current = scale;
-      applyTransform();
-    },
-    [applyTransform, clampToBounds]
-  );
-
   const worldFromScreen = useCallback((screenPt: Pt) => {
-    // Convert a viewport-local screen point into "world" coords (canvas CSS pixels)
     const s = scaleRef.current;
     return {
       x: (screenPt.x - txRef.current) / s,
@@ -336,56 +311,71 @@ export default function MobileTourLandingPage() {
     };
   }, []);
 
-  const scheduleRerenderIfNeeded = useCallback(() => {
+  // --- NEW: render with fixed CSS size, variable internal resolution ---
+  const renderPageAtQuality = useCallback(async (quality: number) => {
+    const page = pdfPageRef.current;
+    const canvas = canvasRef.current;
+    if (!page || !canvas) return;
+
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+
+    // baseCssScale defines the CSS “world” size. It never changes after open.
+    const baseCssScale = baseCssScaleRef.current;
+
+    // renderScale controls bitmap resolution. Higher = sharper, but heavier.
+    const renderScale = baseCssScale * quality * dpr;
+
+    setRendering(true);
+    try {
+      const viewport = page.getViewport({ scale: renderScale });
+      const ctx = canvas.getContext("2d")!;
+
+      // Internal bitmap size
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+
+      // Keep CSS size fixed to the “world” size (no overshoot!)
+      const cssW = worldWRef.current;
+      const cssH = worldHRef.current;
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      lastQualityRef.current = quality;
+
+      // after a redraw, clamp translation (world size unchanged, but still safe)
+      const clamped = clampToBounds(txRef.current, tyRef.current, scaleRef.current);
+      txRef.current = clamped.tx;
+      tyRef.current = clamped.ty;
+      applyTransform();
+    } finally {
+      setRendering(false);
+    }
+  }, [applyTransform, clampToBounds]);
+
+  const scheduleRefine = useCallback(() => {
     clearRerenderTimer();
 
     rerenderTimerRef.current = window.setTimeout(async () => {
       rerenderTimerRef.current = null;
-      const page = pdfPageRef.current;
-      const canvas = canvasRef.current;
-      if (!page || !canvas) return;
 
-      const target = scaleRef.current;
-      const last = lastRenderScaleRef.current;
+      // Decide desired quality from interactive scale (bigger zoom wants more quality)
+      // Clamp so we don't make enormous canvases on mobile.
+      const desired = clamp(scaleRef.current, 1, 3);
 
-      // Only re-render if we drifted enough (prevents thrashing)
-      const ratio = target > last ? target / last : last / target;
+      const last = lastQualityRef.current;
+      const ratio = desired > last ? desired / last : last / desired;
       if (ratio < RERENDER_THRESHOLD_RATIO) return;
 
-      // Re-render at a scale closer to the current view scale,
-      // but clamp to avoid huge canvases that blow memory on mobile.
-      const renderScale = clamp(target, 0.7, 3.0);
       try {
-        setRendering(true);
-
-        const viewport = page.getViewport({ scale: renderScale });
-        const ctx = canvas.getContext("2d")!;
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-
-        // Keep CSS size in CSS pixels (world units)
-        worldWRef.current = viewport.width;
-        worldHRef.current = viewport.height;
-        canvas.style.width = `${viewport.width}px`;
-        canvas.style.height = `${viewport.height}px`;
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        await page.render({ canvasContext: ctx, viewport }).promise;
-
-        lastRenderScaleRef.current = renderScale;
-
-        // After world size changes, clamp current translate to bounds again
-        const clamped = clampToBounds(txRef.current, tyRef.current, scaleRef.current);
-        txRef.current = clamped.tx;
-        tyRef.current = clamped.ty;
-        applyTransform();
+        await renderPageAtQuality(desired);
       } catch {
-        // ignore; route failures handled elsewhere
-      } finally {
-        setRendering(false);
+        // ignore; open/close handles errors
       }
     }, RERENDER_DEBOUNCE_MS);
-  }, [applyTransform, clampToBounds, clearRerenderTimer]);
+  }, [clearRerenderTimer, renderPageAtQuality]);
 
   const closeViewer = useCallback(() => {
     stopInertia();
@@ -394,7 +384,6 @@ export default function MobileTourLandingPage() {
     setViewerSrc(null);
     setRendering(false);
 
-    // reset
     pointersRef.current.clear();
     gestureRef.current.mode = "none";
 
@@ -402,9 +391,10 @@ export default function MobileTourLandingPage() {
     txRef.current = 0;
     tyRef.current = 0;
 
-    lastRenderScaleRef.current = 1;
     worldWRef.current = 0;
     worldHRef.current = 0;
+    baseCssScaleRef.current = 1;
+    lastQualityRef.current = 1;
 
     pdfDocRef.current = null;
     pdfPageRef.current = null;
@@ -430,43 +420,32 @@ export default function MobileTourLandingPage() {
         const page = await pdf.getPage(1);
         pdfPageRef.current = page;
 
-        // Render at a "base" scale that fits viewport width nicely.
-        // We'll still allow interactive zoom via transforms.
-        const vpEl = viewportRef.current;
-        const vpW = vpEl?.clientWidth ?? 360;
+        // Choose a base CSS scale that fits width (world size)
+        const vp = viewportRef.current;
+        const vpW = vp?.clientWidth ?? 360;
 
-        // Start with pdf scale 1, then fit to width (leaving small padding)
-        const rawVp = page.getViewport({ scale: 1 });
-        const fitScale = clamp((vpW - 24) / rawVp.width, 0.7, 1.6);
-        const renderScale = fitScale;
+        const raw = page.getViewport({ scale: 1 });
+        const baseCssScale = clamp((vpW - 24) / raw.width, 0.7, 1.6);
+        baseCssScaleRef.current = baseCssScale;
 
-        const viewport = page.getViewport({ scale: renderScale });
+        // Set world size in CSS pixels based on baseCssScale
+        const cssVp = page.getViewport({ scale: baseCssScale });
+        worldWRef.current = cssVp.width;
+        worldHRef.current = cssVp.height;
 
-        const ctx = canvas.getContext("2d")!;
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-
-        // CSS size defines our "world" units
-        worldWRef.current = viewport.width;
-        worldHRef.current = viewport.height;
-        canvas.style.width = `${viewport.width}px`;
-        canvas.style.height = `${viewport.height}px`;
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        await page.render({ canvasContext: ctx, viewport }).promise;
-
-        lastRenderScaleRef.current = renderScale;
+        // Initial render at quality=1 (will render with dpr internally)
+        lastQualityRef.current = 1;
+        await renderPageAtQuality(1);
 
         // Reset transform: center content
-        const vp = viewportRef.current;
         if (vp) {
           const vw = vp.clientWidth;
           const vh = vp.clientHeight;
-          const s = 1; // interactive scale starts at 1
-          scaleRef.current = s;
 
-          const scaledW = worldWRef.current * s;
-          const scaledH = worldHRef.current * s;
+          scaleRef.current = 1;
+
+          const scaledW = worldWRef.current;
+          const scaledH = worldHRef.current;
 
           txRef.current = scaledW <= vw ? (vw - scaledW) / 2 : 0;
           tyRef.current = scaledH <= vh ? (vh - scaledH) / 2 : 0;
@@ -480,13 +459,11 @@ export default function MobileTourLandingPage() {
         setRendering(false);
       }
     },
-    [applyTransform, closeViewer]
+    [applyTransform, closeViewer, renderPageAtQuality]
   );
 
-  // When viewerSrc opens, render once
   useEffect(() => {
     if (!viewerSrc) return;
-    // wait a frame so the overlay DOM is mounted and viewport sizes are correct
     requestAnimationFrame(() => {
       void renderPdfFirstPage(viewerSrc);
     });
@@ -510,11 +487,8 @@ export default function MobileTourLandingPage() {
       }
 
       setOpeningDocIdx(idx);
-
       try {
         const routeUrl = `/m/tours/${tourId}/pdf/${encodeURIComponent(filename)}`;
-
-        // Keep your existing HEAD check — route.ts below makes it reliable.
         const head = await fetch(routeUrl, { method: "HEAD", cache: "no-store" });
         if (!head.ok) {
           alert(NOT_AVAILABLE_MESSAGE);
@@ -541,15 +515,8 @@ export default function MobileTourLandingPage() {
     [tourId, docs, stopInertia, clearRerenderTimer]
   );
 
-  // ---- Pointer math helpers ----
   const midpoint = (a: Pt, b: Pt): Pt => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
   const distance = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
-
-  const stopAndResetGesture = useCallback(() => {
-    gestureRef.current.mode = "none";
-    gestureRef.current.vx = 0;
-    gestureRef.current.vy = 0;
-  }, []);
 
   const startInertia = useCallback(() => {
     const g = gestureRef.current;
@@ -575,7 +542,6 @@ export default function MobileTourLandingPage() {
       tyRef.current = clamped.ty;
       applyTransform();
 
-      // friction
       g.vx *= INERTIA_FRICTION;
       g.vy *= INERTIA_FRICTION;
 
@@ -585,10 +551,8 @@ export default function MobileTourLandingPage() {
     inertiaRafRef.current = requestAnimationFrame(tick);
   }, [applyTransform, clampToBounds, stopInertia]);
 
-  // ---- Pointer handlers on the viewport ----
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      // Only handle gestures when viewer is open
       if (!viewerSrc) return;
 
       stopInertia();
@@ -597,7 +561,6 @@ export default function MobileTourLandingPage() {
       const rect = getViewportRect();
       if (!rect) return;
 
-      // Track pointer in viewport-local coords
       const p: Pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
       pointersRef.current.set(e.pointerId, p);
 
@@ -606,34 +569,25 @@ export default function MobileTourLandingPage() {
       } catch {}
 
       const pts = Array.from(pointersRef.current.values());
+      const g = gestureRef.current;
 
       if (pts.length === 1) {
-        // start pan
-        const g = gestureRef.current;
         g.mode = "pan";
         g.startScale = scaleRef.current;
         g.startTx = txRef.current;
         g.startTy = tyRef.current;
-
         g.lastMoveT = performance.now();
         g.lastMid = pts[0];
         g.vx = 0;
         g.vy = 0;
       } else if (pts.length === 2) {
-        // start pinch
-        const g = gestureRef.current;
         g.mode = "pinch";
         g.startScale = scaleRef.current;
         g.startTx = txRef.current;
         g.startTy = tyRef.current;
 
         const mid = midpoint(pts[0], pts[1]);
-        const dist = Math.max(1, distance(pts[0], pts[1]));
-
-        g.startMid = mid;
-        g.startDist = dist;
-
-        // Anchor: world-point under the midpoint at start
+        g.startDist = Math.max(1, distance(pts[0], pts[1]));
         g.anchorWorld = worldFromScreen(mid);
 
         g.lastMoveT = performance.now();
@@ -660,14 +614,10 @@ export default function MobileTourLandingPage() {
 
       const pts = Array.from(pointersRef.current.values());
       const g = gestureRef.current;
-
-      // We update transforms via rAF to avoid React state updates
       const now = performance.now();
 
       if (pts.length === 1 && g.mode === "pan") {
         const cur = pts[0];
-
-        // delta in screen space
         const dx = cur.x - g.lastMid.x;
         const dy = cur.y - g.lastMid.y;
 
@@ -678,7 +628,6 @@ export default function MobileTourLandingPage() {
         txRef.current = clamped.tx;
         tyRef.current = clamped.ty;
 
-        // velocity for inertia
         const dtMs = Math.max(1, now - g.lastMoveT);
         g.vx = (dx * 1000) / dtMs;
         g.vy = (dy * 1000) / dtMs;
@@ -688,7 +637,6 @@ export default function MobileTourLandingPage() {
 
         applyTransform();
       } else if (pts.length === 2) {
-        // ensure pinch mode
         if (g.mode !== "pinch") {
           g.mode = "pinch";
           g.startScale = scaleRef.current;
@@ -696,9 +644,7 @@ export default function MobileTourLandingPage() {
           g.startTy = tyRef.current;
 
           const mid = midpoint(pts[0], pts[1]);
-          const dist = Math.max(1, distance(pts[0], pts[1]));
-          g.startMid = mid;
-          g.startDist = dist;
+          g.startDist = Math.max(1, distance(pts[0], pts[1]));
           g.anchorWorld = worldFromScreen(mid);
 
           g.lastMoveT = now;
@@ -710,24 +656,17 @@ export default function MobileTourLandingPage() {
         const mid = midpoint(pts[0], pts[1]);
         const dist = Math.max(1, distance(pts[0], pts[1]));
 
-        // scale factor relative to pinch start
         const raw = g.startScale * (dist / g.startDist);
         const nextScale = clamp(raw, MIN_SCALE, MAX_SCALE);
 
-        // Keep the anchored world-point under the current midpoint:
-        // mid = T + S * anchorWorld  =>  T = mid - S*anchorWorld
         let nextTx = mid.x - nextScale * g.anchorWorld.x;
         let nextTy = mid.y - nextScale * g.anchorWorld.y;
 
         const clamped = clampToBounds(nextTx, nextTy, nextScale);
-        nextTx = clamped.tx;
-        nextTy = clamped.ty;
-
+        txRef.current = clamped.tx;
+        tyRef.current = clamped.ty;
         scaleRef.current = nextScale;
-        txRef.current = nextTx;
-        tyRef.current = nextTy;
 
-        // velocity from midpoint movement (for optional inertia after 2-finger pan)
         const dx = mid.x - g.lastMid.x;
         const dy = mid.y - g.lastMid.y;
         const dtMs = Math.max(1, now - g.lastMoveT);
@@ -758,23 +697,12 @@ export default function MobileTourLandingPage() {
       const g = gestureRef.current;
 
       if (pts.length === 0) {
-        // Gesture ended completely
         const speed = Math.hypot(g.vx, g.vy);
+        if (speed >= INERTIA_STOP_SPEED) startInertia();
 
-        // Optional inertia after single-finger pan (or two-finger pan)
-        if (speed >= INERTIA_STOP_SPEED) {
-          startInertia();
-        } else {
-          stopAndResetGesture();
-        }
-
-        // Debounced high-res re-render if scale moved enough
-        scheduleRerenderIfNeeded();
+        // refine after release (no overshoot now)
+        scheduleRefine();
       } else if (pts.length === 1) {
-        // Transition back to pan with remaining pointer
-        const rect = getViewportRect();
-        if (!rect) return;
-
         g.mode = "pan";
         g.lastMoveT = performance.now();
         g.lastMid = pts[0];
@@ -784,10 +712,9 @@ export default function MobileTourLandingPage() {
 
       e.preventDefault();
     },
-    [viewerSrc, getViewportRect, scheduleRerenderIfNeeded, startInertia, stopAndResetGesture]
+    [viewerSrc, scheduleRefine, startInertia]
   );
 
-  // Buttons zoom +/- (still useful)
   const zoomBy = useCallback(
     (factor: number) => {
       const vp = viewportRef.current;
@@ -796,10 +723,7 @@ export default function MobileTourLandingPage() {
       stopInertia();
       clearRerenderTimer();
 
-      const vw = vp.clientWidth;
-      const vh = vp.clientHeight;
-      const mid: Pt = { x: vw / 2, y: vh / 2 };
-
+      const mid: Pt = { x: vp.clientWidth / 2, y: vp.clientHeight / 2 };
       const anchor = worldFromScreen(mid);
 
       const nextScale = clamp(scaleRef.current * factor, MIN_SCALE, MAX_SCALE);
@@ -807,31 +731,21 @@ export default function MobileTourLandingPage() {
       let nextTy = mid.y - nextScale * anchor.y;
 
       const clamped = clampToBounds(nextTx, nextTy, nextScale);
-      nextTx = clamped.tx;
-      nextTy = clamped.ty;
-
+      txRef.current = clamped.tx;
+      tyRef.current = clamped.ty;
       scaleRef.current = nextScale;
-      txRef.current = nextTx;
-      tyRef.current = nextTy;
-      applyTransform();
 
-      scheduleRerenderIfNeeded();
+      applyTransform();
+      scheduleRefine();
     },
-    [applyTransform, clampToBounds, clearRerenderTimer, stopInertia, scheduleRerenderIfNeeded, worldFromScreen]
+    [applyTransform, clampToBounds, clearRerenderTimer, stopInertia, scheduleRefine, worldFromScreen]
   );
 
   const zoomOut = useCallback(() => zoomBy(1 / 1.6), [zoomBy]);
   const zoomIn = useCallback(() => zoomBy(1.6), [zoomBy]);
 
   const baseBtn = "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
-  const rowColors = [
-    "bg-blue-100 text-gray-900",
-    "bg-blue-200 text-gray-900",
-    "bg-blue-300 text-gray-900",
-    "bg-blue-400 text-white",
-    "bg-blue-500 text-white",
-    "bg-blue-600 text-white",
-  ];
+  const rowColors = ["bg-blue-100 text-gray-900", "bg-blue-200 text-gray-900", "bg-blue-300 text-gray-900", "bg-blue-400 text-white", "bg-blue-500 text-white", "bg-blue-600 text-white"];
 
   return (
     <div className="min-h-dvh bg-black text-white">
@@ -854,19 +768,13 @@ export default function MobileTourLandingPage() {
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
         <div className="grid grid-cols-3 gap-2">
           <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>
-            Daily
-            <br />
-            Tee times
+            Daily<br />Tee times
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>
-            Daily
-            <br />
-            Results
+            Daily<br />Results
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>
-            Score
-            <br />
-            Entry
+            Score<br />Entry
           </button>
 
           <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>
@@ -880,30 +788,20 @@ export default function MobileTourLandingPage() {
           </button>
 
           <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>
-            Matchplay
-            <br />
-            Format
+            Matchplay<br />Format
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>
-            Matchplay
-            <br />
-            Results
+            Matchplay<br />Results
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>
-            Matchplay
-            <br />
-            Leaderboard
+            Matchplay<br />Leaderboard
           </button>
 
           <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>
-            Tour
-            <br />
-            Details
+            Tour<br />Details
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>
-            Tour
-            <br />
-            Admin
+            Tour<br />Admin
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>
             Rehandicapping
@@ -920,15 +818,7 @@ export default function MobileTourLandingPage() {
           </button>
 
           <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(3)}>
-            {openingDocIdx === 3 ? (
-              "Opening…"
-            ) : (
-              <>
-                Player
-                <br />
-                Profiles
-              </>
-            )}
+            {openingDocIdx === 3 ? "Opening…" : <>Player<br />Profiles</>}
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(4)}>
             {openingDocIdx === 4 ? "Opening…" : "Comps etc"}
@@ -939,9 +829,7 @@ export default function MobileTourLandingPage() {
             className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
             onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
           >
-            App
-            <br />
-            User Guide
+            App<br />User Guide
           </button>
         </div>
 
@@ -951,7 +839,6 @@ export default function MobileTourLandingPage() {
         </div>
       </div>
 
-      {/* PDF overlay: map-like pinch + pan */}
       {viewerSrc && (
         <div className="fixed inset-0 z-50 bg-black">
           <div className="flex items-center justify-between px-4 py-3 bg-black/90">
@@ -971,15 +858,13 @@ export default function MobileTourLandingPage() {
 
           <div
             ref={viewportRef}
-            className="w-full h-[calc(100dvh-52px)] bg-white overflow-hidden"
-            // Critical: prevents iOS/Android native panning/zooming and allows us to handle pointer moves.
+            className="relative w-full h-[calc(100dvh-52px)] bg-white overflow-hidden"
             style={{ touchAction: "none" }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={endPointer}
             onPointerCancel={endPointer}
           >
-            {/* The "content" layer that gets transformed like a map */}
             <div
               ref={contentRef}
               style={{
@@ -987,11 +872,9 @@ export default function MobileTourLandingPage() {
                 willChange: "transform",
               }}
             >
-              {/* canvas CSS size defines world units; internal resolution is set by PDF.js render */}
               <canvas ref={canvasRef} className="block" />
             </div>
 
-            {/* Optional rendering indicator */}
             {rendering ? (
               <div className="absolute right-3 bottom-3 bg-black/70 text-white text-xs px-2 py-1 rounded">
                 Rendering…
