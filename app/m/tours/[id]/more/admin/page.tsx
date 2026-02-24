@@ -8,9 +8,12 @@ import { supabase } from "@/lib/supabaseClient";
 import MobileNav from "../../_components/MobileNav";
 import { recalcAndSaveTourHandicaps } from "@/lib/handicaps/recalcAndSaveTourHandicaps";
 
+type ScoreEntryLayout = "classic" | "alt";
+
 type Tour = {
   id: string;
   name: string;
+  score_entry_layout?: string | null;
 };
 
 type PlayerRow = {
@@ -140,6 +143,11 @@ function roundLabel(r: RoundOption) {
   return `R${rn} • ${title}${tail}`;
 }
 
+function normalizeLayout(v: unknown): ScoreEntryLayout {
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "alt" ? "alt" : "classic";
+}
+
 export default function MobileTourAdminPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -164,6 +172,11 @@ export default function MobileTourAdminPage() {
       dirty: boolean;
     }>
   >([]);
+
+  // ✅ Score entry layout toggle (tour-level)
+  const [scoreEntryLayout, setScoreEntryLayout] = useState<ScoreEntryLayout>("classic");
+  const [layoutSaving, setLayoutSaving] = useState(false);
+  const [layoutMsg, setLayoutMsg] = useState("");
 
   // Course editor state
   const [courseLoading, setCourseLoading] = useState(false);
@@ -191,6 +204,27 @@ export default function MobileTourAdminPage() {
   const [ttGroups, setTtGroups] = useState<ManualGroup[]>([]);
   const [ttAddTargetGroupNo, setTtAddTargetGroupNo] = useState<number>(1);
 
+  async function saveScoreEntryLayout(next: ScoreEntryLayout) {
+    if (!tourId || !isLikelyUuid(tourId)) return;
+
+    setLayoutSaving(true);
+    setLayoutMsg("");
+    setErrorMsg("");
+
+    try {
+      const { error } = await supabase.from("tours").update({ score_entry_layout: next }).eq("id", tourId);
+      if (error) throw error;
+
+      setScoreEntryLayout(next);
+      setLayoutMsg(next === "alt" ? "Saved: Alt score entry enabled." : "Saved: Classic score entry enabled.");
+      window.setTimeout(() => setLayoutMsg(""), 1500);
+    } catch (e: any) {
+      setErrorMsg(e?.message ?? "Failed to save score entry layout.");
+    } finally {
+      setLayoutSaving(false);
+    }
+  }
+
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
@@ -200,6 +234,9 @@ export default function MobileTourAdminPage() {
       setLoading(true);
       setErrorMsg("");
       setSaveMsg("");
+
+      setLayoutMsg("");
+      setLayoutSaving(false);
 
       setCourseError("");
       setCourseSaveMsg("");
@@ -213,8 +250,15 @@ export default function MobileTourAdminPage() {
       setTtAddTargetGroupNo(1);
 
       try {
-        const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
+        // ✅ Include score_entry_layout
+        const { data: tData, error: tErr } = await supabase
+          .from("tours")
+          .select("id,name,score_entry_layout")
+          .eq("id", tourId)
+          .single();
         if (tErr) throw tErr;
+
+        const nextLayout = normalizeLayout((tData as any)?.score_entry_layout);
 
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
@@ -230,7 +274,7 @@ export default function MobileTourAdminPage() {
             const pid = String(r.player_id ?? p?.id ?? "");
             if (!pid) return null;
 
-            // ✅ UPDATED: keep decimals (no Math.floor)
+            // ✅ keep decimals (no Math.floor)
             const sh = Number.isFinite(Number(r.starting_handicap)) ? Math.max(0, Number(r.starting_handicap)) : null;
 
             return {
@@ -293,6 +337,8 @@ export default function MobileTourAdminPage() {
         if (!alive) return;
 
         setTour(tData as Tour);
+        setScoreEntryLayout(nextLayout);
+
         setRows(list);
 
         setCourseOptions(courses);
@@ -320,11 +366,9 @@ export default function MobileTourAdminPage() {
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
-    // bump request sequence whenever the selection changes (including to empty)
     const myReq = ++parsReqSeqRef.current;
 
     if (!selectedCourseId) {
-      // only apply if this is still the latest "selection"
       if (parsReqSeqRef.current !== myReq) return;
       setCourseError("");
       setCourseSaveMsg("");
@@ -345,7 +389,6 @@ export default function MobileTourAdminPage() {
     let alive = true;
 
     async function loadPars() {
-      // only the latest request should touch state
       if (parsReqSeqRef.current !== myReq) return;
 
       setCourseLoading(true);
@@ -421,7 +464,6 @@ export default function MobileTourAdminPage() {
     setRows((prev) =>
       prev.map((r) => {
         if (r.player_id !== playerId) return r;
-        // ✅ UPDATED: compare against 1dp string to avoid false "dirty"
         const base = r.starting_handicap == null ? "" : fmt1(r.starting_handicap);
         return { ...r, input: next, dirty: next.trim() !== base };
       })
@@ -865,6 +907,52 @@ export default function MobileTourAdminPage() {
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
+            {/* ✅ Score entry layout toggle */}
+            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+              <div className="p-4 border-b">
+                <div className="text-sm font-semibold text-gray-900">Score entry layout</div>
+                <div className="mt-1 text-xs text-gray-600">
+                  Controls whether “Continue to scoring” uses the Classic page or the Alt page for this tour.
+                </div>
+              </div>
+
+              <div className="p-4 space-y-3">
+                <div className="inline-flex w-full overflow-hidden rounded-xl border border-gray-200">
+                  <button
+                    type="button"
+                    disabled={layoutSaving}
+                    onClick={() => void saveScoreEntryLayout("classic")}
+                    className={[
+                      "flex-1 py-3 text-sm font-semibold",
+                      scoreEntryLayout === "classic" ? "bg-gray-900 text-white" : "bg-white text-gray-900",
+                      layoutSaving ? "opacity-60 cursor-not-allowed" : "",
+                    ].join(" ")}
+                  >
+                    Classic
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={layoutSaving}
+                    onClick={() => void saveScoreEntryLayout("alt")}
+                    className={[
+                      "flex-1 py-3 text-sm font-semibold border-l border-gray-200",
+                      scoreEntryLayout === "alt" ? "bg-sky-600 text-white" : "bg-white text-gray-900",
+                      layoutSaving ? "opacity-60 cursor-not-allowed" : "",
+                    ].join(" ")}
+                  >
+                    Alt
+                  </button>
+                </div>
+
+                <div className="text-xs text-gray-600">
+                  Current: <span className="font-semibold">{scoreEntryLayout}</span>
+                </div>
+
+                {layoutMsg ? <div className="text-sm text-green-700">{layoutMsg}</div> : null}
+              </div>
+            </section>
+
             {/* Chooser row */}
             <div className="grid grid-cols-3 gap-2">
               <button
@@ -980,7 +1068,9 @@ export default function MobileTourAdminPage() {
                       ) : (
                         <>
                           {courseLoading ? (
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading hole data…</div>
+                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                              Loading hole data…
+                            </div>
                           ) : null}
 
                           {courseError ? (
@@ -1165,12 +1255,7 @@ export default function MobileTourAdminPage() {
                       + Add group
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={ttSave}
-                      disabled={!ttSelectedRoundId || ttLoading || ttSaving}
-                      className={smallBtnPrimary}
-                    >
+                    <button type="button" onClick={ttSave} disabled={!ttSelectedRoundId || ttLoading || ttSaving} className={smallBtnPrimary}>
                       {ttSaving ? "Saving…" : "Save groups"}
                     </button>
                   </div>
@@ -1235,11 +1320,7 @@ export default function MobileTourAdminPage() {
                                 <div className="min-w-0">
                                   <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
                                 </div>
-                                <button
-                                  type="button"
-                                  onClick={() => ttAddPlayerToGroup(p.id, ttAddTargetGroupNo)}
-                                  className={smallBtnSecondary}
-                                >
+                                <button type="button" onClick={() => ttAddPlayerToGroup(p.id, ttAddTargetGroupNo)} className={smallBtnSecondary}>
                                   Add
                                 </button>
                               </div>
