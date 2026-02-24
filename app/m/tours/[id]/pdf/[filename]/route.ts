@@ -1,10 +1,8 @@
+// app/m/tours/[id]/pdf/[filename]/route.ts
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-// ...rest of your existing route handler code...
-
 
 const PDF_TOUR_ID = "5a80b049-396f-46ec-965e-810e738471b6";
 const BUCKET = "tours-pdfs-v2";
@@ -21,10 +19,26 @@ function norm(s: string) {
   return (s ?? "").trim().toLowerCase();
 }
 
-export async function GET(
-  _req: Request,
-  context: { params: Promise<{ id: string; filename: string }> }
-) {
+function buildPublicUrl(tourId: string, filename: string) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!supabaseUrl) return null;
+
+  const base = supabaseUrl.replace(/\/$/, "");
+  const path = `tours/tours/${tourId}/${filename}`;
+  return `${base}/storage/v1/object/public/${BUCKET}/${path}`;
+}
+
+function commonHeaders(filename: string, contentType: string) {
+  return {
+    "Content-Type": contentType || "application/pdf",
+    "Content-Disposition": `inline; filename="${filename}"`,
+    "Cache-Control": "no-store",
+    // Encourage proper PDF.js behavior
+    "Accept-Ranges": "bytes",
+  } as Record<string, string>;
+}
+
+async function handle(req: Request, context: { params: Promise<{ id: string; filename: string }> }, method: "GET" | "HEAD") {
   const { id, filename: rawFilename } = await context.params;
 
   const tourId = norm(id);
@@ -40,26 +54,42 @@ export async function GET(
     return new NextResponse("Not found (filename not allowed)", { status: 404 });
   }
 
-  // 3) Env check
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!supabaseUrl) {
-    return new NextResponse("Server misconfigured (missing NEXT_PUBLIC_SUPABASE_URL)", {
-      status: 500,
-    });
+  const publicUrl = buildPublicUrl(tourId, filename);
+  if (!publicUrl) {
+    return new NextResponse("Server misconfigured (missing NEXT_PUBLIC_SUPABASE_URL)", { status: 500 });
   }
 
-  // 4) Fetch public PDF and stream it from your domain
-  const base = supabaseUrl.replace(/\/$/, "");
-  const path = `tours/tours/${tourId}/${filename}`;
-  const publicUrl = `${base}/storage/v1/object/public/${BUCKET}/${path}`;
+  // Forward Range header (PDF.js uses it for incremental loading)
+  const range = req.headers.get("range") || undefined;
 
-  const upstream = await fetch(publicUrl, { cache: "no-store" });
+  const upstream = await fetch(publicUrl, {
+    method,
+    cache: "no-store",
+    headers: range ? { range } : undefined,
+  });
 
   if (!upstream.ok) {
-    return new NextResponse(
-      `Not found (upstream ${upstream.status} fetching ${publicUrl})`,
-      { status: 404 }
-    );
+    return new NextResponse(`Not found (upstream ${upstream.status})`, { status: 404 });
+  }
+
+  const contentType = upstream.headers.get("content-type") || "application/pdf";
+
+  // HEAD: no body, only headers
+  if (method === "HEAD") {
+    const res = new NextResponse(null, {
+      status: upstream.status,
+      headers: {
+        ...commonHeaders(filename, contentType),
+      },
+    });
+
+    const len = upstream.headers.get("content-length");
+    const contentRange = upstream.headers.get("content-range");
+
+    if (len) res.headers.set("Content-Length", len);
+    if (contentRange) res.headers.set("Content-Range", contentRange);
+
+    return res;
   }
 
   const body = upstream.body;
@@ -67,14 +97,29 @@ export async function GET(
     return new NextResponse("Not found (empty upstream body)", { status: 404 });
   }
 
-  const contentType = upstream.headers.get("content-type") || "application/pdf";
+  // If Range was used, upstream may return 206 + Content-Range
+  const status = upstream.status; // 200 or 206 typically
 
-  return new NextResponse(body, {
-    status: 200,
+  const res = new NextResponse(body, {
+    status,
     headers: {
-      "Content-Type": contentType,
-      "Content-Disposition": `inline; filename="${filename}"`,
-      "Cache-Control": "no-store",
+      ...commonHeaders(filename, contentType),
     },
   });
+
+  const len = upstream.headers.get("content-length");
+  const contentRange = upstream.headers.get("content-range");
+
+  if (len) res.headers.set("Content-Length", len);
+  if (contentRange) res.headers.set("Content-Range", contentRange);
+
+  return res;
+}
+
+export async function GET(req: Request, context: { params: Promise<{ id: string; filename: string }> }) {
+  return handle(req, context, "GET");
+}
+
+export async function HEAD(req: Request, context: { params: Promise<{ id: string; filename: string }> }) {
+  return handle(req, context, "HEAD");
 }
