@@ -685,8 +685,10 @@ export default function MatchDetailPage() {
           <>
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b space-y-2">
-                <div className="text-sm font-semibold text-gray-900">
-                  Match summary: <span className="font-semibold text-gray-900">{topSummaryText || "Not started"}</span>
+                {/* ✅ UPDATED: split "Match summary" onto its own row, add spacing, then show result on next row */}
+                <div className="text-sm font-semibold text-gray-900 space-y-2">
+                  <div>Match summary</div>
+                  <div className="font-semibold text-gray-900">{topSummaryText || "Not started"}</div>
                 </div>
 
                 <div className="text-xs text-gray-600">
@@ -728,8 +730,7 @@ export default function MatchDetailPage() {
                 {holeRows?.rows?.map((r: any) => {
                   const win = r.winner as "A" | "B" | "HALVED" | null;
 
-                  const winBg =
-                    win === "A" ? "bg-blue-50" : win === "B" ? "bg-amber-50" : win === "HALVED" ? "bg-gray-50" : "";
+                  const winBg = win === "A" ? "bg-blue-50" : win === "B" ? "bg-amber-50" : win === "HALVED" ? "bg-gray-50" : "";
                   const winText = win === "A" ? "A" : win === "B" ? "B" : win === "HALVED" ? "½" : "";
 
                   return (
