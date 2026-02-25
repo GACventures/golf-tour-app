@@ -1,7 +1,7 @@
 // app/m/tours/[id]/matches/format/[roundId]/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -58,6 +58,8 @@ type MatchSetupRow = {
   B1: string;
   B2: string;
 };
+
+type PageSection = "format" | "matches" | "tee" | null;
 
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
@@ -148,6 +150,9 @@ export default function MatchesFormatRoundDetailPage() {
   const [saveMsg, setSaveMsg] = useState("");
 
   const [round, setRound] = useState<RoundRow | null>(null);
+
+  // NEW: section chooser state (default: only buttons show)
+  const [activeSection, setActiveSection] = useState<PageSection>(null);
 
   // Tour fixed teams (must be exactly 2)
   const [teamGroups, setTeamGroups] = useState<TourGroupRow[]>([]);
@@ -251,6 +256,9 @@ export default function MatchesFormatRoundDetailPage() {
       setTeeOverrideErr("");
       setTeeOverrideMsg("");
       setTeeOverrideEnabled(false);
+
+      // default: only buttons visible until user taps (keep as-is on refresh)
+      // setActiveSection(null);
 
       try {
         // 1) Round meta with column-fallback (round_date may not exist)
@@ -867,13 +875,27 @@ export default function MatchesFormatRoundDetailPage() {
   const pillActive = "border-gray-900 bg-gray-900 text-white";
   const pillIdle = "border-gray-200 bg-white text-gray-900";
 
-  // kept (logic), even though UI section is removed
+  const chooserBtnBase = "h-11 rounded-xl border text-xs font-semibold flex items-center justify-center px-2";
+  const chooserBtnActive = "border-gray-900 bg-gray-900 text-white";
+  const chooserBtnIdle = "border-gray-200 bg-white text-gray-900";
+
   const teamsSummary = useMemo(() => {
     if (!teamsReady) return "";
     const aName = safeText(teamAGroup?.name, "Team A");
     const bName = safeText(teamBGroup?.name, "Team B");
     return `${aName} vs ${bName}`;
   }, [teamsReady, teamAGroup?.name, teamBGroup?.name]);
+
+  const setSection = useCallback((next: PageSection) => {
+    // Lightweight: clear section-specific messages when switching sections
+    setErrorMsg("");
+    setSaveMsg("");
+    setMatchMsg("");
+    setMatchErr("");
+    setTeeOverrideErr("");
+    setTeeOverrideMsg("");
+    setActiveSection(next);
+  }, []);
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
@@ -916,367 +938,410 @@ export default function MatchesFormatRoundDetailPage() {
           <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
-            {/* Format */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Format</div>
-                <div className="mt-1 text-xs text-gray-600">Choose the scoring format for this round.</div>
-              </div>
-
-              <div className="p-4 space-y-3">
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className={`${pillBase} ${format === "INDIVIDUAL_MATCHPLAY" ? pillActive : pillIdle}`}
-                    onClick={() => {
-                      setSaveMsg("");
-                      setErrorMsg("");
-                      setMatchMsg("");
-                      setMatchErr("");
-                      setTeeOverrideErr("");
-                      setTeeOverrideMsg("");
-                      setFormat("INDIVIDUAL_MATCHPLAY");
-                    }}
-                    aria-pressed={format === "INDIVIDUAL_MATCHPLAY"}
-                  >
-                    Ind Matchplay
-                  </button>
-
-                  <button
-                    type="button"
-                    className={`${pillBase} ${format === "BETTERBALL_MATCHPLAY" ? pillActive : pillIdle}`}
-                    onClick={() => {
-                      setSaveMsg("");
-                      setErrorMsg("");
-                      setMatchMsg("");
-                      setMatchErr("");
-                      setTeeOverrideErr("");
-                      setTeeOverrideMsg("");
-                      setFormat("BETTERBALL_MATCHPLAY");
-                    }}
-                    aria-pressed={format === "BETTERBALL_MATCHPLAY"}
-                  >
-                    Better Ball
-                  </button>
-
-                  <button
-                    type="button"
-                    className={`${pillBase} ${format === "INDIVIDUAL_STABLEFORD" ? pillActive : pillIdle}`}
-                    onClick={() => {
-                      setSaveMsg("");
-                      setErrorMsg("");
-                      setMatchMsg("");
-                      setMatchErr("");
-                      setTeeOverrideErr("");
-                      setTeeOverrideMsg("");
-                      setFormat("INDIVIDUAL_STABLEFORD");
-                    }}
-                    aria-pressed={format === "INDIVIDUAL_STABLEFORD"}
-                  >
-                    Stableford
-                  </button>
-                </div>
-
-                <div className="text-xs text-gray-600">
-                  Selected: <span className="font-semibold text-gray-900">{formatLabel(format)}</span>
-                </div>
-
-                {/* Double points */}
-                <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900">Double points</div>
-                    <div className="text-xs text-gray-600">If enabled, match points for this round are doubled.</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSaveMsg("");
-                      setErrorMsg("");
-                      setMatchMsg("");
-                      setMatchErr("");
-                      setTeeOverrideErr("");
-                      setTeeOverrideMsg("");
-                      setDoublePoints((v) => !v);
-                    }}
-                    className={`h-9 w-20 rounded-xl border text-sm font-semibold shadow-sm ${
-                      doublePoints ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-900"
-                    }`}
-                    aria-pressed={doublePoints}
-                  >
-                    {doublePoints ? "On" : "Off"}
-                  </button>
-                </div>
-              </div>
-            </section>
-
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs text-gray-600">{settingsDirty ? "Change pending" : "No pending change"}</div>
+            {/* NEW: Chooser row (only buttons show by default) */}
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setSection("format")}
+                className={`${chooserBtnBase} ${activeSection === "format" ? chooserBtnActive : chooserBtnIdle}`}
+              >
+                Select format
+              </button>
 
               <button
                 type="button"
-                onClick={saveSettings}
-                disabled={!canSaveSettings}
-                className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                  !canSaveSettings
-                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                    : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                }`}
+                onClick={() => setSection("matches")}
+                className={`${chooserBtnBase} ${activeSection === "matches" ? chooserBtnActive : chooserBtnIdle}`}
               >
-                {savingSettings ? "Saving…" : "Save settings"}
+                Set up matches
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSection("tee")}
+                className={`${chooserBtnBase} ${activeSection === "tee" ? chooserBtnActive : chooserBtnIdle}`}
+              >
+                Set tee groupings
               </button>
             </div>
 
-            {saveMsg ? <div className="text-sm text-green-700">{saveMsg}</div> : null}
+            {/* FORMAT SECTION */}
+            {activeSection === "format" ? (
+              <>
+                <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                  <div className="p-4 border-b">
+                    <div className="text-sm font-semibold text-gray-900">Format</div>
+                    <div className="mt-1 text-xs text-gray-600">Choose the scoring format for this round.</div>
+                  </div>
 
-            {/* Match setup */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Match setup</div>
-                <div className="mt-1 text-xs text-gray-600">Assign players to matches for this round. (Saved settings required.)</div>
-              </div>
+                  <div className="p-4 space-y-3">
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        className={`${pillBase} ${format === "INDIVIDUAL_MATCHPLAY" ? pillActive : pillIdle}`}
+                        onClick={() => {
+                          setSaveMsg("");
+                          setErrorMsg("");
+                          setMatchMsg("");
+                          setMatchErr("");
+                          setTeeOverrideErr("");
+                          setTeeOverrideMsg("");
+                          setFormat("INDIVIDUAL_MATCHPLAY");
+                        }}
+                        aria-pressed={format === "INDIVIDUAL_MATCHPLAY"}
+                      >
+                        Ind Matchplay
+                      </button>
 
-              <div className="p-4 space-y-3">
-                {!teamsReady || teamsWarn ? (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                    Configure exactly two tour teams before enabling matches for this round.
-                  </div>
-                ) : !existing ? (
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                    Save settings above to start match setup.
-                  </div>
-                ) : settingsDirty ? (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                    You have unsaved settings changes. Save settings above before editing match setup.
-                  </div>
-                ) : existing.format === "INDIVIDUAL_STABLEFORD" ? (
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                    Individual stableford does not require match player assignments.
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-xs text-gray-600">
-                        Team A:{" "}
-                        <span className="font-semibold text-gray-900">
-                          {teamALoading ? "Loading…" : `${teamA.length} player${teamA.length === 1 ? "" : "s"}`}
-                        </span>{" "}
-                        · Team B:{" "}
-                        <span className="font-semibold text-gray-900">
-                          {teamBLoading ? "Loading…" : `${teamB.length} player${teamB.length === 1 ? "" : "s"}`}
-                        </span>
-                      </div>
+                      <button
+                        type="button"
+                        className={`${pillBase} ${format === "BETTERBALL_MATCHPLAY" ? pillActive : pillIdle}`}
+                        onClick={() => {
+                          setSaveMsg("");
+                          setErrorMsg("");
+                          setMatchMsg("");
+                          setMatchErr("");
+                          setTeeOverrideErr("");
+                          setTeeOverrideMsg("");
+                          setFormat("BETTERBALL_MATCHPLAY");
+                        }}
+                        aria-pressed={format === "BETTERBALL_MATCHPLAY"}
+                      >
+                        Better Ball
+                      </button>
 
-                      <div className="text-xs text-gray-600">
-                        Matches: <span className="font-semibold text-gray-900">{matchCount}</span>
-                      </div>
+                      <button
+                        type="button"
+                        className={`${pillBase} ${format === "INDIVIDUAL_STABLEFORD" ? pillActive : pillIdle}`}
+                        onClick={() => {
+                          setSaveMsg("");
+                          setErrorMsg("");
+                          setMatchMsg("");
+                          setMatchErr("");
+                          setTeeOverrideErr("");
+                          setTeeOverrideMsg("");
+                          setFormat("INDIVIDUAL_STABLEFORD");
+                        }}
+                        aria-pressed={format === "INDIVIDUAL_STABLEFORD"}
+                      >
+                        Stableford
+                      </button>
                     </div>
 
-                    {Math.min(teamA.length, teamB.length) === 0 ? (
-                      <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-                        One of the teams has no players in <span className="font-semibold">tour_group_members</span>.
+                    <div className="text-xs text-gray-600">
+                      Selected: <span className="font-semibold text-gray-900">{formatLabel(format)}</span>
+                    </div>
+
+                    {/* Double points */}
+                    <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900">Double points</div>
+                        <div className="text-xs text-gray-600">If enabled, match points for this round are doubled.</div>
                       </div>
-                    ) : matchCount === 0 ? (
-                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                        Not enough players to create matches for this format.
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSaveMsg("");
+                          setErrorMsg("");
+                          setMatchMsg("");
+                          setMatchErr("");
+                          setTeeOverrideErr("");
+                          setTeeOverrideMsg("");
+                          setDoublePoints((v) => !v);
+                        }}
+                        className={`h-9 w-20 rounded-xl border text-sm font-semibold shadow-sm ${
+                          doublePoints ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-900"
+                        }`}
+                        aria-pressed={doublePoints}
+                      >
+                        {doublePoints ? "On" : "Off"}
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs text-gray-600">{settingsDirty ? "Change pending" : "No pending change"}</div>
+
+                  <button
+                    type="button"
+                    onClick={saveSettings}
+                    disabled={!canSaveSettings}
+                    className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                      !canSaveSettings
+                        ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                        : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                    }`}
+                  >
+                    {savingSettings ? "Saving…" : "Save settings"}
+                  </button>
+                </div>
+
+                {saveMsg ? <div className="text-sm text-green-700">{saveMsg}</div> : null}
+                {teamsSummary ? null : null}
+              </>
+            ) : null}
+
+            {/* MATCH SETUP SECTION */}
+            {activeSection === "matches" ? (
+              <>
+                <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                  <div className="p-4 border-b">
+                    <div className="text-sm font-semibold text-gray-900">Match setup</div>
+                    <div className="mt-1 text-xs text-gray-600">Assign players to matches for this round. (Saved settings required.)</div>
+                  </div>
+
+                  <div className="p-4 space-y-3">
+                    {!teamsReady || teamsWarn ? (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                        Configure exactly two tour teams before enabling matches for this round.
                       </div>
-                    ) : matchLoading ? (
+                    ) : !existing ? (
                       <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                        Loading match setup…
+                        Save settings (Select format) before starting match setup.
+                      </div>
+                    ) : settingsDirty ? (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                        You have unsaved settings changes. Save settings (Select format) before editing match setup.
+                      </div>
+                    ) : existing.format === "INDIVIDUAL_STABLEFORD" ? (
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                        Individual stableford does not require match player assignments.
                       </div>
                     ) : (
-                      <div className="space-y-3">
-                        {teamA.length !== teamB.length ? (
-                          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                            Teams have different sizes. Match count uses the smaller team (min).
+                      <>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs text-gray-600">
+                            Team A:{" "}
+                            <span className="font-semibold text-gray-900">
+                              {teamALoading ? "Loading…" : `${teamA.length} player${teamA.length === 1 ? "" : "s"}`}
+                            </span>{" "}
+                            · Team B:{" "}
+                            <span className="font-semibold text-gray-900">
+                              {teamBLoading ? "Loading…" : `${teamB.length} player${teamB.length === 1 ? "" : "s"}`}
+                            </span>
                           </div>
-                        ) : null}
 
-                        {Array.from({ length: matchCount }).map((_, idx) => {
-                          const row = matchSetup[idx] ?? { match_no: idx + 1, A1: "", A2: "", B1: "", B2: "" };
-                          const isBetterBall = existing.format === "BETTERBALL_MATCHPLAY";
-
-                          return (
-                            <div key={idx} className="rounded-2xl border border-gray-200 bg-white p-3">
-                              <div className="flex items-center justify-between">
-                                <div className="text-sm font-semibold text-gray-900">Match {idx + 1}</div>
-                                <div className="text-[11px] text-gray-500">
-                                  {existing.format === "INDIVIDUAL_MATCHPLAY" ? "1 v 1" : "2 v 2"}
-                                </div>
-                              </div>
-
-                              <div className="mt-3 grid grid-cols-2 gap-3">
-                                <div>
-                                  <div className="text-xs font-semibold text-gray-700 mb-1">Team A</div>
-                                  <select
-                                    className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
-                                    value={row.A1}
-                                    onChange={(e) => setMatchCell(idx + 1, "A1", e.target.value)}
-                                  >
-                                    <option value="">Select player…</option>
-                                    {teamA.map((p) => (
-                                      <option key={p.id} value={p.id}>
-                                        {p.name}
-                                      </option>
-                                    ))}
-                                  </select>
-
-                                  {isBetterBall ? (
-                                    <select
-                                      className="mt-2 h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
-                                      value={row.A2}
-                                      onChange={(e) => setMatchCell(idx + 1, "A2", e.target.value)}
-                                    >
-                                      <option value="">Select 2nd player…</option>
-                                      {teamA.map((p) => (
-                                        <option key={p.id} value={p.id}>
-                                          {p.name}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  ) : null}
-
-                                  {isBetterBall && row.A1 && row.A2 && row.A1 === row.A2 ? (
-                                    <div className="mt-1 text-[11px] text-red-700">Players must be different.</div>
-                                  ) : null}
-                                </div>
-
-                                <div>
-                                  <div className="text-xs font-semibold text-gray-700 mb-1">Team B</div>
-                                  <select
-                                    className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
-                                    value={row.B1}
-                                    onChange={(e) => setMatchCell(idx + 1, "B1", e.target.value)}
-                                  >
-                                    <option value="">Select player…</option>
-                                    {teamB.map((p) => (
-                                      <option key={p.id} value={p.id}>
-                                        {p.name}
-                                      </option>
-                                    ))}
-                                  </select>
-
-                                  {isBetterBall ? (
-                                    <select
-                                      className="mt-2 h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
-                                      value={row.B2}
-                                      onChange={(e) => setMatchCell(idx + 1, "B2", e.target.value)}
-                                    >
-                                      <option value="">Select 2nd player…</option>
-                                      {teamB.map((p) => (
-                                        <option key={p.id} value={p.id}>
-                                          {p.name}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  ) : null}
-
-                                  {isBetterBall && row.B1 && row.B2 && row.B1 === row.B2 ? (
-                                    <div className="mt-1 text-[11px] text-red-700">Players must be different.</div>
-                                  ) : null}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-xs text-gray-600">{matchSetupDirty ? "Changes pending" : "No changes"}</div>
-
-                      <button
-                        type="button"
-                        onClick={saveMatchSetup}
-                        disabled={!matchSetupSaveEnabled}
-                        className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                          !matchSetupSaveEnabled
-                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                            : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                        }`}
-                      >
-                        {matchSaving ? "Saving…" : "Save match setup"}
-                      </button>
-                    </div>
-
-                    {matchErr ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{matchErr}</div> : null}
-                    {matchMsg ? <div className="text-sm text-green-700">{matchMsg}</div> : null}
-                  </>
-                )}
-              </div>
-            </section>
-
-            {/* Tee-time override toggle */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Tee times override</div>
-                <div className="mt-1 text-xs text-gray-600">When enabled, tee-time groups for this round are rewritten in match order.</div>
-              </div>
-
-              <div className="p-4 space-y-3">
-                {teeOverrideLoading ? (
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Checking current override…</div>
-                ) : null}
-
-                {existing?.format === "INDIVIDUAL_STABLEFORD" ? (
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Not applicable for Individual stableford.</div>
-                ) : (
-                  <>
-                    <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-gray-900">Override by match order</div>
-                        <div className="text-xs text-gray-600">
-                          {format === "INDIVIDUAL_MATCHPLAY" ? (
-                            <>Group 1 = Match 1 + Match 2, Group 2 = Match 3 + Match 4, …</>
-                          ) : (
-                            <>Group 1 = Match 1, Group 2 = Match 2, …</>
-                          )}
+                          <div className="text-xs text-gray-600">
+                            Matches: <span className="font-semibold text-gray-900">{matchCount}</span>
+                          </div>
                         </div>
-                      </div>
 
-                      <button
-                        type="button"
-                        onClick={() => onToggleTeeOverride(!teeOverrideEnabled)}
-                        disabled={
-                          teeOverrideSaving ||
-                          !existing ||
-                          settingsDirty ||
-                          !matchSetupEnabled ||
-                          matchLoading ||
-                          matchSaving ||
-                          matchCount <= 0 ||
-                          teamsWarn.length > 0
-                        }
-                        className={`h-9 w-20 rounded-xl border text-sm font-semibold shadow-sm ${
-                          teeOverrideEnabled ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-900"
-                        } ${teeOverrideSaving ? "opacity-60" : ""}`}
-                        aria-pressed={teeOverrideEnabled}
-                        title={
-                          !existing
-                            ? "Save settings first"
-                            : settingsDirty
-                            ? "Save settings first"
-                            : !matchSetupEnabled
-                            ? "Match setup must be saved"
-                            : matchCount <= 0
-                            ? "No matches available"
-                            : teamsWarn
-                            ? "Tour must have exactly two teams"
-                            : ""
-                        }
-                      >
-                        {teeOverrideSaving ? "…" : teeOverrideEnabled ? "On" : "Off"}
-                      </button>
+                        {Math.min(teamA.length, teamB.length) === 0 ? (
+                          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                            One of the teams has no players in <span className="font-semibold">tour_group_members</span>.
+                          </div>
+                        ) : matchCount === 0 ? (
+                          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                            Not enough players to create matches for this format.
+                          </div>
+                        ) : matchLoading ? (
+                          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                            Loading match setup…
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {teamA.length !== teamB.length ? (
+                              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                                Teams have different sizes. Match count uses the smaller team (min).
+                              </div>
+                            ) : null}
+
+                            {Array.from({ length: matchCount }).map((_, idx) => {
+                              const row = matchSetup[idx] ?? { match_no: idx + 1, A1: "", A2: "", B1: "", B2: "" };
+                              const isBetterBall = existing.format === "BETTERBALL_MATCHPLAY";
+
+                              return (
+                                <div key={idx} className="rounded-2xl border border-gray-200 bg-white p-3">
+                                  <div className="flex items-center justify-between">
+                                    <div className="text-sm font-semibold text-gray-900">Match {idx + 1}</div>
+                                    <div className="text-[11px] text-gray-500">
+                                      {existing.format === "INDIVIDUAL_MATCHPLAY" ? "1 v 1" : "2 v 2"}
+                                    </div>
+                                  </div>
+
+                                  <div className="mt-3 grid grid-cols-2 gap-3">
+                                    <div>
+                                      <div className="text-xs font-semibold text-gray-700 mb-1">Team A</div>
+                                      <select
+                                        className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                                        value={row.A1}
+                                        onChange={(e) => setMatchCell(idx + 1, "A1", e.target.value)}
+                                      >
+                                        <option value="">Select player…</option>
+                                        {teamA.map((p) => (
+                                          <option key={p.id} value={p.id}>
+                                            {p.name}
+                                          </option>
+                                        ))}
+                                      </select>
+
+                                      {isBetterBall ? (
+                                        <select
+                                          className="mt-2 h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                                          value={row.A2}
+                                          onChange={(e) => setMatchCell(idx + 1, "A2", e.target.value)}
+                                        >
+                                          <option value="">Select 2nd player…</option>
+                                          {teamA.map((p) => (
+                                            <option key={p.id} value={p.id}>
+                                              {p.name}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      ) : null}
+
+                                      {isBetterBall && row.A1 && row.A2 && row.A1 === row.A2 ? (
+                                        <div className="mt-1 text-[11px] text-red-700">Players must be different.</div>
+                                      ) : null}
+                                    </div>
+
+                                    <div>
+                                      <div className="text-xs font-semibold text-gray-700 mb-1">Team B</div>
+                                      <select
+                                        className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                                        value={row.B1}
+                                        onChange={(e) => setMatchCell(idx + 1, "B1", e.target.value)}
+                                      >
+                                        <option value="">Select player…</option>
+                                        {teamB.map((p) => (
+                                          <option key={p.id} value={p.id}>
+                                            {p.name}
+                                          </option>
+                                        ))}
+                                      </select>
+
+                                      {isBetterBall ? (
+                                        <select
+                                          className="mt-2 h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                                          value={row.B2}
+                                          onChange={(e) => setMatchCell(idx + 1, "B2", e.target.value)}
+                                        >
+                                          <option value="">Select 2nd player…</option>
+                                          {teamB.map((p) => (
+                                            <option key={p.id} value={p.id}>
+                                              {p.name}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      ) : null}
+
+                                      {isBetterBall && row.B1 && row.B2 && row.B1 === row.B2 ? (
+                                        <div className="mt-1 text-[11px] text-red-700">Players must be different.</div>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs text-gray-600">{matchSetupDirty ? "Changes pending" : "No changes"}</div>
+
+                          <button
+                            type="button"
+                            onClick={saveMatchSetup}
+                            disabled={!matchSetupSaveEnabled}
+                            className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                              !matchSetupSaveEnabled
+                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                            }`}
+                          >
+                            {matchSaving ? "Saving…" : "Save match setup"}
+                          </button>
+                        </div>
+
+                        {matchErr ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{matchErr}</div> : null}
+                        {matchMsg ? <div className="text-sm text-green-700">{matchMsg}</div> : null}
+                      </>
+                    )}
+                  </div>
+                </section>
+
+                {teamsSummary ? null : null}
+              </>
+            ) : null}
+
+            {/* TEE GROUPINGS SECTION (override toggle only) */}
+            {activeSection === "tee" ? (
+              <>
+                <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                  <div className="p-4 border-b">
+                    <div className="text-sm font-semibold text-gray-900">Tee times override</div>
+                    <div className="mt-1 text-xs text-gray-600">
+                      When enabled, tee-time groups for this round are rewritten in match order.
                     </div>
+                  </div>
 
-                    {teeOverrideErr ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{teeOverrideErr}</div> : null}
-                    {teeOverrideMsg ? <div className="text-sm text-green-700">{teeOverrideMsg}</div> : null}
-                  </>
-                )}
-              </div>
-            </section>
+                  <div className="p-4 space-y-3">
+                    {teeOverrideLoading ? (
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Checking current override…</div>
+                    ) : null}
 
-            {/* (kept for logic/debug only; not displayed) */}
-            {teamsSummary ? null : null}
+                    {existing?.format === "INDIVIDUAL_STABLEFORD" ? (
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Not applicable for Individual stableford.</div>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-gray-900">Override by match order</div>
+                            <div className="text-xs text-gray-600">
+                              {format === "INDIVIDUAL_MATCHPLAY" ? (
+                                <>Group 1 = Match 1 + Match 2, Group 2 = Match 3 + Match 4, …</>
+                              ) : (
+                                <>Group 1 = Match 1, Group 2 = Match 2, …</>
+                              )}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => onToggleTeeOverride(!teeOverrideEnabled)}
+                            disabled={
+                              teeOverrideSaving ||
+                              !existing ||
+                              settingsDirty ||
+                              !matchSetupEnabled ||
+                              matchLoading ||
+                              matchSaving ||
+                              matchCount <= 0 ||
+                              teamsWarn.length > 0
+                            }
+                            className={`h-9 w-20 rounded-xl border text-sm font-semibold shadow-sm ${
+                              teeOverrideEnabled ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-900"
+                            } ${teeOverrideSaving ? "opacity-60" : ""}`}
+                            aria-pressed={teeOverrideEnabled}
+                            title={
+                              !existing
+                                ? "Save settings first"
+                                : settingsDirty
+                                ? "Save settings first"
+                                : !matchSetupEnabled
+                                ? "Match setup must be saved"
+                                : matchCount <= 0
+                                ? "No matches available"
+                                : teamsWarn
+                                ? "Tour must have exactly two teams"
+                                : ""
+                            }
+                          >
+                            {teeOverrideSaving ? "…" : teeOverrideEnabled ? "On" : "Off"}
+                          </button>
+                        </div>
+
+                        {teeOverrideErr ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{teeOverrideErr}</div> : null}
+                        {teeOverrideMsg ? <div className="text-sm text-green-700">{teeOverrideMsg}</div> : null}
+                      </>
+                    )}
+                  </div>
+                </section>
+
+                {teamsSummary ? null : null}
+              </>
+            ) : null}
           </>
         )}
       </main>
