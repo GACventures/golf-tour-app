@@ -15,6 +15,9 @@ type Tour = {
   start_date: string | null; // YYYY-MM-DD
   end_date: string | null; // YYYY-MM-DD
   score_entry_layout: string | null; // DB text column; normalize to ScoreEntryLayout in UI
+
+  // ✅ NEW: tour-level matchplay toggle
+  matchplay_active?: boolean | null;
 };
 
 type Course = { id: string; name: string; tour_id: string | null };
@@ -169,6 +172,12 @@ function normalizeScoreEntryLayout(raw: any): ScoreEntryLayout {
   return s === "alt" ? "alt" : "classic";
 }
 
+function normalizeMatchplayActive(raw: any): boolean {
+  // Default true to preserve “today” behavior if column missing/null in older rows during rollout.
+  if (raw === false) return false;
+  return true;
+}
+
 export default function TourPage() {
   const params = useParams<{ id: string }>();
   const tourId = params.id;
@@ -209,6 +218,11 @@ export default function TourPage() {
   const [layoutSaving, setLayoutSaving] = useState(false);
   const [layoutMsg, setLayoutMsg] = useState<string>("");
 
+  // ✅ NEW: Matchplay active (tour-level setting)
+  const [matchplayActive, setMatchplayActive] = useState<boolean>(true);
+  const [matchplaySaving, setMatchplaySaving] = useState(false);
+  const [matchplayMsg, setMatchplayMsg] = useState<string>("");
+
   async function loadAll() {
     setLoading(true);
     setError("");
@@ -216,12 +230,13 @@ export default function TourPage() {
     setDatesMsg("");
     setHcpMsg("");
     setLayoutMsg("");
+    setMatchplayMsg("");
 
     try {
       // Tour
       const { data: tourData, error: tourErr } = await supabase
         .from("tours")
-        .select("id,name,start_date,end_date,score_entry_layout")
+        .select("id,name,start_date,end_date,score_entry_layout,matchplay_active")
         .eq("id", tourId)
         .maybeSingle();
 
@@ -236,6 +251,9 @@ export default function TourPage() {
 
       // ✅ normalize layout (default classic)
       setScoreEntryLayout(normalizeScoreEntryLayout((tourData as any)?.score_entry_layout));
+
+      // ✅ normalize matchplay active (default true)
+      setMatchplayActive(normalizeMatchplayActive((tourData as any)?.matchplay_active));
 
       // Settings
       const { data: sData, error: sErr } = await supabase
@@ -604,6 +622,26 @@ export default function TourPage() {
     }
   }
 
+  // ✅ NEW: save matchplay active toggle
+  async function saveMatchplayActive(next: boolean) {
+    setMatchplayMsg("");
+    if (!tourId) return;
+
+    setMatchplaySaving(true);
+    try {
+      const { error: upErr } = await supabase.from("tours").update({ matchplay_active: next }).eq("id", tourId);
+      if (upErr) throw new Error(upErr.message);
+
+      setMatchplayActive(next);
+      setTour((prev) => (prev ? { ...prev, matchplay_active: next } : prev));
+      setMatchplayMsg("Saved ✓");
+    } catch (e: any) {
+      setMatchplayMsg(e?.message ?? "Failed to save matchplay setting.");
+    } finally {
+      setMatchplaySaving(false);
+    }
+  }
+
   if (loading) return <div style={{ padding: 16 }}>Loading tour…</div>;
 
   if (error)
@@ -661,6 +699,41 @@ export default function TourPage() {
               {layoutMsg ? (
                 <span style={{ fontSize: 12, color: layoutMsg.startsWith("Saved") ? "#2e7d32" : "crimson", fontWeight: 700 }}>
                   {layoutMsg}
+                </span>
+              ) : null}
+            </div>
+
+            {/* ✅ NEW: Matchplay active toggle */}
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#333" }}>Matchplay:</div>
+
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                <input
+                  type="radio"
+                  name="matchplay_active"
+                  value="yes"
+                  checked={matchplayActive === true}
+                  disabled={matchplaySaving}
+                  onChange={() => void saveMatchplayActive(true)}
+                />
+                Active
+              </label>
+
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                <input
+                  type="radio"
+                  name="matchplay_active"
+                  value="no"
+                  checked={matchplayActive === false}
+                  disabled={matchplaySaving}
+                  onChange={() => void saveMatchplayActive(false)}
+                />
+                Inactive
+              </label>
+
+              {matchplayMsg ? (
+                <span style={{ fontSize: 12, color: matchplayMsg.startsWith("Saved") ? "#2e7d32" : "crimson", fontWeight: 700 }}>
+                  {matchplayMsg}
                 </span>
               ) : null}
             </div>

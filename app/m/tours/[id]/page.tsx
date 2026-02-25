@@ -11,6 +11,9 @@ type TourRow = {
   start_date: string | null;
   end_date: string | null;
   image_url?: string | null;
+
+  // ✅ NEW: tour-level matchplay toggle
+  matchplay_active?: boolean | null;
 };
 
 type RoundRow = {
@@ -46,6 +49,9 @@ const NZ_TOUR_2026_HERO = "/tours/NZ26-logo.webp";
 const PDF_TOUR_ID = NZ_TOUR_2026_ID;
 const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
 const PDF_FILES = ["itinerary.pdf", "accommodation.pdf", "dining.pdf", "profiles.pdf", "comps.pdf"] as const;
+
+// ✅ NEW: matchplay inactive message
+const MATCHPLAY_INACTIVE_MESSAGE = "Matchplay events not active on this tour";
 
 // Interaction
 const MIN_SCALE = 0.6;
@@ -108,6 +114,25 @@ export default function MobileTourLandingPage() {
   const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // ✅ lightweight toast (used for “doc not available” + “matchplay inactive”)
+  const [toastMsg, setToastMsg] = useState<string>("");
+  const toastTimerRef = useRef<number | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg);
+    if (toastTimerRef.current != null) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setToastMsg("");
+    }, 1800);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current != null) window.clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
   // PDF overlay state
   const [openingDocIdx, setOpeningDocIdx] = useState<number | null>(null);
   const [viewerTitle, setViewerTitle] = useState<string>("Document");
@@ -158,7 +183,7 @@ export default function MobileTourLandingPage() {
     vy: number;
     lastMoveT: number;
     lastMid: Pt;
-  }>({
+  }>( {
     mode: "none",
     startScale: 1,
     startTx: 0,
@@ -200,7 +225,7 @@ export default function MobileTourLandingPage() {
       setLoading(true);
 
       const [{ data: t }, { data: r }, { data: d }] = await Promise.all([
-        supabase.from("tours").select("id,name,start_date,end_date,image_url").eq("id", tourId).single(),
+        supabase.from("tours").select("id,name,start_date,end_date,image_url,matchplay_active").eq("id", tourId).single(),
         supabase.from("rounds").select("id,tour_id,played_on").eq("tour_id", tourId),
         supabase
           .from("tour_documents")
@@ -241,6 +266,9 @@ export default function MobileTourLandingPage() {
   const start = parseDate(tour?.start_date || derivedDates.start);
   const end = parseDate(tour?.end_date || derivedDates.end);
   const dateLabel = formatTourDates(start, end);
+
+  // ✅ matchplay gate (default: allow unless explicitly false)
+  const matchplayIsActive = tour?.matchplay_active === false ? false : true;
 
   const stopInertia = useCallback(() => {
     if (inertiaRafRef.current != null) {
@@ -311,49 +339,52 @@ export default function MobileTourLandingPage() {
     };
   }, []);
 
-  // --- NEW: render with fixed CSS size, variable internal resolution ---
-  const renderPageAtQuality = useCallback(async (quality: number) => {
-    const page = pdfPageRef.current;
-    const canvas = canvasRef.current;
-    if (!page || !canvas) return;
+  // --- render with fixed CSS size, variable internal resolution ---
+  const renderPageAtQuality = useCallback(
+    async (quality: number) => {
+      const page = pdfPageRef.current;
+      const canvas = canvasRef.current;
+      if (!page || !canvas) return;
 
-    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+      const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
 
-    // baseCssScale defines the CSS “world” size. It never changes after open.
-    const baseCssScale = baseCssScaleRef.current;
+      // baseCssScale defines the CSS “world” size. It never changes after open.
+      const baseCssScale = baseCssScaleRef.current;
 
-    // renderScale controls bitmap resolution. Higher = sharper, but heavier.
-    const renderScale = baseCssScale * quality * dpr;
+      // renderScale controls bitmap resolution. Higher = sharper, but heavier.
+      const renderScale = baseCssScale * quality * dpr;
 
-    setRendering(true);
-    try {
-      const viewport = page.getViewport({ scale: renderScale });
-      const ctx = canvas.getContext("2d")!;
+      setRendering(true);
+      try {
+        const viewport = page.getViewport({ scale: renderScale });
+        const ctx = canvas.getContext("2d")!;
 
-      // Internal bitmap size
-      canvas.width = Math.floor(viewport.width);
-      canvas.height = Math.floor(viewport.height);
+        // Internal bitmap size
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
 
-      // Keep CSS size fixed to the “world” size (no overshoot!)
-      const cssW = worldWRef.current;
-      const cssH = worldHRef.current;
-      canvas.style.width = `${cssW}px`;
-      canvas.style.height = `${cssH}px`;
+        // Keep CSS size fixed to the “world” size (no overshoot!)
+        const cssW = worldWRef.current;
+        const cssH = worldHRef.current;
+        canvas.style.width = `${cssW}px`;
+        canvas.style.height = `${cssH}px`;
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: ctx, viewport }).promise;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, viewport }).promise;
 
-      lastQualityRef.current = quality;
+        lastQualityRef.current = quality;
 
-      // after a redraw, clamp translation (world size unchanged, but still safe)
-      const clamped = clampToBounds(txRef.current, tyRef.current, scaleRef.current);
-      txRef.current = clamped.tx;
-      tyRef.current = clamped.ty;
-      applyTransform();
-    } finally {
-      setRendering(false);
-    }
-  }, [applyTransform, clampToBounds]);
+        // after a redraw, clamp translation (world size unchanged, but still safe)
+        const clamped = clampToBounds(txRef.current, tyRef.current, scaleRef.current);
+        txRef.current = clamped.tx;
+        tyRef.current = clamped.ty;
+        applyTransform();
+      } finally {
+        setRendering(false);
+      }
+    },
+    [applyTransform, clampToBounds]
+  );
 
   const scheduleRefine = useCallback(() => {
     clearRerenderTimer();
@@ -453,13 +484,13 @@ export default function MobileTourLandingPage() {
           applyTransform();
         }
       } catch {
-        alert(NOT_AVAILABLE_MESSAGE);
+        showToast(NOT_AVAILABLE_MESSAGE);
         closeViewer();
       } finally {
         setRendering(false);
       }
     },
-    [applyTransform, closeViewer, renderPageAtQuality]
+    [applyTransform, closeViewer, renderPageAtQuality, showToast]
   );
 
   useEffect(() => {
@@ -472,17 +503,17 @@ export default function MobileTourLandingPage() {
   const openDocByIndex = useCallback(
     async (idx: number) => {
       if (tourId !== PDF_TOUR_ID) {
-        alert(NOT_AVAILABLE_MESSAGE);
+        showToast(NOT_AVAILABLE_MESSAGE);
         return;
       }
       if (!pdfjsRef.current) {
-        alert("PDF viewer not ready yet. Please try again.");
+        showToast("PDF viewer not ready yet. Please try again.");
         return;
       }
 
       const filename = PDF_FILES[idx];
       if (!filename) {
-        alert(NOT_AVAILABLE_MESSAGE);
+        showToast(NOT_AVAILABLE_MESSAGE);
         return;
       }
 
@@ -491,7 +522,7 @@ export default function MobileTourLandingPage() {
         const routeUrl = `/m/tours/${tourId}/pdf/${encodeURIComponent(filename)}`;
         const head = await fetch(routeUrl, { method: "HEAD", cache: "no-store" });
         if (!head.ok) {
-          alert(NOT_AVAILABLE_MESSAGE);
+          showToast(NOT_AVAILABLE_MESSAGE);
           return;
         }
 
@@ -507,12 +538,12 @@ export default function MobileTourLandingPage() {
         setViewerTitle(title);
         setViewerSrc(routeUrl);
       } catch {
-        alert(NOT_AVAILABLE_MESSAGE);
+        showToast(NOT_AVAILABLE_MESSAGE);
       } finally {
         setOpeningDocIdx(null);
       }
     },
-    [tourId, docs, stopInertia, clearRerenderTimer]
+    [tourId, docs, stopInertia, clearRerenderTimer, showToast]
   );
 
   const midpoint = (a: Pt, b: Pt): Pt => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
@@ -745,7 +776,26 @@ export default function MobileTourLandingPage() {
   const zoomIn = useCallback(() => zoomBy(1.6), [zoomBy]);
 
   const baseBtn = "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
-  const rowColors = ["bg-blue-100 text-gray-900", "bg-blue-200 text-gray-900", "bg-blue-300 text-gray-900", "bg-blue-400 text-white", "bg-blue-500 text-white", "bg-blue-600 text-white"];
+  const rowColors = [
+    "bg-blue-100 text-gray-900",
+    "bg-blue-200 text-gray-900",
+    "bg-blue-300 text-gray-900",
+    "bg-blue-400 text-white",
+    "bg-blue-500 text-white",
+    "bg-blue-600 text-white",
+  ];
+
+  // ✅ Matchplay button handler (blocks navigation when inactive)
+  const goMatchplay = useCallback(
+    (path: string) => {
+      if (!matchplayIsActive) {
+        showToast(MATCHPLAY_INACTIVE_MESSAGE);
+        return;
+      }
+      router.push(path);
+    },
+    [matchplayIsActive, router, showToast]
+  );
 
   return (
     <div className="min-h-dvh bg-black text-white">
@@ -768,13 +818,16 @@ export default function MobileTourLandingPage() {
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
         <div className="grid grid-cols-3 gap-2">
           <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>
-            Daily<br />Tee times
+            Daily<br />
+            Tee times
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>
-            Daily<br />Results
+            Daily<br />
+            Results
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>
-            Score<br />Entry
+            Score<br />
+            Entry
           </button>
 
           <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>
@@ -787,40 +840,70 @@ export default function MobileTourLandingPage() {
             Stats
           </button>
 
-          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/format`)}>
-            Matchplay<br />Format
+          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => goMatchplay(`/m/tours/${tourId}/matches/format`)}>
+            Matchplay<br />
+            Format
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/results`)}>
-            Matchplay<br />Results
+          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => goMatchplay(`/m/tours/${tourId}/matches/results`)}>
+            Matchplay<br />
+            Results
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => router.push(`/m/tours/${tourId}/matches/leaderboard`)}>
-            Matchplay<br />Leaderboard
+          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => goMatchplay(`/m/tours/${tourId}/matches/leaderboard`)}>
+            Matchplay<br />
+            Leaderboard
           </button>
 
           <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>
-            Tour<br />Details
+            Tour<br />
+            Details
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>
-            Tour<br />Admin
+            Tour<br />
+            Admin
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>
             Rehandicapping
           </button>
 
-          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(0)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(0)}
+          >
             {openingDocIdx === 0 ? "Opening…" : "Itinerary"}
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(1)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(1)}
+          >
             {openingDocIdx === 1 ? "Opening…" : "Accommodation"}
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(2)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(2)}
+          >
             {openingDocIdx === 2 ? "Opening…" : "Dining"}
           </button>
 
-          <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(3)}>
-            {openingDocIdx === 3 ? "Opening…" : <>Player<br />Profiles</>}
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(3)}
+          >
+            {openingDocIdx === 3 ? "Opening…" : (
+              <>
+                Player<br />
+                Profiles
+              </>
+            )}
           </button>
-          <button type="button" className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`} onClick={() => openDocByIndex(4)}>
+          <button
+            type="button"
+            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`}
+            onClick={() => openDocByIndex(4)}
+          >
             {openingDocIdx === 4 ? "Opening…" : "Comps etc"}
           </button>
 
@@ -829,7 +912,8 @@ export default function MobileTourLandingPage() {
             className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
             onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
           >
-            App<br />User Guide
+            App<br />
+            User Guide
           </button>
         </div>
 
@@ -875,14 +959,19 @@ export default function MobileTourLandingPage() {
               <canvas ref={canvasRef} className="block" />
             </div>
 
-            {rendering ? (
-              <div className="absolute right-3 bottom-3 bg-black/70 text-white text-xs px-2 py-1 rounded">
-                Rendering…
-              </div>
-            ) : null}
+            {rendering ? <div className="absolute right-3 bottom-3 bg-black/70 text-white text-xs px-2 py-1 rounded">Rendering…</div> : null}
           </div>
         </div>
       )}
+
+      {/* ✅ Toast */}
+      {toastMsg ? (
+        <div className="fixed left-0 right-0 bottom-5 z-[60] flex items-center justify-center px-4">
+          <div className="max-w-md w-full bg-white text-gray-900 border border-black/10 rounded-xl px-4 py-3 shadow-lg text-sm font-semibold">
+            {toastMsg}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
