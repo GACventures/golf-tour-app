@@ -293,7 +293,9 @@ export default function MobileCompetitionsPage() {
 
           if (bData) {
             const row = bData as any;
-            const round_nos = Array.isArray(row.round_nos) ? row.round_nos.map((x: any) => asInt(x, 0)).filter((n: number) => n > 0) : [];
+            const round_nos = Array.isArray(row.round_nos)
+              ? row.round_nos.map((x: any) => asInt(x, 0)).filter((n: number) => n > 0)
+              : [];
             setBotb({ tour_id: String(row.tour_id), enabled: row.enabled === true, round_nos });
           } else {
             setBotb(null);
@@ -683,14 +685,26 @@ export default function MobileCompetitionsPage() {
     return out;
   }, [botb, botbRounds, players, roundPlayers, ctx]);
 
+  // For the footer line (under the table): keep "R#" prefix, no "Round name", no bold.
   const botbRoundsLabel = useMemo(() => {
     if (!botb?.enabled) return "";
     if (!botbRoundNos.length || botbRounds.length === 0) return "(no rounds selected)";
     const parts = botbRounds.map((r) => {
       const rn = r.round_no ?? "?";
-      const rname = safeName(r.name, `Round ${rn}`);
       const cname = r.course_id ? (coursesById[r.course_id] ?? "(course)") : "(course)";
-      return `R${rn} ${rname} — ${cname}`;
+      return `R${rn} — ${cname}`;
+    });
+    return parts.join(" · ");
+  }, [botb, botbRoundNos, botbRounds, coursesById]);
+
+  // For the Definitions section: remove the "R#" prefix and show "Round # — Course".
+  const botbRoundsLabelDefinition = useMemo(() => {
+    if (!botb?.enabled) return "";
+    if (!botbRoundNos.length || botbRounds.length === 0) return "(no rounds selected)";
+    const parts = botbRounds.map((r) => {
+      const rn = r.round_no ?? "?";
+      const cname = r.course_id ? (coursesById[r.course_id] ?? "(course)") : "(course)";
+      return `Round ${rn} — ${cname}`;
     });
     return parts.join(" · ");
   }, [botb, botbRoundNos, botbRounds, coursesById]);
@@ -752,7 +766,6 @@ export default function MobileCompetitionsPage() {
       <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-sm font-semibold text-gray-900">Competitions</div>
-          
         </div>
       </div>
 
@@ -793,11 +806,7 @@ export default function MobileCompetitionsPage() {
                       </th>
                     ))}
 
-                    {showBotbColumn ? (
-                      <th className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>
-                        BotB
-                      </th>
-                    ) : null}
+                    {showBotbColumn ? <th className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>BotB</th> : null}
                   </tr>
                 </thead>
 
@@ -957,8 +966,7 @@ export default function MobileCompetitionsPage() {
                 {showBotbColumn ? (
                   <>
                     {" "}
-                    · <span className="font-semibold">BotB</span> = aggregate Stableford on{" "}
-                    <span className="font-semibold">{botbRoundsLabel || "(selected rounds)"}</span>. Tap BotB to open the BotB table.
+                    · BotB = aggregate Stableford on {botbRoundsLabel || "(selected rounds)"}. Tap BotB to open the BotB table.
                   </>
                 ) : null}
               </div>
@@ -978,7 +986,9 @@ export default function MobileCompetitionsPage() {
                     <li className="leading-snug">
                       <span className="font-semibold text-gray-900">BotB</span>{" "}
                       <span className="text-gray-600">—</span>{" "}
-                      <span className="text-gray-800">Aggregate Stableford on {botbRoundsLabel || "(selected rounds)"}.</span>
+                      <span className="text-gray-800">
+                        Aggregate Stableford on {botbRoundsLabelDefinition || "(selected rounds)"}.
+                      </span>
                     </li>
                   ) : null}
                 </ul>
