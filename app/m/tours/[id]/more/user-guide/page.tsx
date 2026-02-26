@@ -374,16 +374,67 @@ Tour Admin tools are accessed from the tour landing page.
 - Last saved changes always win
 `;
 
+type ListItem = { text: string; children?: ListItem[] };
+
+function nestOneLevel(items: Array<{ level: 0 | 1; text: string }>): ListItem[] {
+  const out: ListItem[] = [];
+  let lastTop: ListItem | null = null;
+
+  for (const it of items) {
+    if (it.level === 0) {
+      const node: ListItem = { text: it.text };
+      out.push(node);
+      lastTop = node;
+      continue;
+    }
+
+    // level 1
+    if (!lastTop) {
+      // If a sub-item appears without a parent, treat it as a top-level item.
+      out.push({ text: it.text });
+      continue;
+    }
+    if (!lastTop.children) lastTop.children = [];
+    lastTop.children.push({ text: it.text });
+  }
+
+  return out;
+}
+
+function renderInline(text: string) {
+  // minimal **bold** support
+  const parts = text.split("**");
+  if (parts.length === 1) return text;
+
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 === 1 ? (
+          <strong key={i} className="font-semibold text-gray-900">
+            {p}
+          </strong>
+        ) : (
+          <span key={i}>{p}</span>
+        )
+      )}
+    </>
+  );
+}
+
 function Markdown({ text }: { text: string }) {
-  // Minimal markdown renderer (headings + lists + paragraphs).
-  // If your app already uses a markdown component, replace this with that.
+  // Minimal markdown renderer (headings + lists (with 1-level nesting) + paragraphs + hr).
   const lines = text.replace(/\r\n/g, "\n").split("\n");
 
-  const blocks: Array<{ type: "h1" | "h2" | "h3" | "ul" | "p" | "hr"; content?: string[] }> = [];
-  let currentList: string[] | null = null;
+  const blocks: Array<
+    | { type: "h1" | "h2" | "h3" | "p"; content: string }
+    | { type: "hr" }
+    | { type: "ul"; items: Array<{ level: 0 | 1; text: string }> }
+  > = [];
+
+  let currentList: Array<{ level: 0 | 1; text: string }> | null = null;
 
   const flushList = () => {
-    if (currentList && currentList.length) blocks.push({ type: "ul", content: currentList });
+    if (currentList && currentList.length) blocks.push({ type: "ul", items: currentList });
     currentList = null;
   };
 
@@ -406,29 +457,38 @@ function Markdown({ text }: { text: string }) {
     const h3 = line.match(/^### (.+)$/);
     if (h1) {
       flushList();
-      blocks.push({ type: "h1", content: [h1[1]] });
+      blocks.push({ type: "h1", content: h1[1] });
       continue;
     }
     if (h2) {
       flushList();
-      blocks.push({ type: "h2", content: [h2[1]] });
+      blocks.push({ type: "h2", content: h2[1] });
       continue;
     }
     if (h3) {
       flushList();
-      blocks.push({ type: "h3", content: [h3[1]] });
+      blocks.push({ type: "h3", content: h3[1] });
       continue;
     }
 
-    const li = line.match(/^\s*[-•]\s+(.+)$/);
+    // Lists: support "-" and "•" plus one-level nesting via leading spaces.
+    // In your guide text, nested bullets are written as "  - ..."
+    const li = raw.match(/^(\s*)([-•])\s+(.+)$/);
     if (li) {
+      const leading = li[1] ?? "";
+      const bullet = li[2] ?? "-";
+      const txt = (li[3] ?? "").trim();
+
+      // Treat "•" as top-level even if spaced
+      const level: 0 | 1 = bullet === "•" ? 0 : leading.length >= 2 ? 1 : 0;
+
       if (!currentList) currentList = [];
-      currentList.push(li[1]);
+      currentList.push({ level, text: txt });
       continue;
     }
 
     flushList();
-    blocks.push({ type: "p", content: [line] });
+    blocks.push({ type: "p", content: line.trim() });
   }
 
   flushList();
@@ -437,35 +497,51 @@ function Markdown({ text }: { text: string }) {
     <div className="space-y-3">
       {blocks.map((b, i) => {
         if (b.type === "hr") return <div key={i} className="h-px bg-gray-200 my-2" />;
+
         if (b.type === "h1")
           return (
             <h1 key={i} className="text-xl font-semibold text-gray-900">
-              {b.content?.[0]}
+              {renderInline(b.content)}
             </h1>
           );
+
         if (b.type === "h2")
           return (
             <h2 key={i} className="text-base font-semibold text-gray-900 pt-2">
-              {b.content?.[0]}
+              {renderInline(b.content)}
             </h2>
           );
+
         if (b.type === "h3")
           return (
             <h3 key={i} className="text-sm font-semibold text-gray-900 pt-1">
-              {b.content?.[0]}
+              {renderInline(b.content)}
             </h3>
           );
-        if (b.type === "ul")
+
+        if (b.type === "ul") {
+          const nested = nestOneLevel(b.items);
           return (
             <ul key={i} className="list-disc pl-5 space-y-1 text-sm text-gray-800">
-              {(b.content ?? []).map((x, j) => (
-                <li key={j}>{x}</li>
+              {nested.map((it, j) => (
+                <li key={j}>
+                  {renderInline(it.text)}
+                  {it.children?.length ? (
+                    <ul className="list-[circle] pl-5 mt-1 space-y-1">
+                      {it.children.map((c, k) => (
+                        <li key={k}>{renderInline(c.text)}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </li>
               ))}
             </ul>
           );
+        }
+
         return (
           <p key={i} className="text-sm text-gray-800 leading-relaxed">
-            {b.content?.[0]}
+            {renderInline(b.content)}
           </p>
         );
       })}
@@ -479,7 +555,10 @@ export default function MobileAppUserGuidePage() {
       <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-gray-200">
         <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
           <div className="text-sm font-semibold text-gray-900">User Guide</div>
-          <Link href="/m" className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold shadow-sm active:bg-gray-50">
+          <Link
+            href="/m"
+            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold shadow-sm active:bg-gray-50"
+          >
             Home
           </Link>
         </div>
