@@ -1,3 +1,4 @@
+// app/m/admin/page.tsx
 import Link from "next/link";
 import AdminGate from "./AdminGate";
 
@@ -32,8 +33,8 @@ export default function MobileAdminHubPage() {
         </div>
 
         <div className="text-xs text-gray-500 pt-2">
-          Dev bypass: <code className="px-1 rounded bg-gray-100">NEXT_PUBLIC_ADMIN_BYPASS=true</code>.
-          When you’re ready, set it to false and rely on allowlist + real auth.
+          Note: this hub is UI-gated by your allowlist env var. For dev bypass set{" "}
+          <code className="px-1 rounded bg-gray-100">NEXT_PUBLIC_ADMIN_BYPASS=true</code>.
         </div>
       </div>
     </AdminGate>
