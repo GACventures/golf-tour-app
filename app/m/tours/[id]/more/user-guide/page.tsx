@@ -211,13 +211,6 @@ The Competitions screen shows each player’s current result and rank for each c
 - Best of the Best (BotB) (if enabled) — Aggregates Stableford totals across selected rounds.
   - Tap the BotB column/cell (where shown) to open the BotB table.
 
-### More information (clickable items)
-
-- Eclectic: tap a player’s Eclectic value to open the Eclectic breakdown.
-- Hot Streak / Cold Streak: tap the value to view the streak detail (round + hole range).
-- H2Z: tap the value to view peak detail.
-- BotB (if shown): tap the BotB value to open the BotB table.
-
 ---
 
 ## 6. Matchplay
@@ -374,174 +367,163 @@ Tour Admin tools are accessed from the tour landing page.
 - Last saved changes always win
 `;
 
-type ListItem = { text: string; children?: ListItem[] };
+// ------- Minimal markdown renderer with nested bullet indentation -------
 
-function nestOneLevel(items: Array<{ level: 0 | 1; text: string }>): ListItem[] {
-  const out: ListItem[] = [];
-  let lastTop: ListItem | null = null;
+type Block =
+  | { type: "h1" | "h2" | "h3" | "p" | "hr"; text?: string }
+  | { type: "list"; items: ListItem[] };
 
-  for (const it of items) {
-    if (it.level === 0) {
-      const node: ListItem = { text: it.text };
-      out.push(node);
-      lastTop = node;
-      continue;
-    }
+type ListItem = { text: string; children: ListItem[] };
 
-    // level 1
-    if (!lastTop) {
-      // If a sub-item appears without a parent, treat it as a top-level item.
-      out.push({ text: it.text });
-      continue;
-    }
-    if (!lastTop.children) lastTop.children = [];
-    lastTop.children.push({ text: it.text });
-  }
-
-  return out;
+function countLeadingSpaces(s: string) {
+  let n = 0;
+  while (n < s.length && s[n] === " ") n++;
+  return n;
 }
 
-function renderInline(text: string) {
-  // minimal **bold** support
-  const parts = text.split("**");
-  if (parts.length === 1) return text;
+function parseList(lines: string[], startIndex: number) {
+  // Parses consecutive list lines into a nested list based on indentation.
+  // Assumption: nested items are indented by >= 2 spaces.
+  const root: ListItem[] = [];
+  const stack: Array<{ indent: number; items: ListItem[] }> = [{ indent: -1, items: root }];
 
-  return (
-    <>
-      {parts.map((p, i) =>
-        i % 2 === 1 ? (
-          <strong key={i} className="font-semibold text-gray-900">
-            {p}
-          </strong>
-        ) : (
-          <span key={i}>{p}</span>
-        )
-      )}
-    </>
-  );
+  let i = startIndex;
+
+  while (i < lines.length) {
+    const raw = lines[i];
+    if (!raw.trim()) break;
+
+    const m = raw.match(/^(\s*)[-•]\s+(.+)$/);
+    if (!m) break;
+
+    const indent = countLeadingSpaces(m[1]);
+    const text = m[2];
+
+    // Find parent level
+    while (stack.length > 1 && indent <= stack[stack.length - 1].indent) stack.pop();
+
+    // If indent jumps deeper, ensure we nest under the last item
+    if (indent > stack[stack.length - 1].indent) {
+      const parentItems = stack[stack.length - 1].items;
+      const last = parentItems[parentItems.length - 1];
+
+      if (indent >= 2 && last) {
+        // Nest under last
+        stack.push({ indent, items: last.children });
+      }
+      // else: still treat as top-level
+    }
+
+    const target = stack[stack.length - 1].items;
+    target.push({ text, children: [] });
+
+    i++;
+  }
+
+  return { items: root, nextIndex: i };
 }
 
 function Markdown({ text }: { text: string }) {
-  // Minimal markdown renderer (headings + lists (with 1-level nesting) + paragraphs + hr).
   const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const blocks: Block[] = [];
 
-  const blocks: Array<
-    | { type: "h1" | "h2" | "h3" | "p"; content: string }
-    | { type: "hr" }
-    | { type: "ul"; items: Array<{ level: 0 | 1; text: string }> }
-  > = [];
-
-  let currentList: Array<{ level: 0 | 1; text: string }> | null = null;
-
-  const flushList = () => {
-    if (currentList && currentList.length) blocks.push({ type: "ul", items: currentList });
-    currentList = null;
-  };
-
-  for (const raw of lines) {
+  let i = 0;
+  while (i < lines.length) {
+    const raw = lines[i];
     const line = raw.trimEnd();
 
     if (!line.trim()) {
-      flushList();
+      i++;
       continue;
     }
 
     if (line.trim() === "---") {
-      flushList();
       blocks.push({ type: "hr" });
+      i++;
       continue;
     }
 
     const h1 = line.match(/^# (.+)$/);
     const h2 = line.match(/^## (.+)$/);
     const h3 = line.match(/^### (.+)$/);
+
     if (h1) {
-      flushList();
-      blocks.push({ type: "h1", content: h1[1] });
+      blocks.push({ type: "h1", text: h1[1] });
+      i++;
       continue;
     }
     if (h2) {
-      flushList();
-      blocks.push({ type: "h2", content: h2[1] });
+      blocks.push({ type: "h2", text: h2[1] });
+      i++;
       continue;
     }
     if (h3) {
-      flushList();
-      blocks.push({ type: "h3", content: h3[1] });
+      blocks.push({ type: "h3", text: h3[1] });
+      i++;
       continue;
     }
 
-    // Lists: support "-" and "•" plus one-level nesting via leading spaces.
-    // In your guide text, nested bullets are written as "  - ..."
-    const li = raw.match(/^(\s*)([-•])\s+(.+)$/);
-    if (li) {
-      const leading = li[1] ?? "";
-      const bullet = li[2] ?? "-";
-      const txt = (li[3] ?? "").trim();
-
-      // Treat "•" as top-level even if spaced
-      const level: 0 | 1 = bullet === "•" ? 0 : leading.length >= 2 ? 1 : 0;
-
-      if (!currentList) currentList = [];
-      currentList.push({ level, text: txt });
+    // List?
+    if (/^\s*[-•]\s+/.test(line)) {
+      const parsed = parseList(lines, i);
+      blocks.push({ type: "list", items: parsed.items });
+      i = parsed.nextIndex;
       continue;
     }
 
-    flushList();
-    blocks.push({ type: "p", content: line.trim() });
+    // Paragraph
+    blocks.push({ type: "p", text: line.trim() });
+    i++;
   }
 
-  flushList();
+  const renderList = (items: ListItem[], level: number) => {
+    // Level 0: disc, Level 1+: circle
+    const bulletClass = level === 0 ? "list-disc" : "list-[circle]";
+    const padClass = level === 0 ? "pl-5" : "pl-7";
+
+    return (
+      <ul className={`${bulletClass} ${padClass} space-y-1 text-sm text-gray-800`}>
+        {items.map((it, idx) => (
+          <li key={`${level}-${idx}`}>
+            {it.text}
+            {it.children.length ? <div className="mt-1">{renderList(it.children, level + 1)}</div> : null}
+          </li>
+        ))}
+      </ul>
+    );
+  };
 
   return (
     <div className="space-y-3">
-      {blocks.map((b, i) => {
-        if (b.type === "hr") return <div key={i} className="h-px bg-gray-200 my-2" />;
+      {blocks.map((b, idx) => {
+        if (b.type === "hr") return <div key={idx} className="h-px bg-gray-200 my-2" />;
 
         if (b.type === "h1")
           return (
-            <h1 key={i} className="text-xl font-semibold text-gray-900">
-              {renderInline(b.content)}
+            <h1 key={idx} className="text-xl font-semibold text-gray-900">
+              {b.text}
             </h1>
           );
 
         if (b.type === "h2")
           return (
-            <h2 key={i} className="text-base font-semibold text-gray-900 pt-2">
-              {renderInline(b.content)}
+            <h2 key={idx} className="text-base font-semibold text-gray-900 pt-2">
+              {b.text}
             </h2>
           );
 
         if (b.type === "h3")
           return (
-            <h3 key={i} className="text-sm font-semibold text-gray-900 pt-1">
-              {renderInline(b.content)}
+            <h3 key={idx} className="text-sm font-semibold text-gray-900 pt-1">
+              {b.text}
             </h3>
           );
 
-        if (b.type === "ul") {
-          const nested = nestOneLevel(b.items);
-          return (
-            <ul key={i} className="list-disc pl-5 space-y-1 text-sm text-gray-800">
-              {nested.map((it, j) => (
-                <li key={j}>
-                  {renderInline(it.text)}
-                  {it.children?.length ? (
-                    <ul className="list-[circle] pl-5 mt-1 space-y-1">
-                      {it.children.map((c, k) => (
-                        <li key={k}>{renderInline(c.text)}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          );
-        }
+        if (b.type === "list") return <div key={idx}>{renderList(b.items, 0)}</div>;
 
         return (
-          <p key={i} className="text-sm text-gray-800 leading-relaxed">
-            {renderInline(b.content)}
+          <p key={idx} className="text-sm text-gray-800 leading-relaxed">
+            {b.text}
           </p>
         );
       })}
