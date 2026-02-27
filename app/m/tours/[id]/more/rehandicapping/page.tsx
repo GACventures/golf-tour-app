@@ -57,6 +57,8 @@ type RoundOption = {
   name: string | null;
 };
 
+type Section = "auto" | "manual" | "byRound" | null;
+
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
@@ -123,6 +125,9 @@ export default function MobileTourMoreRehandicappingPage() {
   const tourId = String(params?.id ?? "").trim();
 
   const showAppleby = tourId === NZ_TOUR_2026_ID;
+
+  // ✅ top chooser state (default = nothing open)
+  const [activeSection, setActiveSection] = useState<Section>(null);
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
@@ -478,9 +483,23 @@ export default function MobileTourMoreRehandicappingPage() {
     );
   }
 
+  // ✅ match Tour Admin chooser button styling
+  const chooserBtnBase = "h-11 rounded-xl border text-xs font-semibold flex items-center justify-center px-2";
+  const chooserBtnActive = "border-gray-900 bg-gray-900 text-white";
+  const chooserBtnIdle = "border-gray-200 bg-white text-gray-900";
+
+  // Existing pill buttons (inside sections)
   const pillBase = "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
   const pillActive = "border-gray-900 bg-gray-900 text-white";
   const pillIdle = "border-gray-200 bg-white text-gray-900";
+
+  function toggleSection(next: Exclude<Section, null>) {
+    setAutoMsg("");
+    setAutoError("");
+    setManMsg("");
+    setManError("");
+    setActiveSection((prev) => (prev === next ? null : next));
+  }
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
@@ -488,342 +507,403 @@ export default function MobileTourMoreRehandicappingPage() {
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">Rehandicapping</div>
+          {tour?.name ? <div className="mt-0.5 text-xs text-gray-600 truncate">{tour.name}</div> : null}
         </div>
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 py-4 space-y-4">
-        {loading ? (
+        {/* ✅ Top chooser row (always visible) */}
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={() => toggleSection("auto")}
+            className={`${chooserBtnBase} ${activeSection === "auto" ? chooserBtnActive : chooserBtnIdle}`}
+          >
+            Automatic rehandicapping
+          </button>
+
+          <button
+            type="button"
+            onClick={() => toggleSection("manual")}
+            className={`${chooserBtnBase} ${activeSection === "manual" ? chooserBtnActive : chooserBtnIdle}`}
+          >
+            Manual rehandicapping
+          </button>
+
+          <button
+            type="button"
+            onClick={() => toggleSection("byRound")}
+            className={`${chooserBtnBase} ${activeSection === "byRound" ? chooserBtnActive : chooserBtnIdle}`}
+          >
+            Handicaps by round
+          </button>
+        </div>
+
+        {/* ✅ Appleby button: second row, left aligned under Automatic */}
+        {showAppleby ? (
+          <div className="grid grid-cols-3 gap-2">
+            <Link
+              href={`/m/tours/${tourId}/more/appleby`}
+              className={`${chooserBtnBase} ${chooserBtnIdle} border-gray-900 bg-gray-900 text-white active:bg-gray-800`}
+            >
+              Appleby system →
+            </Link>
+            <div />
+            <div />
+          </div>
+        ) : null}
+
+        {/* Error (always visible if present) */}
+        {errorMsg ? (
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
+        ) : null}
+
+        {/* ✅ Nothing else shown until a button is clicked */}
+        {activeSection === null ? null : loading ? (
+          // Only show loading skeleton once a section is opened (so initial page looks like “buttons only”)
           <div className="space-y-3">
-            <div className="h-5 w-48 rounded bg-gray-100" />
             <div className="h-24 rounded-2xl border bg-white" />
             <div className="h-64 rounded-2xl border bg-white" />
           </div>
-        ) : errorMsg ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
-            {/* ✅ Appleby navigation button (NZ Tour 2026 only) */}
-            {showAppleby ? (
-              <Link
-                href={`/m/tours/${tourId}/more/appleby`}
-                className="h-11 w-full rounded-2xl px-4 text-sm font-semibold border border-gray-900 bg-gray-900 text-white shadow-sm flex items-center justify-center active:bg-gray-800"
-              >
-                Appleby rehandicapping system →
-              </Link>
+            {/* ========================= */}
+            {/* Automatic section */}
+            {/* ========================= */}
+            {activeSection === "auto" ? (
+              <>
+                {/* 1) Automatic rehandicapping toggle */}
+                <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                  <div className="p-4 border-b">
+                    <div className="text-sm font-semibold text-gray-900">Automatic rehandicapping</div>
+                  </div>
+
+                  <div className="p-4 space-y-3">
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        className={`${pillBase} ${autoEnabledInput === true ? pillActive : pillIdle}`}
+                        onClick={() => {
+                          setAutoMsg("");
+                          setAutoError("");
+                          setAutoEnabledInput(true);
+                        }}
+                        aria-pressed={autoEnabledInput === true}
+                      >
+                        Yes
+                      </button>
+
+                      <button
+                        type="button"
+                        className={`${pillBase} ${autoEnabledInput === false ? pillActive : pillIdle}`}
+                        onClick={() => {
+                          setAutoMsg("");
+                          setAutoError("");
+                          setAutoEnabledInput(false);
+                        }}
+                        aria-pressed={autoEnabledInput === false}
+                      >
+                        No
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-xs text-gray-600">{autoDirty ? "Change pending" : "No pending change"}</div>
+
+                      <button
+                        type="button"
+                        onClick={saveAutomaticToggle}
+                        disabled={autoSaving || !autoDirty}
+                        className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                          autoSaving || !autoDirty
+                            ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                            : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                        }`}
+                      >
+                        {autoSaving ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+
+                    {autoError ? (
+                      <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{autoError}</div>
+                    ) : null}
+                    {autoMsg ? <div className="text-sm text-green-700">{autoMsg}</div> : null}
+                  </div>
+                </section>
+
+                {/* 2) Rule */}
+                <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
+                  <div className="text-sm font-semibold text-gray-900">Rehandicapping rule</div>
+                  <div className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{ruleText}</div>
+
+                  {autoEnabled ? (
+                    <div className="mt-2 text-[11px] text-gray-500">
+                      Key: <span className="font-medium">{tour?.rehandicapping_rule_key ?? "—"}</span>
+                    </div>
+                  ) : null}
+                </section>
+              </>
             ) : null}
 
-            {/* 1) Automatic rehandicapping toggle */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Automatic rehandicapping</div>
-              </div>
-
-              <div className="p-4 space-y-3">
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className={`${pillBase} ${autoEnabledInput === true ? pillActive : pillIdle}`}
-                    onClick={() => {
-                      setAutoMsg("");
-                      setAutoError("");
-                      setAutoEnabledInput(true);
-                    }}
-                    aria-pressed={autoEnabledInput === true}
-                  >
-                    Yes
-                  </button>
-
-                  <button
-                    type="button"
-                    className={`${pillBase} ${autoEnabledInput === false ? pillActive : pillIdle}`}
-                    onClick={() => {
-                      setAutoMsg("");
-                      setAutoError("");
-                      setAutoEnabledInput(false);
-                    }}
-                    aria-pressed={autoEnabledInput === false}
-                  >
-                    No
-                  </button>
-                </div>
-
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-xs text-gray-600">{autoDirty ? "Change pending" : "No pending change"}</div>
-
-                  <button
-                    type="button"
-                    onClick={saveAutomaticToggle}
-                    disabled={autoSaving || !autoDirty}
-                    className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                      autoSaving || !autoDirty
-                        ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                        : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                    }`}
-                  >
-                    {autoSaving ? "Saving…" : "Save"}
-                  </button>
-                </div>
-
-                {autoError ? (
-                  <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{autoError}</div>
+            {/* ========================= */}
+            {/* Manual section */}
+            {/* ========================= */}
+            {activeSection === "manual" ? (
+              <>
+                {autoEnabled ? (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                    Manual rehandicapping is only available when <span className="font-semibold">Automatic</span> is set to{" "}
+                    <span className="font-semibold">No</span>.
+                  </div>
                 ) : null}
-                {autoMsg ? <div className="text-sm text-green-700">{autoMsg}</div> : null}
-              </div>
-            </section>
 
-            {/* 2) Rule */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
-              <div className="text-sm font-semibold text-gray-900">Rehandicapping rule</div>
-              <div className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{ruleText}</div>
+                {/* 3) Manual rehandicapping (only when automatic is OFF) */}
+                {!autoEnabled ? (
+                  <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                    <div className="p-4 border-b">
+                      <div className="text-sm font-semibold text-gray-900">Manual rehandicapping</div>
+                      <div className="mt-1 text-xs text-gray-600">
+                        When enabled, you can set a player’s playing handicap from a selected round onward (inclusive).
+                      </div>
+                    </div>
 
-              {autoEnabled ? (
-                <div className="mt-2 text-[11px] text-gray-500">
-                  Key: <span className="font-medium">{tour?.rehandicapping_rule_key ?? "—"}</span>
-                </div>
-              ) : null}
-            </section>
+                    <div className="p-4 space-y-3">
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          className={`${pillBase} ${manualEnabled ? pillActive : pillIdle}`}
+                          onClick={() => {
+                            setManMsg("");
+                            setManError("");
+                            setManualEnabled(true);
+                          }}
+                          aria-pressed={manualEnabled === true}
+                        >
+                          Yes
+                        </button>
 
-            {/* 3) Manual rehandicapping (only when automatic is OFF) */}
-            {!autoEnabled ? (
-              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <div className="p-4 border-b">
-                  <div className="text-sm font-semibold text-gray-900">Manual rehandicapping</div>
-                  <div className="mt-1 text-xs text-gray-600">
-                    When enabled, you can set a player’s playing handicap from a selected round onward (inclusive).
-                  </div>
-                </div>
+                        <button
+                          type="button"
+                          className={`${pillBase} ${!manualEnabled ? pillActive : pillIdle}`}
+                          onClick={() => {
+                            setManMsg("");
+                            setManError("");
+                            setManualEnabled(false);
+                            setManSelectedRoundId("");
+                            setManInputs({});
+                          }}
+                          aria-pressed={manualEnabled === false}
+                        >
+                          No
+                        </button>
+                      </div>
 
-                <div className="p-4 space-y-3">
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      className={`${pillBase} ${manualEnabled ? pillActive : pillIdle}`}
-                      onClick={() => {
-                        setManMsg("");
-                        setManError("");
-                        setManualEnabled(true);
-                      }}
-                      aria-pressed={manualEnabled === true}
-                    >
-                      Yes
-                    </button>
-
-                    <button
-                      type="button"
-                      className={`${pillBase} ${!manualEnabled ? pillActive : pillIdle}`}
-                      onClick={() => {
-                        setManMsg("");
-                        setManError("");
-                        setManualEnabled(false);
-                        setManSelectedRoundId("");
-                        setManInputs({});
-                      }}
-                      aria-pressed={manualEnabled === false}
-                    >
-                      No
-                    </button>
-                  </div>
-
-                  {manualEnabled ? (
-                    <>
-                      {roundsForSelect.length === 0 ? (
-                        <div className="text-sm text-gray-700">No rounds found for this tour.</div>
-                      ) : (
+                      {manualEnabled ? (
                         <>
-                          <label className="block text-xs font-semibold text-gray-700" htmlFor="manualRoundSelect">
-                            Select starting round
-                          </label>
-
-                          <select
-                            id="manualRoundSelect"
-                            className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
-                            value={manSelectedRoundId}
-                            onChange={(e) => {
-                              setManSelectedRoundId(e.target.value);
-                              setManError("");
-                              setManMsg("");
-                            }}
-                          >
-                            <option value="">Select a round…</option>
-                            {roundsForSelect.map((r) => (
-                              <option key={r.id} value={r.id}>
-                                {roundLabel(r)}
-                              </option>
-                            ))}
-                          </select>
-
-                          {!manSelectedRoundId ? (
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                              Choose a round to apply manual handicaps from that round onward.
-                            </div>
+                          {roundsForSelect.length === 0 ? (
+                            <div className="text-sm text-gray-700">No rounds found for this tour.</div>
                           ) : (
                             <>
-                              {manError ? (
-                                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-                                  {manError}
+                              <label className="block text-xs font-semibold text-gray-700" htmlFor="manualRoundSelect">
+                                Select starting round
+                              </label>
+
+                              <select
+                                id="manualRoundSelect"
+                                className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                                value={manSelectedRoundId}
+                                onChange={(e) => {
+                                  setManSelectedRoundId(e.target.value);
+                                  setManError("");
+                                  setManMsg("");
+                                }}
+                              >
+                                <option value="">Select a round…</option>
+                                {roundsForSelect.map((r) => (
+                                  <option key={r.id} value={r.id}>
+                                    {roundLabel(r)}
+                                  </option>
+                                ))}
+                              </select>
+
+                              {!manSelectedRoundId ? (
+                                <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                                  Choose a round to apply manual handicaps from that round onward.
                                 </div>
-                              ) : null}
+                              ) : (
+                                <>
+                                  {manError ? (
+                                    <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                                      {manError}
+                                    </div>
+                                  ) : null}
 
-                              {manMsg ? <div className="text-sm text-green-700">{manMsg}</div> : null}
+                                  {manMsg ? <div className="text-sm text-green-700">{manMsg}</div> : null}
 
-                              <div className="rounded-2xl border border-gray-200 overflow-hidden">
-                                <div className="grid grid-cols-12 gap-0 border-b bg-gray-50">
-                                  <div className="col-span-6 px-2 py-2 text-[11px] font-semibold text-gray-700">Player</div>
-                                  <div className="col-span-3 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">
-                                    PH (selected)
-                                  </div>
-                                  <div className="col-span-3 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">
-                                    Start
-                                  </div>
-                                </div>
+                                  <div className="rounded-2xl border border-gray-200 overflow-hidden">
+                                    <div className="grid grid-cols-12 gap-0 border-b bg-gray-50">
+                                      <div className="col-span-6 px-2 py-2 text-[11px] font-semibold text-gray-700">Player</div>
+                                      <div className="col-span-3 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">
+                                        PH (selected)
+                                      </div>
+                                      <div className="col-span-3 px-2 py-2 text-[11px] font-semibold text-gray-700 text-right">
+                                        Start
+                                      </div>
+                                    </div>
 
-                                <div className="divide-y">
-                                  {players.map((p) => {
-                                    const currentPH = hcpByRoundPlayer[manSelectedRoundId]?.[p.id];
-                                    const startFallback = fallbackStartByPlayerId[p.id];
-                                    const hasStart = startFallback != null;
+                                    <div className="divide-y">
+                                      {players.map((p) => {
+                                        const currentPH = hcpByRoundPlayer[manSelectedRoundId]?.[p.id];
+                                        const startFallback = fallbackStartByPlayerId[p.id];
+                                        const hasStart = startFallback != null;
 
-                                    return (
-                                      <div key={p.id} className="p-3">
-                                        <div className="grid grid-cols-12 items-center gap-2">
-                                          <div className="col-span-6 min-w-0">
-                                            <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
-                                          </div>
+                                        return (
+                                          <div key={p.id} className="p-3">
+                                            <div className="grid grid-cols-12 items-center gap-2">
+                                              <div className="col-span-6 min-w-0">
+                                                <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
+                                              </div>
 
-                                          <div className="col-span-3 text-right">
-                                            <div className="text-xs text-gray-600">
-                                              {Number.isFinite(Number(currentPH)) ? currentPH : "—"}
+                                              <div className="col-span-3 text-right">
+                                                <div className="text-xs text-gray-600">
+                                                  {Number.isFinite(Number(currentPH)) ? currentPH : "—"}
+                                                </div>
+                                              </div>
+
+                                              <div className="col-span-3 text-right">
+                                                <div className="text-xs text-gray-600">{hasStart ? startFallback : "—"}</div>
+                                              </div>
+                                            </div>
+
+                                            <div className="mt-2 flex items-center gap-2">
+                                              <input
+                                                inputMode="numeric"
+                                                pattern="[0-9]*"
+                                                className="w-24 rounded-xl border border-gray-200 bg-white px-3 py-2 text-right text-sm font-semibold text-gray-900 shadow-sm"
+                                                value={manInputs[p.id] ?? ""}
+                                                onChange={(e) => setManInput(p.id, e.target.value)}
+                                                placeholder="PH"
+                                                aria-label={`Manual playing handicap for ${p.name}`}
+                                                disabled={manSaving}
+                                              />
+
+                                              <button
+                                                type="button"
+                                                onClick={() => applyManualForward(p.id)}
+                                                disabled={manSaving}
+                                                className={`h-10 flex-1 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                                                  manSaving
+                                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                    : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
+                                                }`}
+                                              >
+                                                {manSaving ? "Saving…" : "Apply forward"}
+                                              </button>
+
+                                              <button
+                                                type="button"
+                                                onClick={() => resetManualForward(p.id)}
+                                                disabled={manSaving || !hasStart}
+                                                className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
+                                                  manSaving || !hasStart
+                                                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
+                                                    : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
+                                                }`}
+                                              >
+                                                Reset forward
+                                              </button>
+                                            </div>
+
+                                            <div className="mt-1 text-[11px] text-gray-500">
+                                              Applies from the selected round onward (inclusive).
                                             </div>
                                           </div>
-
-                                          <div className="col-span-3 text-right">
-                                            <div className="text-xs text-gray-600">{hasStart ? startFallback : "—"}</div>
-                                          </div>
-                                        </div>
-
-                                        <div className="mt-2 flex items-center gap-2">
-                                          <input
-                                            inputMode="numeric"
-                                            pattern="[0-9]*"
-                                            className="w-24 rounded-xl border border-gray-200 bg-white px-3 py-2 text-right text-sm font-semibold text-gray-900 shadow-sm"
-                                            value={manInputs[p.id] ?? ""}
-                                            onChange={(e) => setManInput(p.id, e.target.value)}
-                                            placeholder="PH"
-                                            aria-label={`Manual playing handicap for ${p.name}`}
-                                            disabled={manSaving}
-                                          />
-
-                                          <button
-                                            type="button"
-                                            onClick={() => applyManualForward(p.id)}
-                                            disabled={manSaving}
-                                            className={`h-10 flex-1 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                                              manSaving
-                                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                                            }`}
-                                          >
-                                            {manSaving ? "Saving…" : "Apply forward"}
-                                          </button>
-
-                                          <button
-                                            type="button"
-                                            onClick={() => resetManualForward(p.id)}
-                                            disabled={manSaving || !hasStart}
-                                            className={`h-10 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                                              manSaving || !hasStart
-                                                ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                : "border-gray-200 bg-white text-gray-900 active:bg-gray-50"
-                                            }`}
-                                          >
-                                            Reset forward
-                                          </button>
-                                        </div>
-
-                                        <div className="mt-1 text-[11px] text-gray-500">
-                                          Applies from the selected round onward (inclusive).
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                </>
+                              )}
                             </>
                           )}
                         </>
-                      )}
-                    </>
-                  ) : null}
-                </div>
-              </section>
+                      ) : null}
+                    </div>
+                  </section>
+                ) : null}
+              </>
             ) : null}
 
-            {/* 4) Handicap table */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Playing handicap by round</div>
-              </div>
-
-              {players.length === 0 ? (
-                <div className="p-4 text-sm text-gray-700">No players found for this tour.</div>
-              ) : roundsSorted.length === 0 ? (
-                <div className="p-4 text-sm text-gray-700">No rounds found for this tour.</div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="min-w-[780px] w-full border-collapse">
-                    <thead>
-                      <tr className="bg-gray-50">
-                        <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
-                          Player
-                        </th>
-
-                        {/* 2nd column = exact starting handicap (1dp) */}
-                        <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap">
-                          Starting Handicap (exact)
-                        </th>
-
-                        {roundsSorted.map((r, idx) => (
-                          <th
-                            key={r.id}
-                            className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap"
-                            title={r.name ?? ""}
-                          >
-                            {fmtRoundLabel(r, idx)}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-
-                    <tbody>
-                      {players.map((p) => {
-                        const startExact = p.tourStart ?? p.globalStart ?? null;
-
-                        return (
-                          <tr key={p.id} className="border-b last:border-b-0">
-                            <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                              {p.name}
-                            </td>
-
-                            <td className="px-3 py-2 text-right text-sm tabular-nums text-gray-700">{fmt1dp(startExact)}</td>
-
-                            {roundsSorted.map((r) => {
-                              const v = hcpByRoundPlayer[r.id]?.[p.id];
-                              const display = Number.isFinite(Number(v)) ? String(v) : "—";
-
-                              return (
-                                <td key={r.id} className="px-3 py-2 text-right text-sm tabular-nums text-gray-900">
-                                  {display}
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+            {/* ========================= */}
+            {/* Handicaps by round section */}
+            {/* ========================= */}
+            {activeSection === "byRound" ? (
+              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                <div className="p-4 border-b">
+                  <div className="text-sm font-semibold text-gray-900">Playing handicap by round</div>
                 </div>
-              )}
-            </section>
+
+                {players.length === 0 ? (
+                  <div className="p-4 text-sm text-gray-700">No players found for this tour.</div>
+                ) : roundsSorted.length === 0 ? (
+                  <div className="p-4 text-sm text-gray-700">No rounds found for this tour.</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-[780px] w-full border-collapse">
+                      <thead>
+                        <tr className="bg-gray-50">
+                          <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
+                            Player
+                          </th>
+
+                          {/* 2nd column = exact starting handicap (1dp) */}
+                          <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap">
+                            Starting Handicap (exact)
+                          </th>
+
+                          {roundsSorted.map((r, idx) => (
+                            <th
+                              key={r.id}
+                              className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap"
+                              title={r.name ?? ""}
+                            >
+                              {fmtRoundLabel(r, idx)}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+
+                      <tbody>
+                        {players.map((p) => {
+                          const startExact = p.tourStart ?? p.globalStart ?? null;
+
+                          return (
+                            <tr key={p.id} className="border-b last:border-b-0">
+                              <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                                {p.name}
+                              </td>
+
+                              <td className="px-3 py-2 text-right text-sm tabular-nums text-gray-700">{fmt1dp(startExact)}</td>
+
+                              {roundsSorted.map((r) => {
+                                const v = hcpByRoundPlayer[r.id]?.[p.id];
+                                const display = Number.isFinite(Number(v)) ? String(v) : "—";
+
+                                return (
+                                  <td key={r.id} className="px-3 py-2 text-right text-sm tabular-nums text-gray-900">
+                                    {display}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            ) : null}
           </>
         )}
       </main>
