@@ -507,7 +507,9 @@ export default function MobileTourMoreRehandicappingPage() {
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">Rehandicapping</div>
-          {tour?.name ? <div className="mt-0.5 text-xs text-gray-600 truncate">{tour.name}</div> : null}
+
+          {/* ✅ CHANGE #1: remove tour name/details under Rehandicapping (tour name is already shown elsewhere in your UI) */}
+          {/* {tour?.name ? <div className="mt-0.5 text-xs text-gray-600 truncate">{tour.name}</div> : null} */}
         </div>
       </div>
 
@@ -539,12 +541,12 @@ export default function MobileTourMoreRehandicappingPage() {
           </button>
         </div>
 
-        {/* ✅ Appleby button: second row, left aligned under Automatic */}
+        {/* ✅ CHANGE #2: Appleby button text visibility fixed by using a clear dark background + white text */}
         {showAppleby ? (
           <div className="grid grid-cols-3 gap-2">
             <Link
               href={`/m/tours/${tourId}/more/appleby`}
-              className={`${chooserBtnBase} ${chooserBtnIdle} border-gray-900 bg-gray-900 text-white active:bg-gray-800`}
+              className={`${chooserBtnBase} border-gray-900 bg-gray-900 text-white active:bg-gray-800`}
             >
               Appleby system →
             </Link>
