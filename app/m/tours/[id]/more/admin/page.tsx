@@ -139,33 +139,12 @@ function makeLocalKey() {
   return `g_${Date.now()}_${Math.floor(Math.random() * 1e9)}`;
 }
 
-function fmtDdMmYy(dateStr: string | null): string {
-  const raw = String(dateStr ?? "").trim();
-  if (!raw) return "";
-
-  // Handle common Supabase formats:
-  // - "YYYY-MM-DD"
-  // - ISO strings "YYYY-MM-DDTHH:mm:ss..."
-  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!m) return raw; // fallback: if unknown, show as-is (better than blank)
-  const yy = m[1].slice(2);
-  const mm = m[2];
-  const dd = m[3];
-  return `${dd}/${mm}/${yy}`;
-}
-
-// ✅ UPDATED: R{n} • DD/MM/YY • Course name
 function roundLabel(r: RoundOption) {
   const rn = Number.isFinite(Number(r.round_no)) ? Number(r.round_no) : 0;
-
-  const date = fmtDdMmYy(r.played_on);
-  const course = (r.course_name ?? "").trim() || (r.name ?? "").trim() || "Round";
-
-  const parts = [`R${rn}`];
-  if (date) parts.push(date);
-  if (course) parts.push(course);
-
-  return parts.join(" • ");
+  const title = (r.course_name ?? "").trim() || (r.name ?? "").trim() || "Round";
+  const date = (r.played_on ?? "").trim();
+  const tail = date ? ` • ${date}` : "";
+  return `R${rn} • ${title}${tail}`;
 }
 
 export default function MobileTourAdminPage() {
@@ -917,7 +896,7 @@ export default function MobileTourAdminPage() {
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">Tour Admin</div>
-          {tour?.name ? <div className="mt-0.5 text-xs text-gray-600 truncate">{tour.name}</div> : null}
+          
         </div>
       </div>
 
@@ -990,7 +969,9 @@ export default function MobileTourAdminPage() {
               <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Score entry layout</div>
-                  <div className="mt-1 text-xs text-gray-600">Choose which scoring screen is used by default for this tour.</div>
+                  <div className="mt-1 text-xs text-gray-600">
+                    Choose which scoring screen is used by default for this tour.
+                  </div>
                 </div>
 
                 <div className="p-4 space-y-3">
@@ -1001,9 +982,7 @@ export default function MobileTourAdminPage() {
                       onClick={() => void saveTourLayout("classic")}
                       className={[
                         "h-11 rounded-xl border text-sm font-semibold",
-                        scoreEntryLayout === "classic"
-                          ? "border-gray-900 bg-gray-900 text-white"
-                          : "border-gray-200 bg-white text-gray-900",
+                        scoreEntryLayout === "classic" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-900",
                         layoutSaving ? "opacity-60 cursor-not-allowed" : "active:bg-gray-50",
                       ].join(" ")}
                     >
@@ -1016,9 +995,7 @@ export default function MobileTourAdminPage() {
                       onClick={() => void saveTourLayout("alt")}
                       className={[
                         "h-11 rounded-xl border text-sm font-semibold",
-                        scoreEntryLayout === "alt"
-                          ? "border-gray-900 bg-gray-900 text-white"
-                          : "border-gray-200 bg-white text-gray-900",
+                        scoreEntryLayout === "alt" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-900",
                         layoutSaving ? "opacity-60 cursor-not-allowed" : "active:bg-gray-50",
                       ].join(" ")}
                     >
@@ -1125,9 +1102,7 @@ export default function MobileTourAdminPage() {
                       ) : (
                         <>
                           {courseLoading ? (
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                              Loading hole data…
-                            </div>
+                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading hole data…</div>
                           ) : null}
 
                           {courseError ? (
@@ -1253,8 +1228,7 @@ export default function MobileTourAdminPage() {
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Tee time groups (manual)</div>
                   <div className="mt-1 text-xs text-gray-600">
-                    Build tee-time <span className="font-semibold">groupings</span> for a round (group order + player order). Last
-                    saved wins.
+                    Build tee-time <span className="font-semibold">groupings</span> for a round (group order + player order). Last saved wins.
                   </div>
                 </div>
 
@@ -1304,11 +1278,21 @@ export default function MobileTourAdminPage() {
 
                   {/* Controls row */}
                   <div className="flex items-center justify-between gap-3">
-                    <button type="button" onClick={ttAddGroup} disabled={!ttSelectedRoundId || ttLoading} className={smallBtnSecondary}>
+                    <button
+                      type="button"
+                      onClick={ttAddGroup}
+                      disabled={!ttSelectedRoundId || ttLoading}
+                      className={smallBtnSecondary}
+                    >
                       + Add group
                     </button>
 
-                    <button type="button" onClick={ttSave} disabled={!ttSelectedRoundId || ttLoading || ttSaving} className={smallBtnPrimary}>
+                    <button
+                      type="button"
+                      onClick={ttSave}
+                      disabled={!ttSelectedRoundId || ttLoading || ttSaving}
+                      className={smallBtnPrimary}
+                    >
                       {ttSaving ? "Saving…" : "Save groups"}
                     </button>
                   </div>
@@ -1369,14 +1353,15 @@ export default function MobileTourAdminPage() {
                         ) : (
                           <div className="space-y-2">
                             {ttUnassigned.map((p) => (
-                              <div
-                                key={p.id}
-                                className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 py-2"
-                              >
+                              <div key={p.id} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 py-2">
                                 <div className="min-w-0">
                                   <div className="truncate text-sm font-semibold text-gray-900">{p.name}</div>
                                 </div>
-                                <button type="button" onClick={() => ttAddPlayerToGroup(p.id, ttAddTargetGroupNo)} className={smallBtnSecondary}>
+                                <button
+                                  type="button"
+                                  onClick={() => ttAddPlayerToGroup(p.id, ttAddTargetGroupNo)}
+                                  className={smallBtnSecondary}
+                                >
                                   Add
                                 </button>
                               </div>
