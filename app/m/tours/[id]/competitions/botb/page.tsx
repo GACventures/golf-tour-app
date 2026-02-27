@@ -64,6 +64,11 @@ type BotBSettingsRow = {
   round_nos: number[];
 };
 
+type CourseRow = {
+  id: string;
+  name: string | null;
+};
+
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
@@ -125,6 +130,9 @@ export default function MobileBotBPage() {
   const [pars, setPars] = useState<ParRow[]>([]);
   const [botb, setBotb] = useState<BotBSettingsRow | null>(null);
 
+  // ✅ course id -> name map (for footer labels)
+  const [courseNameById, setCourseNameById] = useState<Record<string, string>>({});
+
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
@@ -152,6 +160,31 @@ export default function MobileBotBPage() {
         const rr = (rData ?? []) as RoundRow[];
         if (!alive) return;
         setRounds(rr);
+
+        // ✅ load course names for the rounds on this tour
+        const courseIds = Array.from(new Set(rr.map((r) => String(r.course_id ?? "").trim()).filter(Boolean)));
+        if (courseIds.length > 0) {
+          const { data: cData, error: cErr } = await supabase
+            .from("courses")
+            .select("id,name")
+            .in("id", courseIds)
+            .order("name", { ascending: true });
+
+          if (cErr) throw cErr;
+
+          const m: Record<string, string> = {};
+          (cData ?? []).forEach((c: any) => {
+            const id = String(c.id ?? "").trim();
+            if (!id) return;
+            m[id] = safeName((c as CourseRow).name, "(unnamed course)");
+          });
+
+          if (!alive) return;
+          setCourseNameById(m);
+        } else {
+          if (!alive) return;
+          setCourseNameById({});
+        }
 
         // players (via tour_players join)
         const { data: tpData, error: tpErr } = await supabase
@@ -244,8 +277,7 @@ export default function MobileBotBPage() {
           setScores([]);
         }
 
-        // pars for relevant courses
-        const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
+        // pars for relevant courses (re-use courseIds derived from rounds)
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
             .from("pars")
@@ -371,7 +403,6 @@ export default function MobileBotBPage() {
     const per: Record<string, { byRoundId: Record<string, number>; total: number }> = {};
     for (const p of players) per[p.id] = { byRoundId: {}, total: 0 };
 
-    // ctx.rounds is what H2Z uses; it exposes netPointsForHole + scores arrays
     const ctxRounds = (ctx as any)?.rounds;
     if (!Array.isArray(ctxRounds)) return per;
 
@@ -382,7 +413,6 @@ export default function MobileBotBPage() {
       if (!selectedRoundIdSet.has(roundId)) continue;
 
       const roundCtx = ctxRounds.find((x: any) => String(x?.roundId) === roundId || String(x?.id) === roundId);
-      // buildTourCompetitionContext’s internal shape (as used by h2z.ts) expects roundCtx.roundId
       const effectiveRoundCtx =
         roundCtx && typeof roundCtx === "object"
           ? roundCtx
@@ -394,8 +424,6 @@ export default function MobileBotBPage() {
         const key = `${roundId}|${p.id}`;
         if (!playingSet.has(key)) continue;
 
-        // roundCtx.scores[playerId] => array of 18 raw score cells, but we can rely on netPointsForHole
-        // We compute points only for entered holes (blank ignored), pickup is already handled upstream.
         const scoreArr = effectiveRoundCtx?.scores?.[String(p.id)];
         if (!Array.isArray(scoreArr) || scoreArr.length < 18) continue;
 
@@ -430,12 +458,14 @@ export default function MobileBotBPage() {
 
     const parts = selectedRounds.map((r) => {
       const rn = Number.isFinite(Number(r.round_no)) ? `R${Number(r.round_no)}` : "R?";
-      const nm = safeName(r.name, rn);
-      return `${rn}: ${nm}`;
+      const cid = String(r.course_id ?? "").trim();
+      const courseName = cid ? courseNameById[cid] : "";
+      const label = courseName ? courseName : safeName(r.name, "Course");
+      return `${rn}: ${label}`;
     });
 
     return `BotB = aggregate Stableford score on ${parts.join(" · ")}`;
-  }, [botb, selectedRounds]);
+  }, [botb, selectedRounds, courseNameById]);
 
   if (!tourId || !isLikelyUuid(tourId)) {
     return (
@@ -471,7 +501,7 @@ export default function MobileBotBPage() {
       <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-sm font-semibold text-gray-900">BotB leaderboard</div>
-          {tour?.name ? <div className="text-xs text-gray-600">{tour.name}</div> : null}
+          {/* ✅ Removed tour name under heading (redundant) */}
         </div>
       </div>
 
@@ -488,10 +518,7 @@ export default function MobileBotBPage() {
         ) : (
           <>
             <div className="mb-3 flex items-center justify-between">
-              <Link
-                href={`/m/tours/${tourId}/competitions`}
-                className="text-sm underline text-gray-800"
-              >
+              <Link href={`/m/tours/${tourId}/competitions`} className="text-sm underline text-gray-800">
                 ← Back to competitions
               </Link>
             </div>
@@ -508,7 +535,7 @@ export default function MobileBotBPage() {
                       Player
                     </th>
 
-                    {/* BotB Total (SECOND COLUMN) — bold, wide, no-wrap */}
+                    {/* BotB Total (SECOND COLUMN) */}
                     <th
                       className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right whitespace-nowrap`}
                       style={{ width: 120, minWidth: 120 }}
@@ -543,11 +570,8 @@ export default function MobileBotBPage() {
                           {p.name}
                         </td>
 
-                        {/* BotB Total SECOND — bold, no-wrap, wide enough */}
-                        <td
-                          className={`${tdBase} whitespace-nowrap`}
-                          style={{ width: 120, minWidth: 120 }}
-                        >
+                        {/* BotB Total */}
+                        <td className={`${tdBase} whitespace-nowrap`} style={{ width: 120, minWidth: 120 }}>
                           <span className={`inline-flex justify-end rounded-md px-2 py-1 font-bold ${medalClass(rank)}`}>
                             {total} <span className="text-gray-700">&nbsp;({rank ?? 0})</span>
                           </span>
@@ -568,9 +592,7 @@ export default function MobileBotBPage() {
                 </tbody>
               </table>
 
-              <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                {botbDescription}
-              </div>
+              <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">{botbDescription}</div>
             </div>
           </>
         )}
