@@ -5,10 +5,12 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 
 /**
- * ✅ Numbering rules (clean + consistent):
- * - Buttons are numbered to match the top-level guide sections.
- * - Subsections (e.g. 2.1, 2.2, 2.3) live inside the "2. Scoring" content.
- * - There are NO separate buttons for subsections.
+ * ✅ UX:
+ * - Header stays sticky (existing).
+ * - Button grid is ALSO sticky below the header.
+ * - The content scrolls underneath.
+ * - Buttons are numbered and match the numbering in the text.
+ * - Subsections (2.1, 2.2, 2.3 etc.) remain inside their parent sections.
  */
 
 const overviewText = `
@@ -651,7 +653,8 @@ export default function MobileAppUserGuidePage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
-      <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-gray-200">
+      {/* Sticky header */}
+      <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-200">
         <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
           <div className="text-sm font-semibold text-gray-900">User Guide</div>
           <Link
@@ -663,36 +666,44 @@ export default function MobileAppUserGuidePage() {
         </div>
       </div>
 
-      <main className="mx-auto w-full max-w-md px-4 py-4 space-y-4">
-        {/* Chooser buttons (3 per row) */}
-        <div className="grid grid-cols-3 gap-2">
-          {sections.map((s) => (
-            <button
-              key={s.key}
-              type="button"
-              onClick={() => toggle(s.key)}
-              className={`${chooserBtnBase} ${active === s.key ? chooserBtnActive : chooserBtnIdle}`}
-            >
-              {s.label}
-            </button>
-          ))}
-          {/* Pad to complete final row (keeps layout consistent) */}
-          {sections.length % 3 === 1 ? (
-            <>
-              <div />
-              <div />
-            </>
-          ) : sections.length % 3 === 2 ? (
-            <div />
-          ) : null}
-        </div>
+      {/* ✅ Sticky chooser below header */}
+      <div className="sticky top-[49px] z-10 bg-white/95 backdrop-blur border-b border-gray-200">
+        <div className="mx-auto w-full max-w-md px-4 py-3">
+          <div className="grid grid-cols-3 gap-2">
+            {sections.map((s) => (
+              <button
+                key={s.key}
+                type="button"
+                onClick={() => toggle(s.key)}
+                className={`${chooserBtnBase} ${active === s.key ? chooserBtnActive : chooserBtnIdle}`}
+              >
+                {s.label}
+              </button>
+            ))}
 
-        {/* Content only appears after a button is clicked */}
+            {/* Pad to complete final row (keeps layout consistent) */}
+            {sections.length % 3 === 1 ? (
+              <>
+                <div />
+                <div />
+              </>
+            ) : sections.length % 3 === 2 ? (
+              <div />
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <main className="mx-auto w-full max-w-md px-4 py-4">
         {activeSection ? (
           <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
             <Markdown text={activeSection.text} />
           </div>
-        ) : null}
+        ) : (
+          <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 text-sm text-gray-700">
+            Tap a section above to view the guide.
+          </div>
+        )}
       </main>
     </div>
   );
