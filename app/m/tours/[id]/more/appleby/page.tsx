@@ -9,6 +9,8 @@ import { applyApplebyHandicaps, loadApplebyTourData } from "@/lib/handicaps/appl
 
 const APPLEBY_TOUR_ID = "5a80b049-396f-46ec-965e-810e738471b6";
 
+type Section = "about" | "table" | "update" | null;
+
 function fmt1dp(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(Number(n))) return "—";
   return Number(n).toFixed(1);
@@ -26,10 +28,15 @@ export default function MobileApplebyPage() {
   const router = useRouter();
   const tourId = String(params?.id ?? "").trim();
 
+  // ✅ Chooser state: default is buttons only
+  const [activeSection, setActiveSection] = useState<Section>(null);
+
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
+  // still loaded (kept) but not shown in header now
   const [tourName, setTourName] = useState("");
+
   const [rounds, setRounds] = useState<any[]>([]);
   const [appliedRoundNos, setAppliedRoundNos] = useState<number[]>([]);
   const [players, setPlayers] = useState<any[]>([]);
@@ -97,7 +104,8 @@ export default function MobileApplebyPage() {
       const res = await applyApplebyHandicaps({ supabase, tourId, rounds, appliedRoundNos, players });
       if (!res.ok) throw new Error(res.error);
 
-      setMsg(`Updated round handicaps for this tour (${res.updated} round_player rows).`);
+      // ✅ Requested success message
+      setMsg("Appleby rehandicapping has occurred.");
     } catch (e: any) {
       setSaveErr(e?.message ?? "Update failed.");
     } finally {
@@ -108,6 +116,30 @@ export default function MobileApplebyPage() {
   // crude but effective: enough width per applied round block
   const tableMinWidth = Math.max(900, 220 + appliedRoundNos.length * 320);
 
+  // ✅ match Rehandicapping/Tour Admin chooser button styling
+  const chooserBtnBase = "h-11 rounded-xl border text-xs font-semibold flex items-center justify-center px-2";
+  const chooserBtnActive = "border-gray-900 bg-gray-900 text-white";
+  const chooserBtnIdle = "border-gray-200 bg-white text-gray-900";
+
+  function toggleSection(next: Exclude<Section, null>) {
+    // clear inline messages when switching views (keeps UI tidy)
+    setSaveErr("");
+    setMsg("");
+    setActiveSection((prev) => (prev === next ? null : next));
+  }
+
+  async function onUpdateChooserClick() {
+    // Clicking Update Handicaps:
+    // - opens update section
+    // - triggers the update action
+    if (activeSection === "update") {
+      setActiveSection(null);
+      return;
+    }
+    setActiveSection("update");
+    await onUpdate();
+  }
+
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       {/* Header */}
@@ -115,7 +147,7 @@ export default function MobileApplebyPage() {
         <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-base font-semibold text-gray-900 truncate">Appleby system</div>
-            <div className="text-[11px] text-gray-500 truncate">{tourName || "New Zealand Golf Tour 2026"}</div>
+            {/* ✅ removed tour name subtitle (redundant) */}
           </div>
 
           <Link
@@ -128,206 +160,229 @@ export default function MobileApplebyPage() {
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 py-4 space-y-4">
-        {loading ? (
+        {/* ✅ Chooser row always visible */}
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={() => toggleSection("about")}
+            className={`${chooserBtnBase} ${activeSection === "about" ? chooserBtnActive : chooserBtnIdle}`}
+          >
+            The Appleby System
+          </button>
+
+          <button
+            type="button"
+            onClick={() => toggleSection("table")}
+            className={`${chooserBtnBase} ${activeSection === "table" ? chooserBtnActive : chooserBtnIdle}`}
+          >
+            Appleby calculation table
+          </button>
+
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void onUpdateChooserClick()}
+            className={`${chooserBtnBase} ${activeSection === "update" ? chooserBtnActive : chooserBtnIdle} ${
+              saving ? "opacity-60 cursor-not-allowed" : ""
+            }`}
+          >
+            {saving ? "Updating…" : "Update Handicaps"}
+          </button>
+        </div>
+
+        {loading ? null : err ? (
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{err}</div>
+        ) : null}
+
+        {/* ✅ Only show content after a chooser click */}
+        {activeSection === null ? null : loading ? (
           <div className="space-y-3">
-            <div className="h-5 w-40 rounded bg-gray-100" />
             <div className="h-40 rounded-2xl border bg-white" />
             <div className="h-64 rounded-2xl border bg-white" />
           </div>
-        ) : err ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{err}</div>
-        ) : (
+        ) : err ? null : (
           <>
-            {/* 1) Summary */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
-              <div className="text-sm font-semibold text-gray-900">How the Appleby system works</div>
-              <div className="mt-2 text-sm text-gray-700 space-y-2">
-                <p>
-                  Players start from their tour starting handicap (kept to one decimal place). Round 1 uses the starting handicap rounded to the nearest
-                  whole number (0.5 rounds up).
-                </p>
-                <p>
-                  After each non-4BBB round, a new adjustment is calculated from that day’s Stableford scores. Each point better or worse than the day’s
-                  6th-best score changes the adjustment by <span className="font-medium">0.1</span>.
-                </p>
-                <p>
-                  The adjustment is applied cumulatively to the player’s exact starting handicap (1dp), then the result is rounded to the nearest whole
-                  number to get the playing handicap used for the next round. 4BBB rounds do not trigger a handicap change — the handicap carries forward.
-                </p>
-                <p>
-                  The cumulative adjustment is capped at <span className="font-medium">+4.0</span> and <span className="font-medium">−2.0</span>. If the cap
-                  reduces an adjustment step, it is marked with an asterisk (*).
-                </p>
-              </div>
-            </section>
+            {/* 1) About */}
+            {activeSection === "about" ? (
+              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
+                <div className="text-sm font-semibold text-gray-900">How the Appleby system works</div>
+                <div className="mt-2 text-sm text-gray-700 space-y-2">
+                  <p>
+                    Players start from their tour starting handicap (kept to one decimal place). Round 1 uses the starting handicap rounded to the nearest
+                    whole number (0.5 rounds up).
+                  </p>
+                  <p>
+                    After each non-4BBB round, a new adjustment is calculated from that day’s Stableford scores. Each point better or worse than the day’s
+                    6th-best score changes the adjustment by <span className="font-medium">0.1</span>.
+                  </p>
+                  <p>
+                    The adjustment is applied cumulatively to the player’s exact starting handicap (1dp), then the result is rounded to the nearest whole
+                    number to get the playing handicap used for the next round. 4BBB rounds do not trigger a handicap change — the handicap carries forward.
+                  </p>
+                  <p>
+                    The cumulative adjustment is capped at <span className="font-medium">+4.0</span> and <span className="font-medium">−2.0</span>. If the cap
+                    reduces an adjustment step, it is marked with an asterisk (*).
+                  </p>
+                </div>
+              </section>
+            ) : null}
 
             {/* 2) Table */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="p-4 border-b">
-                <div className="text-sm font-semibold text-gray-900">Appleby calculation table</div>
-                <div className="mt-1 text-[11px] text-gray-500">
-                  Dotted outline marks the 6th-best score (all tied at the cutoff). Asterisk (*) means the +4.0/−2.0 cap reduced that step.
-                </div>
-              </div>
-
-              {players.length === 0 ? (
-                <div className="p-4 text-sm text-gray-700">No players found for this tour.</div>
-              ) : appliedRoundNos.length === 0 ? (
-                <div className="p-4 text-sm text-gray-700">No eligible (non-4BBB) rounds found yet for this tour.</div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse" style={{ minWidth: tableMinWidth }}>
-                    <thead>
-                      <tr className="bg-gray-50">
-                        <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
-                          Player
-                        </th>
-
-                        <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap">
-                          Start (exact)
-                        </th>
-
-                        {appliedRoundNos.map((k) => (
-                          <th
-                            key={`sc_${k}`}
-                            className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap"
-                          >
-                            R{k} score
-                          </th>
-                        ))}
-
-                        {appliedRoundNos.map((k) => (
-                          <th
-                            key={`adj_${k}`}
-                            className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap"
-                          >
-                            Adj after R{k}
-                          </th>
-                        ))}
-
-                        {appliedRoundNos.map((k) => (
-                          <th
-                            key={`spa_${k}`}
-                            className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap"
-                          >
-                            Start + adj (after R{k})
-                          </th>
-                        ))}
-
-                        {appliedRoundNos.map((k) => (
-                          <th
-                            key={`rnd_${k}`}
-                            className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap"
-                          >
-                            Rounded (after R{k})
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-
-                    <tbody>
-                      {players.map((p: any) => (
-                        <tr key={p.player_id} className="border-b last:border-b-0">
-                          <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                            {p.name}
-                          </td>
-
-                          <td className="px-3 py-2 text-right text-sm tabular-nums text-gray-900">{fmt1dp(p.start_exact_1dp)}</td>
-
-                          {/* Scores */}
-                          {appliedRoundNos.map((k) => {
-                            const v = p.scoreByRound?.[k] ?? null;
-                            const isCut = p.isCutoffScoreByRound?.[k] === true;
-                            return (
-                              <td key={`v_${p.player_id}_${k}`} className="px-3 py-2 text-right text-sm tabular-nums text-gray-900">
-                                <span className={isCut ? "inline-block px-1 rounded border border-dotted border-gray-900" : ""}>
-                                  {v == null ? "—" : String(v)}
-                                </span>
-                              </td>
-                            );
-                          })}
-
-                          {/* Adjustments */}
-                          {appliedRoundNos.map((k) => {
-                            const v = p.adjStep?.[k] ?? null;
-                            const star = p.adjStepStar?.[k] === true;
-                            return (
-                              <td key={`a_${p.player_id}_${k}`} className="px-3 py-2 text-right text-sm tabular-nums text-gray-900 whitespace-nowrap">
-                                {fmtAdj(v)}
-                                {star ? <span className="ml-1 font-semibold">*</span> : null}
-                              </td>
-                            );
-                          })}
-
-                          {/* Start + adj */}
-                          {appliedRoundNos.map((k) => (
-                            <td key={`sp_${p.player_id}_${k}`} className="px-3 py-2 text-right text-sm tabular-nums text-gray-900">
-                              {fmt1dp(p.startPlusAfter?.[k] ?? null)}
-                            </td>
-                          ))}
-
-                          {/* Rounded */}
-                          {appliedRoundNos.map((k) => (
-                            <td key={`r_${p.player_id}_${k}`} className="px-3 py-2 text-right text-sm tabular-nums text-gray-900">
-                              {p.startPlusAfterRounded?.[k] == null ? "—" : String(p.startPlusAfterRounded[k])}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-
-                  <div className="px-4 py-3 text-[11px] text-gray-600">
-                    Cutoffs:{" "}
-                    {appliedRoundNos.map((k, idx) => (
-                      <span key={`c_${k}`} className="mr-2">
-                        R{k}: <span className="font-semibold">{cutoffByRound[k] == null ? "—" : cutoffByRound[k]}</span>
-                        {idx < appliedRoundNos.length - 1 ? "," : ""}
-                      </span>
-                    ))}
+            {activeSection === "table" ? (
+              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                <div className="p-4 border-b">
+                  <div className="text-sm font-semibold text-gray-900">Appleby calculation table</div>
+                  <div className="mt-1 text-[11px] text-gray-500">
+                    Dotted outline marks the 6th-best score (all tied at the cutoff). Asterisk (*) means the +4.0/−2.0 cap reduced that step.
                   </div>
                 </div>
-              )}
-            </section>
 
-            {/* 3) Update button */}
-            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 space-y-3">
-              <div className="text-sm font-semibold text-gray-900">Apply Appleby handicaps to rounds</div>
-              <div className="text-xs text-gray-600">
-                This updates round playing handicaps (whole numbers) for all existing rounds in this tour. It does not change who is marked as playing.
-              </div>
+                {players.length === 0 ? (
+                  <div className="p-4 text-sm text-gray-700">No players found for this tour.</div>
+                ) : appliedRoundNos.length === 0 ? (
+                  <div className="p-4 text-sm text-gray-700">No eligible (non-4BBB) rounds found yet for this tour.</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse" style={{ minWidth: tableMinWidth }}>
+                      <thead>
+                        <tr className="bg-gray-50">
+                          <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
+                            Player
+                          </th>
 
-              {!canUpdate ? (
-                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{cannotReason ?? "Cannot update."}</div>
-              ) : null}
+                          <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap">
+                            Start (exact)
+                          </th>
 
-              {saveErr ? (
-                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{saveErr}</div>
-              ) : null}
+                          {appliedRoundNos.map((k) => (
+                            <th
+                              key={`sc_${k}`}
+                              className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap"
+                            >
+                              R{k} score
+                            </th>
+                          ))}
 
-              {msg ? <div className="text-sm text-green-700">{msg}</div> : null}
+                          {appliedRoundNos.map((k) => (
+                            <th
+                              key={`adj_${k}`}
+                              className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap"
+                            >
+                              Adj after R{k}
+                            </th>
+                          ))}
 
-              <button
-                type="button"
-                disabled={saving || !canUpdate}
-                onClick={onUpdate}
-                className={`h-11 w-full rounded-xl px-4 text-sm font-semibold border shadow-sm ${
-                  saving || !canUpdate
-                    ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
-                    : "border-gray-900 bg-gray-900 text-white active:bg-gray-800"
-                }`}
-              >
-                {saving ? "Updating…" : "Update handicaps?"}
-              </button>
+                          {appliedRoundNos.map((k) => (
+                            <th
+                              key={`spa_${k}`}
+                              className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap"
+                            >
+                              Start + adj (after R{k})
+                            </th>
+                          ))}
 
-              <button
-                type="button"
-                onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}
-                className="h-11 w-full rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-900 active:bg-gray-50"
-              >
-                Back to rehandicapping
-              </button>
-            </section>
+                          {appliedRoundNos.map((k) => (
+                            <th
+                              key={`rnd_${k}`}
+                              className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap"
+                            >
+                              Rounded (after R{k})
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+
+                      <tbody>
+                        {players.map((p: any) => (
+                          <tr key={p.player_id} className="border-b last:border-b-0">
+                            <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">{p.name}</td>
+
+                            <td className="px-3 py-2 text-right text-sm tabular-nums text-gray-900">{fmt1dp(p.start_exact_1dp)}</td>
+
+                            {/* Scores */}
+                            {appliedRoundNos.map((k) => {
+                              const v = p.scoreByRound?.[k] ?? null;
+                              const isCut = p.isCutoffScoreByRound?.[k] === true;
+                              return (
+                                <td key={`v_${p.player_id}_${k}`} className="px-3 py-2 text-right text-sm tabular-nums text-gray-900">
+                                  <span className={isCut ? "inline-block px-1 rounded border border-dotted border-gray-900" : ""}>
+                                    {v == null ? "—" : String(v)}
+                                  </span>
+                                </td>
+                              );
+                            })}
+
+                            {/* Adjustments */}
+                            {appliedRoundNos.map((k) => {
+                              const v = p.adjStep?.[k] ?? null;
+                              const star = p.adjStepStar?.[k] === true;
+                              return (
+                                <td key={`a_${p.player_id}_${k}`} className="px-3 py-2 text-right text-sm tabular-nums text-gray-900 whitespace-nowrap">
+                                  {fmtAdj(v)}
+                                  {star ? <span className="ml-1 font-semibold">*</span> : null}
+                                </td>
+                              );
+                            })}
+
+                            {/* Start + adj */}
+                            {appliedRoundNos.map((k) => (
+                              <td key={`sp_${p.player_id}_${k}`} className="px-3 py-2 text-right text-sm tabular-nums text-gray-900">
+                                {fmt1dp(p.startPlusAfter?.[k] ?? null)}
+                              </td>
+                            ))}
+
+                            {/* Rounded */}
+                            {appliedRoundNos.map((k) => (
+                              <td key={`r_${p.player_id}_${k}`} className="px-3 py-2 text-right text-sm tabular-nums text-gray-900">
+                                {p.startPlusAfterRounded?.[k] == null ? "—" : String(p.startPlusAfterRounded[k])}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    <div className="px-4 py-3 text-[11px] text-gray-600">
+                      Cutoffs:{" "}
+                      {appliedRoundNos.map((k, idx) => (
+                        <span key={`c_${k}`} className="mr-2">
+                          R{k}: <span className="font-semibold">{cutoffByRound[k] == null ? "—" : cutoffByRound[k]}</span>
+                          {idx < appliedRoundNos.length - 1 ? "," : ""}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+            ) : null}
+
+            {/* 3) Update */}
+            {activeSection === "update" ? (
+              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 space-y-3">
+                <div className="text-sm font-semibold text-gray-900">Update handicaps</div>
+                <div className="text-xs text-gray-600">
+                  This updates round playing handicaps (whole numbers) for all existing rounds in this tour. It does not change who is marked as playing.
+                </div>
+
+                {!canUpdate ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{cannotReason ?? "Cannot update."}</div>
+                ) : null}
+
+                {saveErr ? (
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{saveErr}</div>
+                ) : null}
+
+                {msg ? <div className="text-sm text-green-700">{msg}</div> : null}
+
+                <button
+                  type="button"
+                  onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}
+                  className="h-11 w-full rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-900 active:bg-gray-50"
+                >
+                  Back to rehandicapping
+                </button>
+              </section>
+            ) : null}
           </>
         )}
       </main>
