@@ -1,31 +1,25 @@
 // app/m/user-guide/page.tsx
 "use client";
 
+import { useMemo, useState } from "react";
 import Link from "next/link";
 
-const guide = `
+/**
+ * ✅ Numbering rules (clean + consistent):
+ * - Buttons are numbered to match the top-level guide sections.
+ * - Subsections (e.g. 2.1, 2.2, 2.3) live inside the "2. Scoring" content.
+ * - There are NO separate buttons for subsections.
+ */
+
+const overviewText = `
 # How to Use the Golf Tour app
 
 This app is designed to manage a multi-round golf tour, record hole-by-hole scores, calculate **Stableford** points, and automatically adjust playing handicaps between rounds (if rehandicapping is enabled for the tour).
 
 The app is optimised for mobile use during play.
+`;
 
----
-
-## App Structure Overview
-
-Each tour opens on the Tour Home / Landing Page, which provides access to all tour features:
-
-- Daily tee times
-- Daily scoring
-- Daily results
-- Leaderboards
-- Competitions
-- Stats
-- Tour information and admin tools
-
----
-
+const roundsText = `
 ## 1. Rounds (Daily Tee Times, Scoring, Results)
 
 Each round belongs to a tour and is shown as a card.
@@ -43,9 +37,9 @@ Depending on where you enter from the tour landing page (for example, tapping a 
 - Tee Times – view playing groups
 - Scoring – enter scores
 - Results – view round results
+`;
 
----
-
+const scoringText = `
 ## 2. Scoring
 
 ### Purpose
@@ -96,7 +90,7 @@ Each tour uses one of two score entry layouts. Both layouts do the same job and 
 
 ---
 
-## 2.2 Summary Tab
+## 2.2 Score Summary
 
 - Shows a full 18-hole table for the selected player.
 - Displays:
@@ -110,16 +104,16 @@ Each tour uses one of two score entry layouts. Both layouts do the same job and 
 
 ---
 
-## 2.3 Getting to the summary tab via the TOTAL button
+## 2.3 Getting to Score Summary via the TOTAL button
 
-- Tapping TOTAL takes you directly to the Summary tab for that player.
-- From the Summary tab you can:
+- Tapping TOTAL takes you directly to the Score Summary for that player.
+- From Score Summary you can:
   - Review hole-by-hole scoring
   - Jump back to any hole
   - Return to Entry to continue scoring
+`;
 
----
-
+const resultsText = `
 ## 3. Results
 
 ### Purpose
@@ -138,9 +132,9 @@ Review results for a completed or in-progress round.
   - Stableford points per hole
 
 Results always reflect **official saved scores only**, and the playing handicaps in effect for that round.
+`;
 
----
-
+const leaderboardsText = `
 ## 4. Leaderboards
 
 ### Purpose
@@ -178,9 +172,9 @@ Tap a round score to see round detail.
 - Team totals by round
 
 Tap a team’s round score to see the calculation detail.
+`;
 
----
-
+const competitionsText = `
 ## 5. Competitions
 
 ### Purpose
@@ -191,7 +185,9 @@ Displays special tour competitions that run alongside standard Stableford scorin
 
 The Competitions screen shows each player’s current result and rank for each competition. Some competitions can be tapped to see more detail.
 
-### 5.1 Competitions and definitions
+---
+
+## 5.1 Competitions and definitions
 
 - Napoleon — Average Stableford points on Par 3 holes.
 - Big George — Average Stableford points on Par 4 holes.
@@ -210,9 +206,9 @@ The Competitions screen shows each player’s current result and rank for each c
   - Tap the H2Z cell to see the peak score and the number of holes in the peak run.
 - Best of the Best (BotB) (if enabled) — Aggregates Stableford totals across selected rounds.
   - Tap the BotB column/cell (where shown) to open the BotB table.
+`;
 
----
-
+const matchplayText = `
 ## 6. Matchplay
 
 ### Purpose
@@ -335,9 +331,9 @@ Each round column also displays a short format label (e.g. Ind. M/P, BB M/P, Ind
   - Count toward each player’s total
   - Are summed to produce team totals
 - If double points is enabled, all awarded points for the round are doubled.
+`;
 
----
-
+const statsText = `
 ## 7. Stats
 
 ### Purpose
@@ -345,9 +341,9 @@ Each round column also displays a short format label (e.g. Ind. M/P, BB M/P, Ind
 Provide performance insights across the tour.
 
 Stats vary by tour setup and available data.
+`;
 
----
-
+const tourAdminText = `
 ## 8. Tour Admin (Admin users only)
 
 Tour Admin tools are accessed from the tour landing page.
@@ -365,6 +361,85 @@ Tour Admin tools are accessed from the tour landing page.
 - Tee-time groups are built manually per round
 - Group order and player order matter
 - Last saved changes always win
+`;
+
+const rehandicappingText = `
+## 9. Rehandicapping (Admin)
+
+### Purpose
+
+Rehandicapping controls how each player’s **playing handicap** is set for each round of the tour.
+
+There are three views under the Rehandicapping screen:
+
+- Automatic rehandicapping
+- Manual rehandicapping
+- Handicaps by round
+
+When you open the Rehandicapping screen, you will see only these buttons. Tap one to view that section.
+
+---
+
+## 9.1 Automatic rehandicapping
+
+If Automatic rehandicapping is enabled, the app recalculates playing handicaps between rounds using the tour’s rehandicapping rule.
+
+What happens when it is enabled:
+
+- The app calculates a playing handicap for the next round after a round is completed.
+- Players who do not play a round keep the same playing handicap for the next round.
+- The “Handicaps by round” table will reflect the current calculated handicaps.
+
+Notes:
+
+- Turning Automatic on/off requires pressing **Save**.
+- After saving, the app refreshes and the handicap table updates.
+
+---
+
+## 9.2 Rehandicapping rule
+
+The Rehandicapping screen includes a plain-English description of the rule being used for Automatic rehandicapping.
+
+This section is informational only — it explains how the app is adjusting playing handicaps when Automatic is enabled.
+
+---
+
+## 9.3 Manual rehandicapping
+
+Manual rehandicapping is used when you want to override playing handicaps from a chosen round onward.
+
+Important:
+
+- Manual rehandicapping is only available when **Automatic rehandicapping is OFF**.
+
+How it works:
+
+1. Enable Manual rehandicapping.
+2. Select the starting round (this is the first round that will be affected).
+3. For a player:
+   - Enter the playing handicap (whole number).
+   - Tap **Apply forward** to apply that handicap from the selected round onward (inclusive).
+   - Or tap **Reset forward** to restore that player to their starting handicap from the selected round onward.
+
+Notes:
+
+- Manual changes apply forward across rounds so you can correct a tour mid-stream without editing each round individually.
+- Manual changes update the “Handicaps by round” view after saving.
+
+---
+
+## 9.4 Handicaps by round
+
+This view shows the playing handicap used for each player in each round.
+
+What you see:
+
+- One row per player.
+- A column showing the player’s **starting handicap (exact)**.
+- One column per round showing the **playing handicap** for that round.
+
+This is the best place to verify that rehandicapping (automatic or manual) has produced the expected handicaps across the tour.
 `;
 
 // ------- Minimal markdown renderer with nested bullet indentation -------
@@ -531,7 +606,49 @@ function Markdown({ text }: { text: string }) {
   );
 }
 
+type GuideSectionKey =
+  | "overview"
+  | "rounds"
+  | "scoring"
+  | "results"
+  | "leaderboards"
+  | "competitions"
+  | "matchplay"
+  | "stats"
+  | "tourAdmin"
+  | "rehandicapping"
+  | null;
+
 export default function MobileAppUserGuidePage() {
+  const [active, setActive] = useState<GuideSectionKey>(null);
+
+  const sections = useMemo(
+    () =>
+      [
+        { key: "overview" as const, label: "Overview", text: overviewText },
+        { key: "rounds" as const, label: "1. Rounds", text: roundsText },
+        { key: "scoring" as const, label: "2. Scoring", text: scoringText },
+        { key: "results" as const, label: "3. Results", text: resultsText },
+        { key: "leaderboards" as const, label: "4. Leaderboards", text: leaderboardsText },
+        { key: "competitions" as const, label: "5. Competitions", text: competitionsText },
+        { key: "matchplay" as const, label: "6. Matchplay", text: matchplayText },
+        { key: "stats" as const, label: "7. Stats", text: statsText },
+        { key: "tourAdmin" as const, label: "8. Tour Admin", text: tourAdminText },
+        { key: "rehandicapping" as const, label: "9. Rehandicapping", text: rehandicappingText },
+      ] as const,
+    []
+  );
+
+  const activeSection = active ? sections.find((s) => s.key === active) : null;
+
+  const chooserBtnBase = "h-11 rounded-xl border text-xs font-semibold flex items-center justify-center px-2";
+  const chooserBtnActive = "border-gray-900 bg-gray-900 text-white";
+  const chooserBtnIdle = "border-gray-200 bg-white text-gray-900";
+
+  function toggle(next: Exclude<GuideSectionKey, null>) {
+    setActive((prev) => (prev === next ? null : next));
+  }
+
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
       <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-gray-200">
@@ -546,10 +663,36 @@ export default function MobileAppUserGuidePage() {
         </div>
       </div>
 
-      <main className="mx-auto w-full max-w-md px-4 py-4">
-        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
-          <Markdown text={guide} />
+      <main className="mx-auto w-full max-w-md px-4 py-4 space-y-4">
+        {/* Chooser buttons (3 per row) */}
+        <div className="grid grid-cols-3 gap-2">
+          {sections.map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => toggle(s.key)}
+              className={`${chooserBtnBase} ${active === s.key ? chooserBtnActive : chooserBtnIdle}`}
+            >
+              {s.label}
+            </button>
+          ))}
+          {/* Pad to complete final row (keeps layout consistent) */}
+          {sections.length % 3 === 1 ? (
+            <>
+              <div />
+              <div />
+            </>
+          ) : sections.length % 3 === 2 ? (
+            <div />
+          ) : null}
         </div>
+
+        {/* Content only appears after a button is clicked */}
+        {activeSection ? (
+          <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
+            <Markdown text={activeSection.text} />
+          </div>
+        ) : null}
       </main>
     </div>
   );
