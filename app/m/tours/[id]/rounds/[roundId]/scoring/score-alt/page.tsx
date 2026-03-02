@@ -210,6 +210,9 @@ export default function MobileScoreEntryAltPage() {
   const PULSE_HOLD_MS = 120;
   const PULSE_DOWN_MS = 160;
 
+  // DEBUG marker (visible in UI to confirm this file/route is deployed)
+  const DEBUG_MARK = "DEBUG score-alt: prev/next nav (v1)";
+
   function clearFxTimer() {
     if (fxTimerRef.current) {
       window.clearTimeout(fxTimerRef.current);
@@ -1037,7 +1040,6 @@ export default function MobileScoreEntryAltPage() {
       );
     }
 
-    // ✅ Update: add a "outline" variant for bold border strokes box
     function StatBox(props2: { label: string; value: React.ReactNode; variant?: "white" | "black" | "outline" }) {
       const variant = props2.variant ?? "white";
 
@@ -1066,18 +1068,13 @@ export default function MobileScoreEntryAltPage() {
           </div>
 
           <div className="p-3 space-y-3">
-            {/* 2x2 stats block */}
             <div className="grid grid-cols-2 gap-2">
               <StatBox label="Par" value={par || "—"} variant="white" />
               <StatBox label="Shots" value={Number.isFinite(shotsGiven) ? shotsGiven : 0} variant="white" />
-
-              {/* ✅ Change 1: Strokes box white with bold outline */}
               <StatBox label="Strokes" value={grossDisplay} variant="outline" />
-
               <StatBox label="Points" value={holePts} variant="white" />
             </div>
 
-            {/* Keypad */}
             <div className={`rounded-xl border px-3 py-3 ${keypadPanel}`}>
               <div className="text-xs font-extrabold text-slate-700 mb-2 text-center">STROKES</div>
 
@@ -1130,7 +1127,6 @@ export default function MobileScoreEntryAltPage() {
               </div>
             </div>
 
-            {/* TOTAL block */}
             <div className="rounded-xl border border-slate-300 bg-white px-3 py-2">
               <div className="text-xs font-extrabold tracking-wide text-slate-700 text-center">TOTAL</div>
 
@@ -1142,7 +1138,6 @@ export default function MobileScoreEntryAltPage() {
                   {totalShots}
                 </div>
 
-                {/* ✅ Change 2: Total points from black to pale grey */}
                 <button
                   type="button"
                   className="rounded-lg border border-slate-300 bg-slate-200 py-2 text-2xl font-black text-slate-900 active:scale-[0.99]"
@@ -1205,8 +1200,13 @@ export default function MobileScoreEntryAltPage() {
 
   const dirtyNow = isDirty();
 
+  const navDisabled = tab !== "entry" || holeFx.stage !== "idle";
+  const canPrev = !navDisabled && hole > 1;
+  const canNext = !navDisabled && hole < 18;
+
   return (
-    <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden">
+    <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden flex flex-col">
+      {/* Top bar */}
       <div className="px-4 pt-3 pb-1 flex items-center justify-between">
         <button type="button" className="text-sm font-bold text-slate-900 underline" onClick={handleBack} aria-label="Back">
           Back
@@ -1222,11 +1222,18 @@ export default function MobileScoreEntryAltPage() {
         </button>
       </div>
 
+      {/* DEBUG banner (top, always visible) */}
+      <div className="px-4 pb-2">
+        <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-center text-[12px] font-black text-red-700">
+          {DEBUG_MARK}
+        </div>
+      </div>
+
       {tab === "entry" ? <HoleRowEntryOnly /> : <SummaryPlayerToggleTop />}
 
+      {/* Scroll area (flex-1 so it never hides the bottom bar) */}
       <div
-        className="px-4 py-3 space-y-3 overflow-y-auto"
-        style={{ height: "calc(100dvh - 12px - 44px - 56px)" }}
+        className="px-4 py-3 space-y-3 overflow-y-auto flex-1"
         onTouchStart={tab === "entry" ? onTouchStart : undefined}
         onTouchEnd={tab === "entry" ? onTouchEnd : undefined}
       >
@@ -1251,13 +1258,58 @@ export default function MobileScoreEntryAltPage() {
             </div>
 
             {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
+
+            {/* Spacer so content doesn't feel cramped above bottom bar */}
+            <div className="h-20" />
           </div>
         ) : (
           <>
             <SummaryTable />
             {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
+            <div className="h-20" />
           </>
         )}
+      </div>
+
+      {/* Bottom hole nav (matches swipe behavior by calling handleSwipe) */}
+      <div
+        className="fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white/95 backdrop-blur"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
+        <div className="mx-auto w-full max-w-md px-4 py-3">
+          {/* DEBUG marker (bottom) */}
+          <div className="mb-2 text-center text-[11px] font-black text-red-600">{DEBUG_MARK}</div>
+
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => void handleSwipe("prev")}
+              disabled={!canPrev}
+              className={[
+                "flex-1 rounded-xl border px-3 py-2 text-sm font-extrabold active:scale-[0.99] disabled:opacity-50",
+                "bg-slate-100 text-slate-900 border-slate-300",
+              ].join(" ")}
+            >
+              Prev hole
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void handleSwipe("next")}
+              disabled={!canNext}
+              className={[
+                "flex-1 rounded-xl border px-3 py-2 text-sm font-extrabold active:scale-[0.99] disabled:opacity-50",
+                "bg-slate-900 text-white border-slate-900",
+              ].join(" ")}
+            >
+              Next hole
+            </button>
+          </div>
+
+          {tab !== "entry" ? (
+            <div className="mt-1 text-center text-[11px] text-slate-500">Return to entry to change hole.</div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
