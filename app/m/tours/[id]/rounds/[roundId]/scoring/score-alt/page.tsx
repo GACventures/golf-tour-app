@@ -210,9 +210,6 @@ export default function MobileScoreEntryAltPage() {
   const PULSE_HOLD_MS = 120;
   const PULSE_DOWN_MS = 160;
 
-  // DEBUG marker (visible in UI to confirm this file/route is deployed)
-  const DEBUG_MARK = "DEBUG score-alt: prev/next nav (v1)";
-
   function clearFxTimer() {
     if (fxTimerRef.current) {
       window.clearTimeout(fxTimerRef.current);
@@ -823,7 +820,6 @@ export default function MobileScoreEntryAltPage() {
 
   // --- UI helpers ---
 
-  // One-row hole info (SI-only)
   function HoleRowEntryOnly() {
     const holeScale = holePulse === "up" ? 1.12 : holePulse === "down" ? 1.0 : 1.0;
     const holeStyle: React.CSSProperties = {
@@ -1206,7 +1202,6 @@ export default function MobileScoreEntryAltPage() {
 
   return (
     <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden flex flex-col">
-      {/* Top bar */}
       <div className="px-4 pt-3 pb-1 flex items-center justify-between">
         <button type="button" className="text-sm font-bold text-slate-900 underline" onClick={handleBack} aria-label="Back">
           Back
@@ -1222,16 +1217,8 @@ export default function MobileScoreEntryAltPage() {
         </button>
       </div>
 
-      {/* DEBUG banner (top, always visible) */}
-      <div className="px-4 pb-2">
-        <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-center text-[12px] font-black text-red-700">
-          {DEBUG_MARK}
-        </div>
-      </div>
-
       {tab === "entry" ? <HoleRowEntryOnly /> : <SummaryPlayerToggleTop />}
 
-      {/* Scroll area (flex-1 so it never hides the bottom bar) */}
       <div
         className="px-4 py-3 space-y-3 overflow-y-auto flex-1"
         onTouchStart={tab === "entry" ? onTouchStart : undefined}
@@ -1259,7 +1246,7 @@ export default function MobileScoreEntryAltPage() {
 
             {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
 
-            {/* Spacer so content doesn't feel cramped above bottom bar */}
+            {/* spacer so content doesn't feel cramped above bottom bar */}
             <div className="h-20" />
           </div>
         ) : (
@@ -1271,46 +1258,41 @@ export default function MobileScoreEntryAltPage() {
         )}
       </div>
 
-      {/* Bottom hole nav (matches swipe behavior by calling handleSwipe) */}
-      <div
-        className="fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white/95 backdrop-blur"
-        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-      >
-        <div className="mx-auto w-full max-w-md px-4 py-3">
-          {/* DEBUG marker (bottom) */}
-          <div className="mb-2 text-center text-[11px] font-black text-red-600">{DEBUG_MARK}</div>
+      {/* Bottom hole nav - ONLY on entry tab */}
+      {tab === "entry" ? (
+        <div
+          className="fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white/95 backdrop-blur"
+          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        >
+          <div className="mx-auto w-full max-w-md px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => void handleSwipe("prev")}
+                disabled={!canPrev}
+                className={[
+                  "flex-1 rounded-xl border px-3 py-2 text-sm font-extrabold active:scale-[0.99] disabled:opacity-50",
+                  "bg-slate-100 text-slate-900 border-slate-300",
+                ].join(" ")}
+              >
+                Prev hole
+              </button>
 
-          <div className="flex items-center justify-between gap-3">
-            <button
-              type="button"
-              onClick={() => void handleSwipe("prev")}
-              disabled={!canPrev}
-              className={[
-                "flex-1 rounded-xl border px-3 py-2 text-sm font-extrabold active:scale-[0.99] disabled:opacity-50",
-                "bg-slate-100 text-slate-900 border-slate-300",
-              ].join(" ")}
-            >
-              Prev hole
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void handleSwipe("next")}
-              disabled={!canNext}
-              className={[
-                "flex-1 rounded-xl border px-3 py-2 text-sm font-extrabold active:scale-[0.99] disabled:opacity-50",
-                "bg-slate-900 text-white border-slate-900",
-              ].join(" ")}
-            >
-              Next hole
-            </button>
+              <button
+                type="button"
+                onClick={() => void handleSwipe("next")}
+                disabled={!canNext}
+                className={[
+                  "flex-1 rounded-xl border px-3 py-2 text-sm font-extrabold active:scale-[0.99] disabled:opacity-50",
+                  "bg-slate-900 text-white border-slate-900",
+                ].join(" ")}
+              >
+                Next hole
+              </button>
+            </div>
           </div>
-
-          {tab !== "entry" ? (
-            <div className="mt-1 text-center text-[11px] text-slate-500">Return to entry to change hole.</div>
-          ) : null}
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
