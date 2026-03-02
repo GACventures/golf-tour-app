@@ -616,7 +616,7 @@ export default function MobileScoreEntryPage() {
         if (error) throw error;
       }
 
-      // Keep existing rehandicap behaviour (logic unchanged), but no on-screen diagnostics
+      // Keep existing rehandicap behaviour (logic unchanged)
       try {
         const tid = await fetchTourIdForRound(roundId);
         if (tid) {
@@ -628,7 +628,7 @@ export default function MobileScoreEntryPage() {
           if (res?.ok) await refreshRoundPlayers();
         }
       } catch {
-        // intentionally silent (diagnostic UI removed)
+        // intentionally silent
       }
 
       initialScoresRef.current = { [meId]: { ...(scores[meId] ?? {}) } };
@@ -764,7 +764,6 @@ export default function MobileScoreEntryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-
   function goBackToSelect() {
     const href = `/m/tours/${tourId}/rounds/${roundId}/scoring?meId=${encodeURIComponent(meId)}${
       buddyId ? `&buddyId=${encodeURIComponent(buddyId)}` : ""
@@ -773,16 +772,14 @@ export default function MobileScoreEntryPage() {
       router.push(href);
     }
   }
-function handleBack() {
-  // If user is on Summary tab, go back to Entry tab instead of leaving the page
-  if (tab === "summary") {
-    setTab("entry");
-    return;
-  }
 
-  // Otherwise (Entry tab), use the existing behaviour
-  goBackToSelect();
-}
+  function handleBack() {
+    if (tab === "summary") {
+      setTab("entry");
+      return;
+    }
+    goBackToSelect();
+  }
 
   function openInPageSummaryFor(pid: string) {
     if (!pid) return;
@@ -1129,16 +1126,14 @@ function handleBack() {
 
   const dirtyNow = isDirty();
 
-  return (
-    <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden">
-      <div className="h-14 px-4 flex items-center justify-between border-b border-slate-200">
-        <button
-          type="button"
-          className="flex items-center gap-2 text-lg font-bold text-slate-900"
-          onClick={handleBack}
+  const navDisabled = tab !== "entry" || holeFx.stage !== "idle";
+  const canPrev = !navDisabled && hole > 1;
+  const canNext = !navDisabled && hole < 18;
 
-          aria-label="Back"
-        >
+  return (
+    <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden flex flex-col">
+      <div className="h-14 px-4 flex items-center justify-between border-b border-slate-200">
+        <button type="button" className="flex items-center gap-2 text-lg font-bold text-slate-900" onClick={handleBack} aria-label="Back">
           <span className="text-2xl leading-none">‹</span>
           <span>Back</span>
         </button>
@@ -1175,8 +1170,7 @@ function handleBack() {
       </div>
 
       <div
-        className="px-4 py-3 space-y-3 overflow-y-auto"
-        style={{ height: "calc(100dvh - 56px - 84px)" }}
+        className="px-4 py-3 space-y-3 overflow-y-auto flex-1"
         onTouchStart={tab === "entry" ? onTouchStart : undefined}
         onTouchEnd={tab === "entry" ? onTouchEnd : undefined}
       >
@@ -1197,14 +1191,54 @@ function handleBack() {
             </div>
 
             {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
+
+            {/* spacer so content doesn't feel cramped above bottom bar */}
+            <div className="h-20" />
           </div>
         ) : (
           <>
             <SummaryTable />
             {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
+            <div className="h-20" />
           </>
         )}
       </div>
+
+      {/* Bottom hole nav - ONLY on entry tab (alternative to swipe; calls handleSwipe) */}
+      {tab === "entry" ? (
+        <div
+          className="fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white/95 backdrop-blur"
+          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        >
+          <div className="mx-auto w-full max-w-md px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => void handleSwipe("prev")}
+                disabled={!canPrev}
+                className={[
+                  "flex-1 rounded-xl border px-3 py-2 text-sm font-extrabold active:scale-[0.99] disabled:opacity-50",
+                  "bg-slate-100 text-slate-900 border-slate-300",
+                ].join(" ")}
+              >
+                Prev hole
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void handleSwipe("next")}
+                disabled={!canNext}
+                className={[
+                  "flex-1 rounded-xl border px-3 py-2 text-sm font-extrabold active:scale-[0.99] disabled:opacity-50",
+                  "bg-slate-900 text-white border-slate-900",
+                ].join(" ")}
+              >
+                Next hole
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
