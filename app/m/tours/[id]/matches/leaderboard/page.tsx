@@ -562,7 +562,7 @@ export default function MatchesLeaderboardPage() {
       const b1 = mp.find((x) => x.side === "B" && x.slot === 1)?.player_id ?? null;
       const b2 = mp.find((x) => x.side === "B" && x.slot === 2)?.player_id ?? null;
 
-      // ✅ Guard: don't award any match points unless at least one participant has ANY score rows for this round.
+      // Guard: no points unless someone in this match has any scores in this round
       const participants = [a1, a2, b1, b2].filter(Boolean) as string[];
       if (!roundHasAnyScoresForPlayers(roundId, participants)) continue;
 
@@ -570,7 +570,6 @@ export default function MatchesLeaderboardPage() {
         if (!a1 || !b1) continue;
 
         const res = computeMatchplayResult(roundId, [{ side: "A", playerIds: [a1] }, { side: "B", playerIds: [b1] }]);
-        // INDIVIDUAL: win=1 each, tie=0.5 each (then * mult)
         applyMatchResultPoints(pointsByPlayer, res, mult, 1, 0.5);
       } else if (settings.format === "BETTERBALL_MATCHPLAY") {
         if (!a1 || !a2 || !b1 || !b2) continue;
@@ -579,7 +578,6 @@ export default function MatchesLeaderboardPage() {
           { side: "A", playerIds: [a1, a2] },
           { side: "B", playerIds: [b1, b2] },
         ]);
-        // 4BBB: team win=1, each winning player=0.5; tie team=0.5, each player=0.25 (then * mult)
         applyMatchResultPoints(pointsByPlayer, res, mult, 0.5, 0.25);
       }
     }
@@ -675,7 +673,7 @@ export default function MatchesLeaderboardPage() {
 
     const allTourPlayerIds = Array.from(playerMeta.keys());
 
-    // ✅ Guard: if there are no score rows at all for the round, treat it as "not played" (0 points)
+    // Guard: if no scores exist at all for the round, treat as "not played"
     if (!roundHasAnyScores(roundId)) {
       const zero = new Map<string, number>();
       for (const pid of allTourPlayerIds) zero.set(pid, 0);
@@ -694,7 +692,6 @@ export default function MatchesLeaderboardPage() {
       total: stablefordTotalForRoundPlayer(roundId, pid),
     }));
 
-    // best N/2 (plus ties), where N = all players on the tour
     const N = allTourPlayerIds.length;
     const target = Math.floor(N / 2);
 
@@ -794,19 +791,7 @@ export default function MatchesLeaderboardPage() {
       totalByTeam,
       teamByRound,
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    sortedRounds,
-    settingsByRound,
-    membersA,
-    membersB,
-    playerMeta,
-    matchesBySettings,
-    roundPlayersByRound,
-    scoresByRound,
-    courseByRound,
-    parsByCourseTeeHole,
-  ]);
+  }, [sortedRounds, settingsByRound, membersA, membersB, playerMeta, matchesBySettings, roundPlayersByRound, scoresByRound, courseByRound, parsByCourseTeeHole]);
 
   const hasTeams = groupA?.id && groupB?.id && membersA.length > 0 && membersB.length > 0;
 
@@ -859,9 +844,7 @@ export default function MatchesLeaderboardPage() {
             </div>
           </div>
 
-          <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
-            Teams are not configured for this tour yet.
-          </div>
+          <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">Teams are not configured for this tour yet.</div>
         </div>
       </div>
     );
@@ -873,6 +856,11 @@ export default function MatchesLeaderboardPage() {
   const headerCellBase = "border-b border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 bg-gray-50";
   const bodyCellBase = "px-3 py-2 text-sm text-gray-900";
   const stickyNameCell = "sticky left-0 z-10 bg-white";
+
+  // ✅ NEW: stronger styles for the team total rows
+  const teamRowBase = "bg-slate-50 border-y-2 border-slate-300";
+  const teamNameCell = `${bodyCellBase} ${stickyNameCell} font-black text-[15px] text-gray-900 whitespace-nowrap`;
+  const teamValueCell = `${bodyCellBase} text-center font-black text-[15px] text-gray-900`;
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
@@ -912,23 +900,25 @@ export default function MatchesLeaderboardPage() {
             </thead>
 
             <tbody>
-              <tr className="bg-gray-50">
-                <td className={`${bodyCellBase} ${stickyNameCell} font-extrabold text-gray-900 whitespace-nowrap`}>{teamAName}</td>
+              {/* TEAM A total row */}
+              <tr className={teamRowBase}>
+                <td className={teamNameCell}>{teamAName}</td>
 
-                <td className={`${bodyCellBase} text-center font-extrabold`}>
+                <td className={teamValueCell}>
                   {Number(computed.totalByTeam.get("A") || 0).toFixed(2).replace(/\.00$/, "")}
                 </td>
 
                 {computed.roundCols.map((c) => {
                   const v = computed.teamByRound.get(c.roundId)?.A ?? 0;
                   return (
-                    <td key={c.roundId} className={`${bodyCellBase} text-center font-semibold text-gray-900`}>
+                    <td key={c.roundId} className={teamValueCell}>
                       {Number(v).toFixed(2).replace(/\.00$/, "")}
                     </td>
                   );
                 })}
               </tr>
 
+              {/* Team A players */}
               {membersA.map((p) => {
                 const total = computed.totalByPlayer.get(p.playerId) ?? 0;
 
@@ -950,27 +940,35 @@ export default function MatchesLeaderboardPage() {
                 );
               })}
 
+              {/* Existing thin divider */}
               <tr>
                 <td colSpan={2 + computed.roundCols.length} className="h-px bg-gray-200" />
               </tr>
 
-              <tr className="bg-gray-50">
-                <td className={`${bodyCellBase} ${stickyNameCell} font-extrabold text-gray-900 whitespace-nowrap`}>{teamBName}</td>
+              {/* ✅ NEW: blank spacer row between Team A players and Team B total row */}
+              <tr>
+                <td colSpan={2 + computed.roundCols.length} className="h-4 bg-white" />
+              </tr>
 
-                <td className={`${bodyCellBase} text-center font-extrabold`}>
+              {/* TEAM B total row */}
+              <tr className={teamRowBase}>
+                <td className={teamNameCell}>{teamBName}</td>
+
+                <td className={teamValueCell}>
                   {Number(computed.totalByTeam.get("B") || 0).toFixed(2).replace(/\.00$/, "")}
                 </td>
 
                 {computed.roundCols.map((c) => {
                   const v = computed.teamByRound.get(c.roundId)?.B ?? 0;
                   return (
-                    <td key={c.roundId} className={`${bodyCellBase} text-center font-semibold text-gray-900`}>
+                    <td key={c.roundId} className={teamValueCell}>
                       {Number(v).toFixed(2).replace(/\.00$/, "")}
                     </td>
                   );
                 })}
               </tr>
 
+              {/* Team B players */}
               {membersB.map((p) => {
                 const total = computed.totalByPlayer.get(p.playerId) ?? 0;
 
