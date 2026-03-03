@@ -188,9 +188,9 @@ export default function MatchesLeaderboardPage() {
   const [scoresByRound, setScoresByRound] = useState<Map<string, ScoreRow[]>>(new Map());
 
   const [courseByRound, setCourseByRound] = useState<Map<string, { course_id: string | null; name: string }>>(new Map());
-  const [parsByCourseTeeHole, setParsByCourseTeeHole] = useState<Map<string, Map<Tee, Map<number, { par: number; si: number }>>>>(
-    new Map()
-  );
+  const [parsByCourseTeeHole, setParsByCourseTeeHole] = useState<
+    Map<string, Map<Tee, Map<number, { par: number; si: number }>>>
+  >(new Map());
 
   const [matchesBySettings, setMatchesBySettings] = useState<Map<string, MatchRoundMatchRow[]>>(new Map());
 
@@ -306,7 +306,10 @@ export default function MatchesLeaderboardPage() {
         const roundIds = rds.map((r) => String(r.id));
         const allPlayerIds = Array.from(new Set([...memA.map((x) => x.playerId), ...memB.map((x) => x.playerId)]));
 
-        const { data: rCourseRows, error: rCourseErr } = await supabase.from("rounds").select("id,course_id,courses(name)").eq("tour_id", tourId);
+        const { data: rCourseRows, error: rCourseErr } = await supabase
+          .from("rounds")
+          .select("id,course_id,courses(name)")
+          .eq("tour_id", tourId);
         if (rCourseErr) throw rCourseErr;
 
         const rb = new Map<string, { course_id: string | null; name: string }>();
@@ -499,6 +502,20 @@ export default function MatchesLeaderboardPage() {
     return byTee.get(hole) ?? null;
   }
 
+  function roundHasAnyScores(roundId: string): boolean {
+    return (scoresByRound.get(roundId)?.length ?? 0) > 0;
+  }
+
+  function roundHasAnyScoresForPlayers(roundId: string, playerIds: string[]): boolean {
+    const list = scoresByRound.get(roundId) ?? [];
+    if (list.length === 0) return false;
+    const set = new Set(playerIds.filter(Boolean));
+    for (const s of list) {
+      if (set.has(s.player_id)) return true;
+    }
+    return false;
+  }
+
   function stablefordTotalForRoundPlayer(roundId: string, playerId: string): number {
     const rpMap = roundPlayersByRound.get(roundId);
     const rp = rpMap?.get(playerId);
@@ -544,6 +561,10 @@ export default function MatchesLeaderboardPage() {
       const a2 = mp.find((x) => x.side === "A" && x.slot === 2)?.player_id ?? null;
       const b1 = mp.find((x) => x.side === "B" && x.slot === 1)?.player_id ?? null;
       const b2 = mp.find((x) => x.side === "B" && x.slot === 2)?.player_id ?? null;
+
+      // ✅ Guard: don't award any match points unless at least one participant has ANY score rows for this round.
+      const participants = [a1, a2, b1, b2].filter(Boolean) as string[];
+      if (!roundHasAnyScoresForPlayers(roundId, participants)) continue;
 
       if (settings.format === "INDIVIDUAL_MATCHPLAY") {
         if (!a1 || !b1) continue;
@@ -653,8 +674,15 @@ export default function MatchesLeaderboardPage() {
     const mult = settings.double_points ? 2 : 1;
 
     const allTourPlayerIds = Array.from(playerMeta.keys());
-    const rpMap = roundPlayersByRound.get(roundId) ?? new Map<string, RoundPlayerRow>();
 
+    // ✅ Guard: if there are no score rows at all for the round, treat it as "not played" (0 points)
+    if (!roundHasAnyScores(roundId)) {
+      const zero = new Map<string, number>();
+      for (const pid of allTourPlayerIds) zero.set(pid, 0);
+      return zero;
+    }
+
+    const rpMap = roundPlayersByRound.get(roundId) ?? new Map<string, RoundPlayerRow>();
     const playingIds = allTourPlayerIds.filter((pid) => rpMap.get(pid)?.playing);
 
     const pointsByPlayer = new Map<string, number>();
@@ -666,7 +694,7 @@ export default function MatchesLeaderboardPage() {
       total: stablefordTotalForRoundPlayer(roundId, pid),
     }));
 
-    // ✅ RESTORED: best N/2 (plus ties), where N = all players on the tour
+    // best N/2 (plus ties), where N = all players on the tour
     const N = allTourPlayerIds.length;
     const target = Math.floor(N / 2);
 
@@ -746,7 +774,6 @@ export default function MatchesLeaderboardPage() {
       for (const pid of allPlayerIds) {
         const v = perPlayerPoints.get(pid) ?? 0;
 
-        // individual totals should reflect actual points earned
         ptsByPlayerRound.get(pid)!.set(rid, v);
         totalByPlayer.set(pid, (totalByPlayer.get(pid) || 0) + v);
 
@@ -755,8 +782,6 @@ export default function MatchesLeaderboardPage() {
         else if (tm === "B") sumB += v;
       }
 
-      // ✅ Team points are the sum of player points for ALL formats.
-      // For 4BBB this works because each winning player gets 0.5 (team=1), ties 0.25 (team=0.5).
       teamByRound.set(rid, { A: sumA, B: sumB });
       totalByTeam.set("A", (totalByTeam.get("A") || 0) + sumA);
       totalByTeam.set("B", (totalByTeam.get("B") || 0) + sumB);
@@ -770,7 +795,18 @@ export default function MatchesLeaderboardPage() {
       teamByRound,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortedRounds, settingsByRound, membersA, membersB, playerMeta, matchesBySettings, roundPlayersByRound, scoresByRound, courseByRound, parsByCourseTeeHole]);
+  }, [
+    sortedRounds,
+    settingsByRound,
+    membersA,
+    membersB,
+    playerMeta,
+    matchesBySettings,
+    roundPlayersByRound,
+    scoresByRound,
+    courseByRound,
+    parsByCourseTeeHole,
+  ]);
 
   const hasTeams = groupA?.id && groupB?.id && membersA.length > 0 && membersB.length > 0;
 
