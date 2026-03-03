@@ -44,6 +44,9 @@ type ParRow = {
 
 type MobilePlayer = { id: string; name: string; gender?: string | null; startHandicap: number };
 
+// Toggle to show/hide diagnostics UI (keep computations in place for later)
+const SHOW_DIAGNOSTICS = false;
+
 function formatDate(iso: string | null | undefined) {
   if (!iso) return "";
   const raw = String(iso).trim();
@@ -138,11 +141,7 @@ async function loadPlayersForTour(tourId: string): Promise<MobilePlayer[]> {
       .filter((p: any) => !!p.id);
   }
 
-  const { data: pData, error: pErr } = await supabase
-    .from("players")
-    .select("*")
-    .eq("tour_id", tourId)
-    .order("name", { ascending: true });
+  const { data: pData, error: pErr } = await supabase.from("players").select("*").eq("tour_id", tourId).order("name", { ascending: true });
 
   if (pErr) throw pErr;
 
@@ -358,17 +357,10 @@ export default function MobileRoundPlayerResultPage() {
       return { par, gross, pts };
     };
 
-    return {
-      tee,
-      holes,
-      front,
-      back,
-      out: sum(front),
-      inn: sum(back),
-      total: sum(holes),
-    };
+    return { tee, holes, front, back, out: sum(front), inn: sum(back), total: sum(holes) };
   }, [parRowsByHole, scoreByHole, player?.gender, hcp]);
 
+  // Keep diagnostics computation (for later), but hide UI by default
   const diag = useMemo(() => {
     const holes = [1, 2, 14];
 
@@ -393,15 +385,7 @@ export default function MobileRoundPlayerResultPage() {
       const cur = pick(tee);
       const other = pick(tee === "M" ? "F" : "M");
 
-      return {
-        hole: h,
-        teeUsed: tee,
-        par: cur.par,
-        si: cur.si,
-        otherTee: tee === "M" ? "F" : "M",
-        otherPar: other.par,
-        otherSi: other.si,
-      };
+      return { hole: h, teeUsed: tee, par: cur.par, si: cur.si, otherTee: tee === "M" ? "F" : "M", otherPar: other.par, otherSi: other.si };
     });
 
     return { courseId, hasTee: parRowsByHole.hasTee, rows };
@@ -422,7 +406,6 @@ export default function MobileRoundPlayerResultPage() {
 
   function ScoreBox({ shade, label }: { shade: Shade; label: string | number }) {
     const isBlue = shade === "ace" || shade === "eagle" || shade === "birdie";
-
     const base = "min-w-[28px] px-1.5 py-0.5 rounded text-center text-sm font-extrabold";
 
     const className =
@@ -466,33 +449,34 @@ export default function MobileRoundPlayerResultPage() {
       </div>
 
       <div className="mx-auto w-full max-w-md px-4 pt-4 pb-24">
-        {errorMsg ? (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMsg}</div>
-        ) : null}
+        {errorMsg ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMsg}</div> : null}
 
         {loading ? (
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">Loading…</div>
         ) : (
           <>
-            <div className="mt-0 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
-              <div className="font-semibold text-slate-900">Diagnostics</div>
-              <div className="mt-1">
-                CourseId: <span className="font-mono">{diag.courseId || "(none)"}</span> · Pars schema:{" "}
-                <span className="font-semibold">{diag.hasTee ? "tee rows (M/F)" : "legacy (single row)"}</span> · Tee used:{" "}
-                <span className="font-semibold">{computed.tee}</span>
+            {/* Diagnostics UI intentionally hidden (toggle SHOW_DIAGNOSTICS=true to show again) */}
+            {SHOW_DIAGNOSTICS ? (
+              <div className="mt-0 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                <div className="font-semibold text-slate-900">Diagnostics</div>
+                <div className="mt-1">
+                  CourseId: <span className="font-mono">{diag.courseId || "(none)"}</span> · Pars schema:{" "}
+                  <span className="font-semibold">{diag.hasTee ? "tee rows (M/F)" : "legacy (single row)"}</span> · Tee used:{" "}
+                  <span className="font-semibold">{computed.tee}</span>
+                </div>
+                <div className="mt-2 grid grid-cols-1 gap-1">
+                  {diag.rows.map((r: any) => (
+                    <div key={r.hole}>
+                      Hole <span className="font-semibold">{r.hole}</span>:{" "}
+                      <span className="font-semibold">
+                        {r.teeUsed} par {r.par} / SI {r.si}
+                      </span>{" "}
+                      · other tee {r.otherTee}: par {r.otherPar} / SI {r.otherSi}
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="mt-2 grid grid-cols-1 gap-1">
-                {diag.rows.map((r: any) => (
-                  <div key={r.hole}>
-                    Hole <span className="font-semibold">{r.hole}</span>:{" "}
-                    <span className="font-semibold">
-                      {r.teeUsed} par {r.par} / SI {r.si}
-                    </span>{" "}
-                    · other tee {r.otherTee}: par {r.otherPar} / SI {r.otherSi}
-                  </div>
-                ))}
-              </div>
-            </div>
+            ) : null}
 
             <div className="mt-4 flex items-start justify-between gap-3">
               <div className="min-w-0">
