@@ -807,6 +807,19 @@ export default function MobileTourAdminPage() {
         .filter((g) => g.playerIds.length > 0)
         .sort((a, b) => a.groupNo - b.groupNo);
 
+      // Preserve existing tee_time values by group_no before deleting/recreating groups
+      const { data: existingGroups, error: existingGroupsErr } = await supabase
+        .from("round_groups")
+        .select("group_no,tee_time")
+        .eq("round_id", ttSelectedRoundId);
+
+      if (existingGroupsErr) throw existingGroupsErr;
+
+      const teeTimeByGroupNo = new Map<number, string | null>();
+      for (const g of existingGroups ?? []) {
+        teeTimeByGroupNo.set(Number((g as any).group_no), (g as any).tee_time ?? null);
+      }
+
       const delM = await supabase.from("round_group_players").delete().eq("round_id", ttSelectedRoundId);
       if (delM.error) throw delM.error;
 
@@ -823,7 +836,7 @@ export default function MobileTourAdminPage() {
         round_id: ttSelectedRoundId,
         group_no: idx + 1,
         start_hole: 1,
-        tee_time: null,
+        tee_time: teeTimeByGroupNo.get(idx + 1) ?? null,
         notes: "Manual: Mobile admin",
       }));
 
@@ -896,7 +909,6 @@ export default function MobileTourAdminPage() {
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">Tour Admin</div>
-          
         </div>
       </div>
 
