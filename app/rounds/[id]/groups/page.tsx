@@ -219,6 +219,11 @@ function rawScoreFor(strokes: number | null, pickup?: boolean | null) {
   return String(strokes);
 }
 
+function normalizeTimeInput(v: string) {
+  const s = String(v ?? "").trim();
+  return s ? s.slice(0, 5) : "";
+}
+
 export default function RoundGroupsPage() {
   const params = useParams();
   const roundId = String((params as any)?.id ?? "").trim();
@@ -241,6 +246,10 @@ export default function RoundGroupsPage() {
   // NEW: manual group assignment UI state
   const [selectedGroupId, setSelectedGroupId] = useState<string>("");
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>("");
+
+  // NEW: tee time editor state
+  const [teeTimeDraftByGroup, setTeeTimeDraftByGroup] = useState<Record<string, string>>({});
+  const [teeTimeSavingByGroup, setTeeTimeSavingByGroup] = useState<Record<string, boolean>>({});
 
   const rpByPlayerId = useMemo(() => {
     const m = new Map<string, RoundPlayer>();
@@ -380,10 +389,7 @@ export default function RoundGroupsPage() {
 
       const ids = rpRows.map((r) => r.player_id);
       if (ids.length) {
-        const { data: pData, error: pErr } = await supabase
-          .from("players")
-          .select("id,name,start_handicap")
-          .in("id", ids);
+        const { data: pData, error: pErr } = await supabase.from("players").select("id,name,start_handicap").in("id", ids);
         if (pErr) throw pErr;
 
         const pRows: PlayerBase[] = (pData ?? []).map((p: any) => ({
@@ -402,7 +408,16 @@ export default function RoundGroupsPage() {
         .eq("round_id", roundId)
         .order("group_no", { ascending: true });
       if (gErr) throw gErr;
-      setGroups((gData ?? []) as RoundGroup[]);
+      const loadedGroups = (gData ?? []) as RoundGroup[];
+      setGroups(loadedGroups);
+
+      setTeeTimeDraftByGroup((prev) => {
+        const next = { ...prev };
+        for (const g of loadedGroups) {
+          next[g.id] = normalizeTimeInput(g.tee_time ?? "");
+        }
+        return next;
+      });
 
       const { data: mData, error: mErr } = await supabase
         .from("round_group_players")
@@ -533,9 +548,7 @@ export default function RoundGroupsPage() {
     const { data: roundsData, error: rErr } = await supabase.from("rounds").select("id,tour_id").eq("tour_id", tourId);
     if (rErr) throw rErr;
 
-    const otherRoundIds = (roundsData ?? [])
-      .map((r: any) => String(r.id))
-      .filter((id) => id !== roundId);
+    const otherRoundIds = (roundsData ?? []).map((r: any) => String(r.id)).filter((id) => id !== roundId);
 
     if (!otherRoundIds.length) return [];
 
@@ -736,6 +749,30 @@ export default function RoundGroupsPage() {
     }
   }
 
+  async function saveGroupTeeTime(groupId: string) {
+    setErrorMsg("");
+    setInfoMsg("");
+
+    const draft = normalizeTimeInput(teeTimeDraftByGroup[groupId] ?? "");
+
+    setTeeTimeSavingByGroup((prev) => ({ ...prev, [groupId]: true }));
+    try {
+      const { error } = await supabase
+        .from("round_groups")
+        .update({ tee_time: draft || null })
+        .eq("id", groupId);
+
+      if (error) throw error;
+
+      setGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, tee_time: draft || null } : g)));
+      setInfoMsg("Tee time saved.");
+    } catch (e: any) {
+      setErrorMsg(e?.message ?? "Failed to save tee time.");
+    } finally {
+      setTeeTimeSavingByGroup((prev) => ({ ...prev, [groupId]: false }));
+    }
+  }
+
   if (loading) {
     return (
       <main className="mx-auto max-w-4xl p-4">
@@ -828,7 +865,6 @@ export default function RoundGroupsPage() {
         </div>
       </section>
 
-      {/* NEW: Manual add block */}
       <section className="rounded-2xl border p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -901,13 +937,45 @@ export default function RoundGroupsPage() {
           <div className="space-y-3">
             {groups.map((g) => {
               const mem = membersByGroup.get(g.id) ?? [];
+              const teeDraft = teeTimeDraftByGroup[g.id] ?? "";
+              const teeSaving = teeTimeSavingByGroup[g.id] === true;
+
               return (
                 <div key={g.id} className="rounded-2xl border p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-lg font-semibold">Group {g.group_no}</div>
-                      <div className="text-xs opacity-70">Tee: 1st · Members: {mem.length} · Note: {g.notes ?? "—"}</div>
+                      <div className="text-xs opacity-70">
+                        Start hole: {g.start_hole} · Tee time: {g.tee_time ?? "—"} · Members: {mem.length} · Note: {g.notes ?? "—"}
+                      </div>
                     </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border p-3 bg-slate-50">
+                    <div>
+                      <div className="text-xs font-semibold opacity-70 mb-1">Tee time</div>
+                      <input
+                        type="time"
+                        value={teeDraft}
+                        onChange={(e) =>
+                          setTeeTimeDraftByGroup((prev) => ({
+                            ...prev,
+                            [g.id]: normalizeTimeInput(e.target.value),
+                          }))
+                        }
+                        disabled={busy || teeSaving}
+                        className="rounded-xl border px-3 py-2 text-sm bg-white"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => void saveGroupTeeTime(g.id)}
+                      disabled={busy || teeSaving}
+                      className="rounded-xl bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
+                    >
+                      {teeSaving ? "Saving…" : "Save tee time"}
+                    </button>
                   </div>
 
                   <div className="mt-3 space-y-2">
