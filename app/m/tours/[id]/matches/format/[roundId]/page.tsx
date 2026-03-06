@@ -1,4 +1,3 @@
-// app/m/tours/[id]/matches/format/[roundId]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
@@ -19,6 +18,8 @@ type TeeTimeGroupRow = {
   id: string;
   round_id: string;
   group_no: number;
+  tee_time: string | null;
+  start_hole: number | null;
   notes: string | null;
 };
 
@@ -151,27 +152,21 @@ export default function MatchesFormatRoundDetailPage() {
 
   const [round, setRound] = useState<RoundRow | null>(null);
 
-  // NEW: section chooser state (default: only buttons show)
   const [activeSection, setActiveSection] = useState<PageSection>(null);
 
-  // Tour fixed teams (must be exactly 2)
   const [teamGroups, setTeamGroups] = useState<TourGroupRow[]>([]);
   const [teamsWarn, setTeamsWarn] = useState("");
 
-  // team members (derived from fixed groups)
   const [teamALoading, setTeamALoading] = useState(false);
   const [teamBLoading, setTeamBLoading] = useState(false);
   const [teamA, setTeamA] = useState<PlayerRow[]>([]);
   const [teamB, setTeamB] = useState<PlayerRow[]>([]);
 
-  // existing settings record for this round
   const [existing, setExisting] = useState<SettingsRow | null>(null);
 
-  // settings form state
   const [format, setFormat] = useState<MatchFormat>("INDIVIDUAL_MATCHPLAY");
   const [doublePoints, setDoublePoints] = useState<boolean>(false);
 
-  // match setup
   const [matchLoading, setMatchLoading] = useState(false);
   const [matchSaving, setMatchSaving] = useState(false);
   const [matchMsg, setMatchMsg] = useState("");
@@ -179,7 +174,6 @@ export default function MatchesFormatRoundDetailPage() {
   const [matchSetup, setMatchSetup] = useState<MatchSetupRow[]>([]);
   const [loadedMatchCount, setLoadedMatchCount] = useState<number>(0);
 
-  // tee-time override toggle
   const [teeOverrideLoading, setTeeOverrideLoading] = useState(false);
   const [teeOverrideSaving, setTeeOverrideSaving] = useState(false);
   const [teeOverrideErr, setTeeOverrideErr] = useState("");
@@ -195,7 +189,7 @@ export default function MatchesFormatRoundDetailPage() {
 
   const settingsDirty = useMemo(() => {
     if (!teamsReady) return false;
-    if (!existing) return true; // format + double points need saving before match setup can exist
+    if (!existing) return true;
     const aId = teamAGroup?.id ?? "";
     const bId = teamBGroup?.id ?? "";
     return (
@@ -215,7 +209,6 @@ export default function MatchesFormatRoundDetailPage() {
     return bits.join(" · ");
   }, [round]);
 
-  // Compute required number of matches based on format + team sizes
   const matchCount = useMemo(() => {
     const a = teamA.length;
     const b = teamB.length;
@@ -225,7 +218,6 @@ export default function MatchesFormatRoundDetailPage() {
     if (!teamsReady) return 0;
     if (fmt === "INDIVIDUAL_STABLEFORD") return 0;
     if (fmt === "INDIVIDUAL_MATCHPLAY") return Math.max(0, min);
-    // BETTERBALL
     return Math.max(0, Math.floor(min / 2));
   }, [existing?.format, format, teamA.length, teamB.length, teamsReady]);
 
@@ -257,11 +249,7 @@ export default function MatchesFormatRoundDetailPage() {
       setTeeOverrideMsg("");
       setTeeOverrideEnabled(false);
 
-      // default: only buttons visible until user taps (keep as-is on refresh)
-      // setActiveSection(null);
-
       try {
-        // 1) Round meta with column-fallback (round_date may not exist)
         const baseCols = "id,round_no,created_at,courses(name)";
         const cols1 = `${baseCols},round_date,played_on`;
         const cols2 = `${baseCols},played_on`;
@@ -290,7 +278,6 @@ export default function MatchesFormatRoundDetailPage() {
           rRow = r1.data;
         }
 
-        // 2) Load TOUR TEAMS (must be exactly 2).
         const { data: gRows, error: gErr } = await supabase
           .from("tour_groups")
           .select("id,name,scope,type")
@@ -303,7 +290,6 @@ export default function MatchesFormatRoundDetailPage() {
 
         const teams = (gRows ?? []) as any as TourGroupRow[];
 
-        // 3) Existing settings (one per round)
         const { data: sRow, error: sErr } = await supabase
           .from("match_round_settings")
           .select("id,tour_id,round_id,group_a_id,group_b_id,format,double_points,created_at,updated_at")
@@ -311,10 +297,9 @@ export default function MatchesFormatRoundDetailPage() {
           .maybeSingle();
         if (sErr) throw sErr;
 
-        // 4) Detect tee override based on existing round_groups notes
         const { data: rg, error: rgErr } = await supabase
           .from("round_groups")
-          .select("id,round_id,group_no,notes")
+          .select("id,round_id,group_no,tee_time,start_hole,notes")
           .eq("round_id", roundId)
           .order("group_no", { ascending: true });
 
@@ -359,7 +344,6 @@ export default function MatchesFormatRoundDetailPage() {
     };
   }, [tourId, roundId]);
 
-  // Load team members whenever the fixed 2 teams are available
   useEffect(() => {
     if (!isLikelyUuid(tourId)) return;
     if (!teamsReady) {
@@ -417,7 +401,6 @@ export default function MatchesFormatRoundDetailPage() {
     };
   }, [tourId, teamsReady, teamAGroup?.id, teamBGroup?.id]);
 
-  // Load matches setup when settings are saved + valid
   useEffect(() => {
     if (!existing) {
       setMatchSetup([]);
@@ -677,7 +660,7 @@ export default function MatchesFormatRoundDetailPage() {
   async function fetchOverrideGroupsForRound(): Promise<TeeTimeGroupRow[]> {
     const { data, error } = await supabase
       .from("round_groups")
-      .select("id,round_id,group_no,notes")
+      .select("id,round_id,group_no,tee_time,start_hole,notes")
       .eq("round_id", roundId)
       .order("group_no", { ascending: true });
 
@@ -687,6 +670,8 @@ export default function MatchesFormatRoundDetailPage() {
       id: String((x as any).id),
       round_id: String((x as any).round_id),
       group_no: Number((x as any).group_no),
+      tee_time: (x as any).tee_time == null ? null : String((x as any).tee_time),
+      start_hole: (x as any).start_hole == null ? null : Number((x as any).start_hole),
       notes: (x as any).notes == null ? null : String((x as any).notes),
     }));
   }
@@ -705,7 +690,12 @@ export default function MatchesFormatRoundDetailPage() {
     if (existing.format === "INDIVIDUAL_STABLEFORD") throw new Error("Tee-time override not applicable for Stableford.");
     if (matchCount <= 0) throw new Error("No matches available to build tee-time order.");
 
-    // Pull matches and assignments from DB (source of truth)
+    const existingGroups = await fetchOverrideGroupsForRound();
+    const priorByGroupNo = new Map<number, TeeTimeGroupRow>();
+    for (const g of existingGroups) {
+      priorByGroupNo.set(Number(g.group_no), g);
+    }
+
     const { data, error } = await supabase
       .from("match_round_matches")
       .select("id,match_no,match_round_match_players(side,slot,player_id)")
@@ -718,7 +708,6 @@ export default function MatchesFormatRoundDetailPage() {
     const byNo = new Map<number, MatchRow>();
     for (const r of rows) byNo.set(Number(r.match_no), r);
 
-    // Validate: require matches 1..matchCount present and assigned
     const orderedMatchPlayers: Array<{ matchNo: number; playerIds: string[] }> = [];
 
     for (let i = 1; i <= matchCount; i++) {
@@ -747,10 +736,8 @@ export default function MatchesFormatRoundDetailPage() {
       }
     }
 
-    // Build groups in required order
     const groupsOut: string[][] = [];
     if (existing.format === "INDIVIDUAL_MATCHPLAY") {
-      // Group = two matches (up to 4 players total)
       for (let i = 0; i < orderedMatchPlayers.length; i += 2) {
         const m1 = orderedMatchPlayers[i];
         const m2 = orderedMatchPlayers[i + 1];
@@ -758,20 +745,21 @@ export default function MatchesFormatRoundDetailPage() {
         groupsOut.push(ids);
       }
     } else {
-      // BETTERBALL: group = one match
       for (const m of orderedMatchPlayers) groupsOut.push(m.playerIds);
     }
 
-    // Replace any existing groupings for the round (idempotent)
     await clearAllRoundGroups(roundId);
 
-    const groupRows = groupsOut.map((_, i) => ({
-      round_id: roundId,
-      group_no: i + 1,
-      start_hole: 1,
-      tee_time: null,
-      notes: OVERRIDE_NOTES,
-    }));
+    const groupRows = groupsOut.map((_, i) => {
+      const existingGroup = priorByGroupNo.get(i + 1);
+      return {
+        round_id: roundId,
+        group_no: i + 1,
+        start_hole: existingGroup?.start_hole ?? 1,
+        tee_time: existingGroup?.tee_time ?? null,
+        notes: OVERRIDE_NOTES,
+      };
+    });
 
     const { data: insertedGroups, error: insGErr } = await supabase.from("round_groups").insert(groupRows).select("id,group_no");
     if (insGErr) throw insGErr;
@@ -808,7 +796,6 @@ export default function MatchesFormatRoundDetailPage() {
         setTeeOverrideEnabled(true);
         setTeeOverrideMsg("Saved: tee-time groups overridden by match order.");
       } else {
-        // Only clear if current groups look like OUR override groups
         const current = await fetchOverrideGroupsForRound();
         const isOverride = current.length > 0 && current.every((g) => String(g.notes ?? "") === OVERRIDE_NOTES);
 
@@ -828,7 +815,6 @@ export default function MatchesFormatRoundDetailPage() {
     }
   }
 
-  // lightweight re-check when page loads (or after save actions you do manually)
   useEffect(() => {
     if (!isLikelyUuid(roundId)) return;
     let alive = true;
@@ -853,7 +839,6 @@ export default function MatchesFormatRoundDetailPage() {
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
   if (!isLikelyUuid(tourId) || !isLikelyUuid(roundId)) {
@@ -887,7 +872,6 @@ export default function MatchesFormatRoundDetailPage() {
   }, [teamsReady, teamAGroup?.name, teamBGroup?.name]);
 
   const setSection = useCallback((next: PageSection) => {
-    // Lightweight: clear section-specific messages when switching sections
     setErrorMsg("");
     setSaveMsg("");
     setMatchMsg("");
@@ -899,12 +883,7 @@ export default function MatchesFormatRoundDetailPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-10">
-      {/* Header bands:
-          NOTE: The standard top row (Tour name + Home) + first horizontal line is handled elsewhere.
-          This page should start with "Matchplay format" + Back, then a line, then round meta.
-      */}
       <div className="sticky top-0 z-10 bg-white/95 backdrop-blur">
-        {/* Band 2: Matchplay format + back */}
         <div className="border-b border-slate-200">
           <div className="mx-auto w-full max-w-md px-4 py-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
@@ -920,7 +899,6 @@ export default function MatchesFormatRoundDetailPage() {
           </div>
         </div>
 
-        {/* Band 3: round meta */}
         <div className="border-b border-slate-200 bg-slate-50">
           <div className="mx-auto w-full max-w-md px-4 py-2">
             <div className="truncate text-sm font-semibold text-slate-800">{roundTitle || "Configure this round"}</div>
@@ -938,7 +916,6 @@ export default function MatchesFormatRoundDetailPage() {
           <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
-            {/* NEW: Chooser row (only buttons show by default) */}
             <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
@@ -965,7 +942,6 @@ export default function MatchesFormatRoundDetailPage() {
               </button>
             </div>
 
-            {/* FORMAT SECTION */}
             {activeSection === "format" ? (
               <>
                 <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
@@ -1032,7 +1008,6 @@ export default function MatchesFormatRoundDetailPage() {
                       Selected: <span className="font-semibold text-gray-900">{formatLabel(format)}</span>
                     </div>
 
-                    {/* Double points */}
                     <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
                       <div>
                         <div className="text-sm font-semibold text-gray-900">Double points</div>
@@ -1082,7 +1057,6 @@ export default function MatchesFormatRoundDetailPage() {
               </>
             ) : null}
 
-            {/* MATCH SETUP SECTION */}
             {activeSection === "matches" ? (
               <>
                 <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
@@ -1265,7 +1239,6 @@ export default function MatchesFormatRoundDetailPage() {
               </>
             ) : null}
 
-            {/* TEE GROUPINGS SECTION (override toggle only) */}
             {activeSection === "tee" ? (
               <>
                 <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
