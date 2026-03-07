@@ -90,6 +90,17 @@ function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
+function normalizeStartHoleInput(v: string | number | null | undefined) {
+  const s = String(v ?? "").trim();
+  if (!s) return "1";
+  const n = Number(s);
+  if (!Number.isFinite(n)) return "1";
+  const whole = Math.floor(n);
+  if (whole < 1) return "1";
+  if (whole > 18) return "18";
+  return String(whole);
+}
+
 export default function RoundPage() {
   const params = useParams<{ id: string }>();
   const roundId = (params?.id ?? "").trim();
@@ -110,11 +121,12 @@ export default function RoundPage() {
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
 
-  // NEW: tee time setup state
+  // tee time setup state
   const [roundGroups, setRoundGroups] = useState<RoundGroupRow[]>([]);
   const [roundGroupPlayers, setRoundGroupPlayers] = useState<RoundGroupPlayerRow[]>([]);
   const [groupCountDraft, setGroupCountDraft] = useState("");
   const [teeTimeDraftByGroupNo, setTeeTimeDraftByGroupNo] = useState<Record<number, string>>({});
+  const [startHoleDraftByGroupNo, setStartHoleDraftByGroupNo] = useState<Record<number, string>>({});
   const [groupSetupBusy, setGroupSetupBusy] = useState(false);
   const [groupSetupMsg, setGroupSetupMsg] = useState("");
 
@@ -294,6 +306,12 @@ export default function RoundPage() {
           return acc;
         }, {})
       );
+      setStartHoleDraftByGroupNo(
+        loadedGroups.reduce<Record<number, string>>((acc, g) => {
+          acc[g.group_no] = normalizeStartHoleInput(g.start_hole ?? 1);
+          return acc;
+        }, {})
+      );
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Failed to load round.");
     } finally {
@@ -465,6 +483,14 @@ export default function RoundPage() {
       return;
     }
 
+    for (let groupNo = 1; groupNo <= targetCount; groupNo++) {
+      const startHole = Number(normalizeStartHoleInput(startHoleDraftByGroupNo[groupNo] ?? "1"));
+      if (!Number.isFinite(startHole) || startHole < 1 || startHole > 18) {
+        setGroupSetupMsg(`Starting hole for Group ${groupNo} must be between 1 and 18.`);
+        return;
+      }
+    }
+
     setGroupSetupBusy(true);
     setGroupSetupMsg("");
     setErrorMsg("");
@@ -492,9 +518,11 @@ export default function RoundPage() {
       // update existing kept groups
       for (const g of roundGroups.filter((x) => x.group_no <= targetCount)) {
         const nextTime = normalizeTimeInput(teeTimeDraftByGroupNo[g.group_no] ?? "");
+        const nextStartHole = Number(normalizeStartHoleInput(startHoleDraftByGroupNo[g.group_no] ?? g.start_hole ?? 1));
+
         const payload = {
           tee_time: nextTime || null,
-          start_hole: g.start_hole ?? 1,
+          start_hole: nextStartHole,
         };
 
         const { error } = await supabase.from("round_groups").update(payload).eq("id", g.id);
@@ -516,7 +544,7 @@ export default function RoundPage() {
           round_id: roundId,
           group_no: groupNo,
           tee_time: normalizeTimeInput(teeTimeDraftByGroupNo[groupNo] ?? "") || null,
-          start_hole: 1,
+          start_hole: Number(normalizeStartHoleInput(startHoleDraftByGroupNo[groupNo] ?? "1")),
           notes: "Manual: Round page tee setup",
         });
       }
@@ -591,7 +619,7 @@ export default function RoundPage() {
       <div className="rounded-lg border bg-white p-3 space-y-3">
         <div className="font-semibold">Tee time setup</div>
         <div className="text-sm opacity-70">
-          Set the number of groups and tee times for this round. Groups can exist before players are assigned.
+          Set the number of groups, tee times, and starting holes for this round. Groups can exist before players are assigned.
         </div>
 
         <div className="flex flex-wrap items-end gap-3">
@@ -626,7 +654,7 @@ export default function RoundPage() {
               const membersCount = existing ? membersCountByGroupId[existing.id] ?? 0 : 0;
 
               return (
-                <div key={groupNo} className="flex flex-wrap items-center gap-3 rounded border p-3">
+                <div key={groupNo} className="flex flex-wrap items-end gap-3 rounded border p-3">
                   <div className="w-24 text-sm font-semibold">Group {groupNo}</div>
 
                   <div>
@@ -642,6 +670,31 @@ export default function RoundPage() {
                       }
                       disabled={groupSetupBusy || isLocked}
                       className="rounded-md border px-3 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-semibold opacity-70 mb-1">Starting hole</div>
+                    <input
+                      type="number"
+                      min={1}
+                      max={18}
+                      step={1}
+                      value={startHoleDraftByGroupNo[groupNo] ?? "1"}
+                      onChange={(e) =>
+                        setStartHoleDraftByGroupNo((prev) => ({
+                          ...prev,
+                          [groupNo]: e.target.value,
+                        }))
+                      }
+                      onBlur={(e) =>
+                        setStartHoleDraftByGroupNo((prev) => ({
+                          ...prev,
+                          [groupNo]: normalizeStartHoleInput(e.target.value),
+                        }))
+                      }
+                      disabled={groupSetupBusy || isLocked}
+                      className="w-24 rounded-md border px-3 py-2 text-sm"
                     />
                   </div>
 
