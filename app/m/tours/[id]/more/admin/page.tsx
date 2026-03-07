@@ -51,7 +51,6 @@ type RoundOption = {
   course_name: string | null;
 };
 
-// Tee time grouping tables (existing)
 type RoundGroupRow = {
   id: string;
   round_id: string;
@@ -75,7 +74,7 @@ type ManualGroup = {
   playerIds: string[]; // ordered player_ids
 };
 
-type AdminSection = "starting" | "course" | "tee" | null;
+type AdminSection = "starting" | "course" | "groupings" | "teeTimes" | null;
 
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
@@ -88,12 +87,9 @@ function normalizePlayerJoin(val: any): PlayerRow | null {
   return { id: String(p.id), name: String(p.name ?? "").trim() || "(unnamed)" };
 }
 
-// ✅ UPDATED: allow 0+ with up to 1 decimal place, normalize to 1dp
 function toNullableNumber(v: string): number | null {
   const s = String(v ?? "").trim();
   if (!s) return null;
-
-  // allow digits, optional ".digit" (single)
   if (!/^\d+(\.\d)?$/.test(s)) return null;
 
   const n = Number(s);
@@ -147,6 +143,26 @@ function roundLabel(r: RoundOption) {
   return `R${rn} • ${title}${tail}`;
 }
 
+function normalizeTimeInput(v: string | null | undefined) {
+  const s = String(v ?? "").trim();
+  return s ? s.slice(0, 5) : "";
+}
+
+function normalizeStartHoleDraft(v: string | number | null | undefined) {
+  const s = String(v ?? "").trim();
+  return s ? s : "1";
+}
+
+function parseStartHoleOrDefault(v: string | null | undefined) {
+  const s = String(v ?? "").trim();
+  if (!s) return 1;
+  const n = Number(s);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 18) {
+    throw new Error("Starting hole must be a whole number from 1 to 18.");
+  }
+  return n;
+}
+
 export default function MobileTourAdminPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -154,17 +170,14 @@ export default function MobileTourAdminPage() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
-  // section chooser
   const [activeSection, setActiveSection] = useState<AdminSection>(null);
 
-  // ✅ Score entry layout accordion state
   const [showScoreEntryLayout, setShowScoreEntryLayout] = useState(false);
   const [scoreEntryLayout, setScoreEntryLayout] = useState<ScoreEntryLayout>("classic");
   const [layoutSaving, setLayoutSaving] = useState(false);
   const [layoutMsg, setLayoutMsg] = useState("");
   const [layoutErr, setLayoutErr] = useState("");
 
-  // Starting handicaps state
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
 
@@ -179,7 +192,6 @@ export default function MobileTourAdminPage() {
     }>
   >([]);
 
-  // Course editor state
   const [courseLoading, setCourseLoading] = useState(false);
   const [courseError, setCourseError] = useState("");
   const [courseSaveMsg, setCourseSaveMsg] = useState("");
@@ -189,13 +201,11 @@ export default function MobileTourAdminPage() {
   const [selectedCourseId, setSelectedCourseId] = useState<string>("");
   const [holeRows, setHoleRows] = useState<HoleEditRow[]>(makeEmptyHoles());
 
-  // ✅ Guard against out-of-order async responses when switching courses quickly
   const parsReqSeqRef = useRef(0);
 
-  // Rounds list (used for tee time groups)
   const [roundOptions, setRoundOptions] = useState<RoundOption[]>([]);
 
-  // Manual tee time groups
+  // Daily Groupings
   const [ttSelectedRoundId, setTtSelectedRoundId] = useState<string>("");
   const [ttLoading, setTtLoading] = useState(false);
   const [ttSaving, setTtSaving] = useState(false);
@@ -204,6 +214,16 @@ export default function MobileTourAdminPage() {
 
   const [ttGroups, setTtGroups] = useState<ManualGroup[]>([]);
   const [ttAddTargetGroupNo, setTtAddTargetGroupNo] = useState<number>(1);
+
+  // Tee times & starting holes
+  const [thsSelectedRoundId, setThsSelectedRoundId] = useState<string>("");
+  const [thsLoading, setThsLoading] = useState(false);
+  const [thsSaving, setThsSaving] = useState(false);
+  const [thsError, setThsError] = useState("");
+  const [thsMsg, setThsMsg] = useState("");
+  const [thsGroups, setThsGroups] = useState<RoundGroupRow[]>([]);
+  const [thsTeeTimeByGroupId, setThsTeeTimeByGroupId] = useState<Record<string, string>>({});
+  const [thsStartHoleByGroupId, setThsStartHoleByGroupId] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
@@ -230,8 +250,14 @@ export default function MobileTourAdminPage() {
       setTtGroups([]);
       setTtAddTargetGroupNo(1);
 
+      setThsError("");
+      setThsMsg("");
+      setThsSelectedRoundId("");
+      setThsGroups([]);
+      setThsTeeTimeByGroupId({});
+      setThsStartHoleByGroupId({});
+
       try {
-        // ✅ also load score_entry_layout from tours
         const { data: tData, error: tErr } = await supabase
           .from("tours")
           .select("id,name,score_entry_layout")
@@ -256,7 +282,6 @@ export default function MobileTourAdminPage() {
             const pid = String(r.player_id ?? p?.id ?? "");
             if (!pid) return null;
 
-            // ✅ keep decimals (no Math.floor)
             const sh = Number.isFinite(Number(r.starting_handicap)) ? Math.max(0, Number(r.starting_handicap)) : null;
 
             return {
@@ -269,7 +294,6 @@ export default function MobileTourAdminPage() {
           })
           .filter(Boolean) as any[];
 
-        // courses limited to those used by rounds in this tour
         const { data: roundCourseData, error: roundCourseErr } = await supabase.from("rounds").select("course_id").eq("tour_id", tourId);
         if (roundCourseErr) throw roundCourseErr;
 
@@ -293,7 +317,6 @@ export default function MobileTourAdminPage() {
           }));
         }
 
-        // Rounds list for tee time editor
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,round_no,played_on,name,courses(name)")
@@ -364,11 +387,9 @@ export default function MobileTourAdminPage() {
     }
   }
 
-  // Load pars for selected course (only after user selects)
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
-    // bump request sequence whenever the selection changes (including to empty)
     const myReq = ++parsReqSeqRef.current;
 
     if (!selectedCourseId) {
@@ -603,10 +624,6 @@ export default function MobileTourAdminPage() {
     }
   }
 
-  // -------------------------
-  // Manual tee time editor (groupings)
-  // -------------------------
-
   const playerNameById = useMemo(() => {
     const m = new Map<string, string>();
     for (const r of rows) m.set(r.player_id, r.name);
@@ -699,11 +716,63 @@ export default function MobileTourAdminPage() {
       setTtAddTargetGroupNo(normalized[0]?.groupNo ?? 1);
       setTtMsg("Loaded saved groups for this round.");
     } catch (e: any) {
-      setTtError(e?.message ?? "Failed to load tee time groups for this round.");
+      setTtError(e?.message ?? "Failed to load daily groupings for this round.");
       setTtGroups([]);
       setTtAddTargetGroupNo(1);
     } finally {
       setTtLoading(false);
+    }
+  }
+
+  async function loadTeeTimesAndStartingHoles(roundId: string) {
+    if (!roundId || !isLikelyUuid(roundId)) {
+      setThsGroups([]);
+      setThsTeeTimeByGroupId({});
+      setThsStartHoleByGroupId({});
+      return;
+    }
+
+    setThsLoading(true);
+    setThsError("");
+    setThsMsg("");
+
+    try {
+      const { data, error } = await supabase
+        .from("round_groups")
+        .select("id,round_id,group_no,start_hole,tee_time,notes")
+        .eq("round_id", roundId)
+        .order("group_no", { ascending: true });
+
+      if (error) throw error;
+
+      const groups = ((data ?? []) as any[]).map((g) => ({
+        id: String(g.id),
+        round_id: String(g.round_id),
+        group_no: Number(g.group_no),
+        start_hole: g.start_hole == null ? 1 : Number(g.start_hole),
+        tee_time: g.tee_time == null ? null : String(g.tee_time),
+        notes: g.notes == null ? null : String(g.notes),
+      })) as RoundGroupRow[];
+
+      const teeDrafts: Record<string, string> = {};
+      const startDrafts: Record<string, string> = {};
+
+      for (const g of groups) {
+        teeDrafts[g.id] = normalizeTimeInput(g.tee_time);
+        startDrafts[g.id] = normalizeStartHoleDraft(g.start_hole ?? 1);
+      }
+
+      setThsGroups(groups);
+      setThsTeeTimeByGroupId(teeDrafts);
+      setThsStartHoleByGroupId(startDrafts);
+      setThsMsg(groups.length > 0 ? "Loaded tee times and starting holes for this round." : "");
+    } catch (e: any) {
+      setThsError(e?.message ?? "Failed to load tee times and starting holes.");
+      setThsGroups([]);
+      setThsTeeTimeByGroupId({});
+      setThsStartHoleByGroupId({});
+    } finally {
+      setThsLoading(false);
     }
   }
 
@@ -807,17 +876,22 @@ export default function MobileTourAdminPage() {
         .filter((g) => g.playerIds.length > 0)
         .sort((a, b) => a.groupNo - b.groupNo);
 
-      // Preserve existing tee_time values by group_no before deleting/recreating groups
       const { data: existingGroups, error: existingGroupsErr } = await supabase
         .from("round_groups")
-        .select("group_no,tee_time")
+        .select("group_no,tee_time,start_hole")
         .eq("round_id", ttSelectedRoundId);
 
       if (existingGroupsErr) throw existingGroupsErr;
 
       const teeTimeByGroupNo = new Map<number, string | null>();
+      const startHoleByGroupNo = new Map<number, number>();
+
       for (const g of existingGroups ?? []) {
         teeTimeByGroupNo.set(Number((g as any).group_no), (g as any).tee_time ?? null);
+        startHoleByGroupNo.set(
+          Number((g as any).group_no),
+          (g as any).start_hole == null ? 1 : Number((g as any).start_hole)
+        );
       }
 
       const delM = await supabase.from("round_group_players").delete().eq("round_id", ttSelectedRoundId);
@@ -827,7 +901,7 @@ export default function MobileTourAdminPage() {
       if (delG.error) throw delG.error;
 
       if (nonEmpty.length === 0) {
-        setTtMsg("Saved: cleared all tee time groups for this round.");
+        setTtMsg("Saved: cleared all daily groupings for this round.");
         setTtSaving(false);
         return;
       }
@@ -835,7 +909,7 @@ export default function MobileTourAdminPage() {
       const groupRows = nonEmpty.map((g, idx) => ({
         round_id: ttSelectedRoundId,
         group_no: idx + 1,
-        start_hole: 1,
+        start_hole: startHoleByGroupNo.get(idx + 1) ?? 1,
         tee_time: teeTimeByGroupNo.get(idx + 1) ?? null,
         notes: "Manual: Mobile admin",
       }));
@@ -867,9 +941,44 @@ export default function MobileTourAdminPage() {
       setTtMsg(`Saved ${nonEmpty.length} group${nonEmpty.length === 1 ? "" : "s"} (${memberRows.length} player assignments).`);
       await loadManualTeeTimes(ttSelectedRoundId);
     } catch (e: any) {
-      setTtError(e?.message ?? "Failed to save tee time groups.");
+      setTtError(e?.message ?? "Failed to save daily groupings.");
     } finally {
       setTtSaving(false);
+    }
+  }
+
+  async function saveTeeTimesAndStartingHoles() {
+    if (!thsSelectedRoundId || !isLikelyUuid(thsSelectedRoundId)) {
+      setThsError("Please select a round.");
+      return;
+    }
+
+    setThsSaving(true);
+    setThsError("");
+    setThsMsg("");
+
+    try {
+      for (const g of thsGroups) {
+        const nextTeeTime = normalizeTimeInput(thsTeeTimeByGroupId[g.id] ?? "");
+        const nextStartHole = parseStartHoleOrDefault(thsStartHoleByGroupId[g.id] ?? "1");
+
+        const { error } = await supabase
+          .from("round_groups")
+          .update({
+            tee_time: nextTeeTime || null,
+            start_hole: nextStartHole,
+          })
+          .eq("id", g.id);
+
+        if (error) throw error;
+      }
+
+      setThsMsg("Saved tee times and starting holes.");
+      await loadTeeTimesAndStartingHoles(thsSelectedRoundId);
+    } catch (e: any) {
+      setThsError(e?.message ?? "Failed to save tee times and starting holes.");
+    } finally {
+      setThsSaving(false);
     }
   }
 
@@ -905,7 +1014,6 @@ export default function MobileTourAdminPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">Tour Admin</div>
@@ -922,8 +1030,7 @@ export default function MobileTourAdminPage() {
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
         ) : (
           <>
-            {/* Chooser row */}
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => {
@@ -949,22 +1056,8 @@ export default function MobileTourAdminPage() {
               <button
                 type="button"
                 onClick={() => {
-                  setActiveSection("tee");
-                  setShowScoreEntryLayout(false);
-                }}
-                className={`${chooserBtnBase} ${activeSection === "tee" ? chooserBtnActive : chooserBtnIdle}`}
-              >
-                Tee time groups
-              </button>
-            </div>
-
-            {/* ✅ New button directly under first top button (left aligned) */}
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => {
                   setShowScoreEntryLayout((v) => !v);
-                  setActiveSection(null); // keep only one “section” open at a time
+                  setActiveSection(null);
                   setLayoutMsg("");
                   setLayoutErr("");
                 }}
@@ -972,11 +1065,32 @@ export default function MobileTourAdminPage() {
               >
                 Score entry layout
               </button>
-              <div />
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveSection("groupings");
+                  setShowScoreEntryLayout(false);
+                }}
+                className={`${chooserBtnBase} ${activeSection === "groupings" ? chooserBtnActive : chooserBtnIdle}`}
+              >
+                Daily Groupings
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveSection("teeTimes");
+                  setShowScoreEntryLayout(false);
+                }}
+                className={`${chooserBtnBase} ${activeSection === "teeTimes" ? chooserBtnActive : chooserBtnIdle}`}
+              >
+                Tee times &amp; starting holes
+              </button>
+
               <div />
             </div>
 
-            {/* ✅ Collapsible layout toggle section */}
             {showScoreEntryLayout ? (
               <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                 <div className="p-4 border-b">
@@ -1025,7 +1139,6 @@ export default function MobileTourAdminPage() {
               </section>
             ) : null}
 
-            {/* Existing section rendering (unchanged) */}
             {activeSection === null ? null : activeSection === "starting" ? (
               <>
                 <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
@@ -1235,17 +1348,16 @@ export default function MobileTourAdminPage() {
                   )}
                 </div>
               </section>
-            ) : (
+            ) : activeSection === "groupings" ? (
               <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                 <div className="p-4 border-b">
-                  <div className="text-sm font-semibold text-gray-900">Tee time groups (manual)</div>
+                  <div className="text-sm font-semibold text-gray-900">Daily Groupings</div>
                   <div className="mt-1 text-xs text-gray-600">
-                    Build tee-time <span className="font-semibold">groupings</span> for a round (group order + player order). Last saved wins.
+                    Build daily groupings for a round (group order + player order). Last saved wins.
                   </div>
                 </div>
 
                 <div className="p-4 space-y-3">
-                  {/* Round selector */}
                   <div className="space-y-2">
                     <label className="block text-xs font-semibold text-gray-700" htmlFor="ttRoundSelect">
                       Select round
@@ -1273,7 +1385,7 @@ export default function MobileTourAdminPage() {
 
                     {!ttSelectedRoundId ? (
                       <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                        Choose a round to load/edit tee-time groups.
+                        Choose a round to load/edit daily groupings.
                       </div>
                     ) : null}
                   </div>
@@ -1288,7 +1400,6 @@ export default function MobileTourAdminPage() {
 
                   {ttMsg ? <div className="text-sm text-green-700">{ttMsg}</div> : null}
 
-                  {/* Controls row */}
                   <div className="flex items-center justify-between gap-3">
                     <button
                       type="button"
@@ -1309,7 +1420,6 @@ export default function MobileTourAdminPage() {
                     </button>
                   </div>
 
-                  {/* Unassigned */}
                   {ttSelectedRoundId ? (
                     <div className="rounded-2xl border border-gray-200 bg-white">
                       <div className="p-3 border-b bg-gray-50 rounded-t-2xl">
@@ -1384,7 +1494,6 @@ export default function MobileTourAdminPage() {
                     </div>
                   ) : null}
 
-                  {/* Groups */}
                   {ttSelectedRoundId ? (
                     <div className="space-y-3">
                       {ttGroups.length === 0 ? (
@@ -1499,6 +1608,132 @@ export default function MobileTourAdminPage() {
                           })
                       )}
                     </div>
+                  ) : null}
+                </div>
+              </section>
+            ) : (
+              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                <div className="p-4 border-b">
+                  <div className="text-sm font-semibold text-gray-900">Tee times &amp; starting holes</div>
+                  <div className="mt-1 text-xs text-gray-600">
+                    Choose a round and edit the tee time and starting hole for each saved group.
+                  </div>
+                </div>
+
+                <div className="p-4 space-y-3">
+                  <div className="space-y-2">
+                    <label className="block text-xs font-semibold text-gray-700" htmlFor="thsRoundSelect">
+                      Select round
+                    </label>
+                    <select
+                      id="thsRoundSelect"
+                      className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                      value={thsSelectedRoundId}
+                      onChange={(e) => {
+                        const rid = e.target.value;
+                        setThsError("");
+                        setThsMsg("");
+                        setThsSelectedRoundId(rid);
+                        setThsGroups([]);
+                        setThsTeeTimeByGroupId({});
+                        setThsStartHoleByGroupId({});
+                        if (rid && isLikelyUuid(rid)) void loadTeeTimesAndStartingHoles(rid);
+                      }}
+                    >
+                      <option value="">Select a round…</option>
+                      {roundOptions.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {roundLabel(r)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {thsLoading ? (
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                      Loading tee times and starting holes…
+                    </div>
+                  ) : null}
+
+                  {thsError ? (
+                    <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{thsError}</div>
+                  ) : null}
+
+                  {thsMsg ? <div className="text-sm text-green-700">{thsMsg}</div> : null}
+
+                  {!thsSelectedRoundId ? (
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                      Choose a round to edit tee times and starting holes.
+                    </div>
+                  ) : thsGroups.length === 0 && !thsLoading ? (
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                      No groups exist for this round yet.
+                    </div>
+                  ) : null}
+
+                  {thsGroups.length > 0 ? (
+                    <>
+                      <div className="space-y-3">
+                        {thsGroups
+                          .slice()
+                          .sort((a, b) => a.group_no - b.group_no)
+                          .map((g) => (
+                            <div key={g.id} className="rounded-2xl border border-gray-200 bg-white p-3 space-y-3">
+                              <div className="text-sm font-semibold text-gray-900">Group {g.group_no}</div>
+
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <div className="text-xs font-semibold text-gray-700 mb-1">Tee time</div>
+                                  <input
+                                    type="time"
+                                    value={thsTeeTimeByGroupId[g.id] ?? ""}
+                                    onChange={(e) =>
+                                      setThsTeeTimeByGroupId((prev) => ({
+                                        ...prev,
+                                        [g.id]: normalizeTimeInput(e.target.value),
+                                      }))
+                                    }
+                                    disabled={thsSaving}
+                                    className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                                  />
+                                </div>
+
+                                <div>
+                                  <div className="text-xs font-semibold text-gray-700 mb-1">Starting hole</div>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={18}
+                                    step={1}
+                                    value={thsStartHoleByGroupId[g.id] ?? "1"}
+                                    onChange={(e) =>
+                                      setThsStartHoleByGroupId((prev) => ({
+                                        ...prev,
+                                        [g.id]: e.target.value,
+                                      }))
+                                    }
+                                    disabled={thsSaving}
+                                    className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="text-xs text-gray-600">Default starting hole is 1.</div>
+                            </div>
+                          ))}
+                      </div>
+
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => void saveTeeTimesAndStartingHoles()}
+                          disabled={thsSaving || thsLoading}
+                          className={smallBtnPrimary}
+                        >
+                          {thsSaving ? "Saving…" : "Save tee times & starting holes"}
+                        </button>
+                      </div>
+                    </>
                   ) : null}
                 </div>
               </section>
