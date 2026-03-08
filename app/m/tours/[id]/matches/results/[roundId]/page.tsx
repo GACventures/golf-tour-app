@@ -194,7 +194,7 @@ function renderLiveText(args: { diff: number; thru: number; leftLabel: string; r
 function renderFinalText(args: { diff: number; decidedAt: number | null; leftLabel: string; rightLabel: string }) {
   const { diff, decidedAt, leftLabel, rightLabel } = args;
 
-  if (diff === 0) return "All Square";
+  if (diff === 0) return `${leftLabel} tied with ${rightLabel}`;
 
   const winnerLabel = diff > 0 ? leftLabel : rightLabel;
   const loserLabel = diff > 0 ? rightLabel : leftLabel;
