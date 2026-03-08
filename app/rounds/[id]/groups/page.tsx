@@ -224,6 +224,10 @@ function normalizeTimeInput(v: string) {
   return s ? s.slice(0, 5) : "";
 }
 
+function sortGroupsByNo(list: RoundGroup[]) {
+  return [...list].sort((a, b) => a.group_no - b.group_no);
+}
+
 export default function RoundGroupsPage() {
   const params = useParams();
   const roundId = String((params as any)?.id ?? "").trim();
@@ -243,13 +247,13 @@ export default function RoundGroupsPage() {
 
   const [tourRounds, setTourRounds] = useState<{ id: string; name: string | null; created_at: string | null }[]>([]);
 
-  // NEW: manual group assignment UI state
   const [selectedGroupId, setSelectedGroupId] = useState<string>("");
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>("");
 
-  // NEW: tee time editor state
   const [teeTimeDraftByGroup, setTeeTimeDraftByGroup] = useState<Record<string, string>>({});
   const [teeTimeSavingByGroup, setTeeTimeSavingByGroup] = useState<Record<string, boolean>>({});
+  const [creatingEmptyGroup, setCreatingEmptyGroup] = useState(false);
+  const [deletingGroupId, setDeletingGroupId] = useState<string>("");
 
   const rpByPlayerId = useMemo(() => {
     const m = new Map<string, RoundPlayer>();
@@ -309,14 +313,12 @@ export default function RoundGroupsPage() {
     return m;
   }, [members]);
 
-  // NEW: who is already assigned to ANY group for this round
   const assignedPlayerIdSet = useMemo(() => {
     const s = new Set<string>();
     for (const m of members) s.add(m.player_id);
     return s;
   }, [members]);
 
-  // NEW: list of playing players not in any group
   const unassignedPlaying = useMemo(() => {
     const list = playingPlayers.filter((p) => !assignedPlayerIdSet.has(p.id));
     list.sort((a, b) => a.name.localeCompare(b.name));
@@ -408,6 +410,7 @@ export default function RoundGroupsPage() {
         .eq("round_id", roundId)
         .order("group_no", { ascending: true });
       if (gErr) throw gErr;
+
       const loadedGroups = (gData ?? []) as RoundGroup[];
       setGroups(loadedGroups);
 
@@ -426,7 +429,6 @@ export default function RoundGroupsPage() {
       if (mErr) throw mErr;
       setMembers((mData ?? []) as RoundGroupPlayer[]);
 
-      // Tour pairs (optional)
       const tourId = (roundData as any)?.tour_id as string | null | undefined;
       if (tourId) {
         const { data: tg, error: tgErr } = await supabase
@@ -473,8 +475,7 @@ export default function RoundGroupsPage() {
         setTourPairs([]);
       }
 
-      // keep selection valid
-      if (gData?.length && !selectedGroupId) setSelectedGroupId(String((gData as any[])[0].id));
+      if (loadedGroups.length && !selectedGroupId) setSelectedGroupId(String(loadedGroups[0].id));
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Failed to load groups.");
     } finally {
@@ -682,8 +683,6 @@ export default function RoundGroupsPage() {
     await persistGeneratedGroups(gen, "Auto: Final round (leaderboard-seeded)");
   }
 
-  // ===== NEW: add/remove handlers =====
-
   async function removeMember(mem: RoundGroupPlayer) {
     setBusy(true);
     setErrorMsg("");
@@ -720,7 +719,6 @@ export default function RoundGroupsPage() {
       return;
     }
 
-    // must be playing + unassigned
     if (!unassignedPlaying.some((p) => p.id === selectedPlayerId)) {
       setErrorMsg("That player is not available to add (not playing or already assigned).");
       return;
@@ -770,6 +768,82 @@ export default function RoundGroupsPage() {
       setErrorMsg(e?.message ?? "Failed to save tee time.");
     } finally {
       setTeeTimeSavingByGroup((prev) => ({ ...prev, [groupId]: false }));
+    }
+  }
+
+  async function createEmptyGroup() {
+    setErrorMsg("");
+    setInfoMsg("");
+    setCreatingEmptyGroup(true);
+
+    try {
+      const nextGroupNo = groups.length > 0 ? Math.max(...groups.map((g) => Number(g.group_no) || 0)) + 1 : 1;
+
+      const { data, error } = await supabase
+        .from("round_groups")
+        .insert({
+          round_id: roundId,
+          group_no: nextGroupNo,
+          start_hole: 1,
+          tee_time: null,
+          notes: "Manual: Empty group",
+        })
+        .select("id,round_id,group_no,tee_time,start_hole,notes")
+        .single();
+
+      if (error) throw error;
+
+      const newGroup = data as RoundGroup;
+      setGroups((prev) => sortGroupsByNo([...prev, newGroup]));
+      setTeeTimeDraftByGroup((prev) => ({
+        ...prev,
+        [newGroup.id]: normalizeTimeInput(newGroup.tee_time ?? ""),
+      }));
+      setSelectedGroupId(newGroup.id);
+      setInfoMsg(`Created Group ${newGroup.group_no}.`);
+    } catch (e: any) {
+      setErrorMsg(e?.message ?? "Failed to create empty group.");
+    } finally {
+      setCreatingEmptyGroup(false);
+    }
+  }
+
+  async function deleteEmptyGroup(group: RoundGroup) {
+    setErrorMsg("");
+    setInfoMsg("");
+    setDeletingGroupId(group.id);
+
+    try {
+      const groupMembers = membersByGroup.get(group.id) ?? [];
+      if (groupMembers.length > 0) {
+        throw new Error("Only empty groups can be deleted here. Remove players first.");
+      }
+
+      const { error: delErr } = await supabase.from("round_groups").delete().eq("id", group.id);
+      if (delErr) throw delErr;
+
+      const remaining = sortGroupsByNo(groups.filter((g) => g.id !== group.id));
+
+      for (let i = 0; i < remaining.length; i++) {
+        const desiredNo = i + 1;
+        const g = remaining[i];
+        if (g.group_no !== desiredNo) {
+          const { error: updErr } = await supabase.from("round_groups").update({ group_no: desiredNo }).eq("id", g.id);
+          if (updErr) throw updErr;
+          g.group_no = desiredNo;
+        }
+      }
+
+      setGroups([...remaining]);
+      setSelectedGroupId((prev) => {
+        if (prev !== group.id) return prev;
+        return remaining[0]?.id ?? "";
+      });
+      setInfoMsg(`Deleted Group ${group.group_no}.`);
+    } catch (e: any) {
+      setErrorMsg(e?.message ?? "Failed to delete group.");
+    } finally {
+      setDeletingGroupId("");
     }
   }
 
@@ -861,7 +935,7 @@ export default function RoundGroupsPage() {
         </div>
 
         <div className="text-xs opacity-60">
-          Generating clears any existing groups for this round and regenerates them. You can also manually add/remove players below.
+          Generating clears any existing groups for this round and regenerates them. You can also manually create empty groups, assign players, and set tee times below.
         </div>
       </section>
 
@@ -869,13 +943,22 @@ export default function RoundGroupsPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="font-semibold">Manual group changes</div>
-            <div className="text-sm opacity-70">Add unassigned playing players to a group, or remove a player from a group.</div>
+            <div className="text-sm opacity-70">Create empty groups, add unassigned playing players to a group, or remove a player from a group.</div>
           </div>
-          <div className="text-sm opacity-70">Unassigned: {unassignedPlaying.length}</div>
+          <div className="flex items-center gap-2">
+            <div className="text-sm opacity-70">Unassigned: {unassignedPlaying.length}</div>
+            <button
+              onClick={() => void createEmptyGroup()}
+              disabled={busy || creatingEmptyGroup}
+              className="rounded-xl border px-4 py-2 text-sm"
+            >
+              {creatingEmptyGroup ? "Creating…" : "Add empty group"}
+            </button>
+          </div>
         </div>
 
         {groups.length === 0 ? (
-          <div className="text-sm opacity-70">Create groups first (generate above), then you can add/remove players.</div>
+          <div className="text-sm opacity-70">No groups yet. You can create an empty group now, or use auto-generate above.</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="md:col-span-1">
@@ -887,7 +970,7 @@ export default function RoundGroupsPage() {
                 disabled={busy}
               >
                 <option value="">Select group…</option>
-                {groups.map((g) => (
+                {sortGroupsByNo(groups).map((g) => (
                   <option key={g.id} value={g.id}>
                     Group {g.group_no}
                   </option>
@@ -932,13 +1015,14 @@ export default function RoundGroupsPage() {
         </div>
 
         {groups.length === 0 ? (
-          <div className="text-sm opacity-70">No groups yet. Use the buttons above to generate.</div>
+          <div className="text-sm opacity-70">No groups yet. Use the buttons above to generate or create empty groups.</div>
         ) : (
           <div className="space-y-3">
-            {groups.map((g) => {
+            {sortGroupsByNo(groups).map((g) => {
               const mem = membersByGroup.get(g.id) ?? [];
               const teeDraft = teeTimeDraftByGroup[g.id] ?? "";
               const teeSaving = teeTimeSavingByGroup[g.id] === true;
+              const deletingThisGroup = deletingGroupId === g.id;
 
               return (
                 <div key={g.id} className="rounded-2xl border p-4">
@@ -949,6 +1033,18 @@ export default function RoundGroupsPage() {
                         Start hole: {g.start_hole} · Tee time: {g.tee_time ?? "—"} · Members: {mem.length} · Note: {g.notes ?? "—"}
                       </div>
                     </div>
+
+                    {mem.length === 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => void deleteEmptyGroup(g)}
+                        disabled={deletingThisGroup}
+                        className="rounded-xl border px-3 py-2 text-sm text-red-700 disabled:opacity-50"
+                        title="Delete empty group"
+                      >
+                        {deletingThisGroup ? "Deleting…" : "Delete group"}
+                      </button>
+                    ) : null}
                   </div>
 
                   <div className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border p-3 bg-slate-50">
@@ -979,7 +1075,7 @@ export default function RoundGroupsPage() {
                   </div>
 
                   <div className="mt-3 space-y-2">
-                    {mem.length === 0 ? <div className="text-sm opacity-60">No members.</div> : null}
+                    {mem.length === 0 ? <div className="text-sm opacity-60">No members yet.</div> : null}
 
                     {mem.map((m) => {
                       const name = playerNameById.get(m.player_id) ?? m.player_id;

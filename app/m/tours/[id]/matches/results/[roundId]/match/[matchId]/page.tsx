@@ -210,7 +210,7 @@ function renderLiveSummary(args: { diff: number; thru: number; leftLabel: string
 function renderFinalSummary(args: { diff: number; decidedAt: number | null; leftLabel: string; rightLabel: string }) {
   const { diff, decidedAt, leftLabel, rightLabel } = args;
 
-  if (diff === 0) return "All Square";
+  if (diff === 0) return `${leftLabel} tied with ${rightLabel}`;
 
   const winnerLabel = diff > 0 ? leftLabel : rightLabel;
   const loserLabel = diff > 0 ? rightLabel : leftLabel;
@@ -685,7 +685,6 @@ export default function MatchDetailPage() {
           <>
             <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
               <div className="p-4 border-b space-y-2">
-                {/* ✅ UPDATED: split "Match summary" onto its own row, add spacing, then show result on next row */}
                 <div className="text-sm font-semibold text-gray-900 space-y-2">
                   <div>Match summary</div>
                   <div className="font-semibold text-gray-900">{topSummaryText || "Not started"}</div>
