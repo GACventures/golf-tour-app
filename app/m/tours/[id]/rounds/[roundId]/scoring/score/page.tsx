@@ -174,6 +174,7 @@ export default function MobileScoreEntryPage() {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
+  const [submitMsg, setSubmitMsg] = useState("");
 
   const [hole, setHole] = useState(1);
   const [tab, setTab] = useState<TabKey>("entry");
@@ -221,6 +222,57 @@ export default function MobileScoreEntryPage() {
         clearPulseTimer();
       }, PULSE_DOWN_MS);
     }, PULSE_UP_MS + PULSE_HOLD_MS);
+  }
+
+  function clearTransientMessages() {
+    setSaveErr("");
+    setSavedMsg("");
+    setSubmitMsg("");
+  }
+
+  function getMissingMeHoles(): number[] {
+    if (!meId) return [];
+    const missing: number[] = [];
+
+    for (let h = 1; h <= 18; h++) {
+      const raw = normalizeRawInput(scores?.[meId]?.[h] ?? "");
+      if (!raw) missing.push(h);
+    }
+
+    return missing;
+  }
+
+  function formatMissingHolesMessage(missingHoles: number[]): string {
+    if (missingHoles.length === 1) {
+      return `Cannot submit score: hole ${missingHoles[0]} is missing`;
+    }
+    return `Cannot submit score: holes ${missingHoles.join(", ")} are missing`;
+  }
+
+  async function handleSubmitScore() {
+    clearTransientMessages();
+
+    if (isLocked) {
+      setSaveErr("Round is locked.");
+      return;
+    }
+
+    if (!meId) {
+      setSaveErr("Missing meId. Go back and reselect Me.");
+      return;
+    }
+
+    const missingHoles = getMissingMeHoles();
+    if (missingHoles.length > 0) {
+      setSubmitMsg(formatMissingHolesMessage(missingHoles));
+      return;
+    }
+
+    const ok = await saveAll();
+    if (ok) {
+      setSubmitMsg("Score submitted");
+      setSavedMsg("");
+    }
   }
 
   // Lock page scroll/bounce for this screen only (focus mode)
@@ -322,6 +374,7 @@ export default function MobileScoreEntryPage() {
       setErrorMsg("");
       setSaveErr("");
       setSavedMsg("");
+      setSubmitMsg("");
 
       try {
         // Round
@@ -500,6 +553,7 @@ export default function MobileScoreEntryPage() {
   function setRaw(pid: string, holeNumber: number, raw: string) {
     const norm = normalizeRawInput(raw);
     setScores((prev) => ({ ...prev, [pid]: { ...(prev[pid] ?? {}), [holeNumber]: norm } }));
+    setSubmitMsg("");
   }
 
   function adjustStrokes(pid: string, holeNumber: number, delta: number) {
@@ -785,6 +839,7 @@ export default function MobileScoreEntryPage() {
     if (!pid) return;
     setSummaryPid(pid);
     setTab("summary");
+    setSubmitMsg("");
   }
 
   function SummaryPlayerToggleTop() {
@@ -799,7 +854,10 @@ export default function MobileScoreEntryPage() {
             <div className="mt-2 inline-flex rounded-md overflow-hidden border border-slate-300">
               <button
                 type="button"
-                onClick={() => setSummaryPid(meId)}
+                onClick={() => {
+                  setSummaryPid(meId);
+                  setSubmitMsg("");
+                }}
                 className={`px-4 py-2 text-base font-bold ${
                   summaryPid === meId ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
                 }`}
@@ -810,7 +868,10 @@ export default function MobileScoreEntryPage() {
               {hasBuddy ? (
                 <button
                   type="button"
-                  onClick={() => setSummaryPid(buddyId)}
+                  onClick={() => {
+                    setSummaryPid(buddyId);
+                    setSubmitMsg("");
+                  }}
                   className={`px-4 py-2 text-base font-bold ${
                     summaryPid === buddyId ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
                   }`}
@@ -1082,6 +1143,7 @@ export default function MobileScoreEntryPage() {
 
   const meOkNow = !!meId && playingIds.includes(meId);
   const buddyOkNow = !buddyId || playingIds.includes(buddyId);
+  const showSubmitButton = tab === "summary" && summaryPid === meId;
 
   if (loading) {
     return <div className="mx-auto w-full max-w-md px-4 py-4 pb-24 text-sm opacity-70">Loading…</div>;
@@ -1154,14 +1216,20 @@ export default function MobileScoreEntryPage() {
         <div className="rounded-md border border-slate-300 overflow-hidden flex bg-white">
           <button
             type="button"
-            onClick={() => setTab("entry")}
+            onClick={() => {
+              setTab("entry");
+              setSubmitMsg("");
+            }}
             className={`flex-1 py-2 text-sm font-semibold ${tab === "entry" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}
           >
             Entry
           </button>
           <button
             type="button"
-            onClick={() => setTab("summary")}
+            onClick={() => {
+              setTab("summary");
+              setSubmitMsg("");
+            }}
             className={`flex-1 py-2 text-sm font-semibold ${tab === "summary" ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"}`}
           >
             Summary
@@ -1192,13 +1260,37 @@ export default function MobileScoreEntryPage() {
 
             {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
 
-            {/* spacer so content doesn't feel cramped above bottom bar */}
             <div className="h-20" />
           </div>
         ) : (
           <>
             <SummaryTable />
+
+            {showSubmitButton ? (
+              <div className="pt-2">
+                <div className="flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => void handleSubmitScore()}
+                    disabled={saving || isLocked}
+                    className={`w-full max-w-md rounded-xl px-4 py-3 text-base font-extrabold text-white active:scale-[0.99] ${
+                      saving || isLocked ? "bg-slate-500" : "bg-slate-900"
+                    }`}
+                  >
+                    {saving ? "Submitting…" : isLocked ? "Locked" : "Submit Score"}
+                  </button>
+                </div>
+
+                {submitMsg ? (
+                  <div className={`mt-3 text-sm text-center font-semibold ${submitMsg === "Score submitted" ? "text-green-700" : "text-red-600"}`}>
+                    {submitMsg}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
+            {saveErr ? <div className="text-sm text-red-600 text-center">{saveErr}</div> : null}
             <div className="h-20" />
           </>
         )}
