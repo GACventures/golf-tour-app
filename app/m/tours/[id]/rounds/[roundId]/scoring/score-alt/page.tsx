@@ -187,6 +187,7 @@ export default function MobileScoreEntryAltPage() {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
+  const [submitMsg, setSubmitMsg] = useState("");
 
   const [hole, setHole] = useState(1);
   const [tab, setTab] = useState<TabKey>("entry");
@@ -235,6 +236,64 @@ export default function MobileScoreEntryAltPage() {
         clearPulseTimer();
       }, PULSE_DOWN_MS);
     }, PULSE_UP_MS + PULSE_HOLD_MS);
+  }
+
+  function clearTransientMessages() {
+    setSaveErr("");
+    setSavedMsg("");
+    setSubmitMsg("");
+  }
+
+  function getMissingMeHoles(): number[] {
+    if (!meId) return [];
+    const missing: number[] = [];
+
+    for (let h = 1; h <= 18; h++) {
+      const raw = normalizeRawInput(scores?.[meId]?.[h] ?? "");
+      if (!raw) missing.push(h);
+    }
+
+    return missing;
+  }
+
+  function formatMissingHolesMessage(missingHoles: number[]): string {
+    if (missingHoles.length === 1) {
+      return `Cannot submit score: hole ${missingHoles[0]} is missing`;
+    }
+    return `Cannot submit score: holes ${missingHoles.join(", ")} are missing`;
+  }
+
+  async function handleSubmitScore() {
+    clearTransientMessages();
+
+    if (isLocked) {
+      setSaveErr("Round is locked.");
+      return;
+    }
+
+    if (!meId) {
+      setSaveErr("Missing meId. Go back and reselect Me.");
+      return;
+    }
+
+    const missingHoles = getMissingMeHoles();
+    if (missingHoles.length > 0) {
+      setSubmitMsg(formatMissingHolesMessage(missingHoles));
+      return;
+    }
+
+    const ok = await saveAll();
+    if (ok) {
+      setSubmitMsg("Score submitted");
+      setSavedMsg("");
+    }
+  }
+
+  function openMeSummary() {
+    if (!meId) return;
+    setSummaryPid(meId);
+    setTab("summary");
+    setSubmitMsg("");
   }
 
   // Lock page scroll/bounce for this screen only
@@ -325,6 +384,7 @@ export default function MobileScoreEntryAltPage() {
       setErrorMsg("");
       setSaveErr("");
       setSavedMsg("");
+      setSubmitMsg("");
 
       try {
         // Round
@@ -504,6 +564,7 @@ export default function MobileScoreEntryAltPage() {
   function setRaw(pid: string, holeNumber: number, raw: string) {
     const norm = normalizeRawInput(raw);
     setScores((prev) => ({ ...prev, [pid]: { ...(prev[pid] ?? {}), [holeNumber]: norm } }));
+    setSubmitMsg("");
   }
 
   function togglePickup(pid: string, holeNumber: number) {
@@ -713,6 +774,11 @@ export default function MobileScoreEntryAltPage() {
     if (tab !== "entry") return;
     if (holeFx.stage !== "idle") return;
 
+    if (dir === "next" && hole === 18) {
+      openMeSummary();
+      return;
+    }
+
     const nextHole = clamp(hole + (dir === "next" ? 1 : -1), 1, 18);
     if (nextHole === hole) return;
 
@@ -781,6 +847,7 @@ export default function MobileScoreEntryAltPage() {
     if (!pid) return;
     setSummaryPid(pid);
     setTab("summary");
+    setSubmitMsg("");
   }
 
   // --- keypad input (ALT) ---
@@ -867,7 +934,10 @@ export default function MobileScoreEntryAltPage() {
             <div className="mt-2 inline-flex rounded-md overflow-hidden border border-slate-300">
               <button
                 type="button"
-                onClick={() => setSummaryPid(meId)}
+                onClick={() => {
+                  setSummaryPid(meId);
+                  setSubmitMsg("");
+                }}
                 className={`px-4 py-2 text-base font-bold ${
                   summaryPid === meId ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
                 }`}
@@ -878,7 +948,10 @@ export default function MobileScoreEntryAltPage() {
               {hasBuddy ? (
                 <button
                   type="button"
-                  onClick={() => setSummaryPid(buddyId)}
+                  onClick={() => {
+                    setSummaryPid(buddyId);
+                    setSubmitMsg("");
+                  }}
                   className={`px-4 py-2 text-base font-bold ${
                     summaryPid === buddyId ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-900"
                   }`}
@@ -1152,6 +1225,7 @@ export default function MobileScoreEntryAltPage() {
 
   const meOkNow = !!meId && playingIds.includes(meId);
   const buddyOkNow = !buddyId || playingIds.includes(buddyId);
+  const showSubmitButton = tab === "summary" && summaryPid === meId;
 
   if (loading) {
     return <div className="mx-auto w-full max-w-md px-4 py-4 pb-24 text-sm opacity-70">Loading…</div>;
@@ -1198,7 +1272,8 @@ export default function MobileScoreEntryAltPage() {
 
   const navDisabled = tab !== "entry" || holeFx.stage !== "idle";
   const canPrev = !navDisabled && hole > 1;
-  const canNext = !navDisabled && hole < 18;
+  const canNextOrSummary = !navDisabled;
+  const nextButtonLabel = hole === 18 ? "Summary" : "Next hole";
 
   return (
     <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden flex flex-col">
@@ -1246,13 +1321,37 @@ export default function MobileScoreEntryAltPage() {
 
             {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
 
-            {/* spacer so content doesn't feel cramped above bottom bar */}
             <div className="h-20" />
           </div>
         ) : (
           <>
             <SummaryTable />
+
+            {showSubmitButton ? (
+              <div className="pt-2">
+                <div className="flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => void handleSubmitScore()}
+                    disabled={saving || isLocked}
+                    className={`w-full max-w-md rounded-xl px-4 py-3 text-base font-extrabold text-white active:scale-[0.99] ${
+                      saving || isLocked ? "bg-slate-500" : "bg-slate-900"
+                    }`}
+                  >
+                    {saving ? "Submitting…" : isLocked ? "Locked" : "Submit Score"}
+                  </button>
+                </div>
+
+                {submitMsg ? (
+                  <div className={`mt-3 text-sm text-center font-semibold ${submitMsg === "Score submitted" ? "text-green-700" : "text-red-600"}`}>
+                    {submitMsg}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {errorMsg ? <div className="text-sm text-red-600 text-center">{errorMsg}</div> : null}
+            {saveErr ? <div className="text-sm text-red-600 text-center">{saveErr}</div> : null}
             <div className="h-20" />
           </>
         )}
@@ -1281,13 +1380,13 @@ export default function MobileScoreEntryAltPage() {
               <button
                 type="button"
                 onClick={() => void handleSwipe("next")}
-                disabled={!canNext}
+                disabled={!canNextOrSummary}
                 className={[
                   "flex-1 rounded-xl border px-3 py-2 text-sm font-extrabold active:scale-[0.99] disabled:opacity-50",
                   "bg-slate-900 text-white border-slate-900",
                 ].join(" ")}
               >
-                Next hole
+                {nextButtonLabel}
               </button>
             </div>
           </div>
