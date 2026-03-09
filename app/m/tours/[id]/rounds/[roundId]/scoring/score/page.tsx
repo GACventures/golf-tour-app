@@ -275,6 +275,13 @@ export default function MobileScoreEntryPage() {
     }
   }
 
+  function openMeSummary() {
+    if (!meId) return;
+    setSummaryPid(meId);
+    setTab("summary");
+    setSubmitMsg("");
+  }
+
   // Lock page scroll/bounce for this screen only (focus mode)
   useEffect(() => {
     const html = document.documentElement;
@@ -771,6 +778,11 @@ export default function MobileScoreEntryPage() {
     if (tab !== "entry") return;
     if (holeFx.stage !== "idle") return;
 
+    if (dir === "next" && hole === 18) {
+      openMeSummary();
+      return;
+    }
+
     const nextHole = clamp(hole + (dir === "next" ? 1 : -1), 1, 18);
     if (nextHole === hole) return;
 
@@ -1190,7 +1202,8 @@ export default function MobileScoreEntryPage() {
 
   const navDisabled = tab !== "entry" || holeFx.stage !== "idle";
   const canPrev = !navDisabled && hole > 1;
-  const canNext = !navDisabled && hole < 18;
+  const canNextOrSummary = !navDisabled;
+  const nextButtonLabel = hole === 18 ? "Summary" : "Next hole";
 
   return (
     <div className="fixed inset-0 bg-white text-slate-900 overflow-hidden flex flex-col">
@@ -1319,13 +1332,13 @@ export default function MobileScoreEntryPage() {
               <button
                 type="button"
                 onClick={() => void handleSwipe("next")}
-                disabled={!canNext}
+                disabled={!canNextOrSummary}
                 className={[
                   "flex-1 rounded-xl border px-3 py-2 text-sm font-extrabold active:scale-[0.99] disabled:opacity-50",
                   "bg-slate-900 text-white border-slate-900",
                 ].join(" ")}
               >
-                Next hole
+                {nextButtonLabel}
               </button>
             </div>
           </div>
