@@ -1,4 +1,3 @@
-// app/m/tours/[id]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
@@ -38,6 +37,9 @@ const JAPAN_HERO = "/tours/japan-poster_mobile_1080w.webp";
 
 const PORTUGAL_TOUR_ID = "b5e5b90d-0ae5-4be5-a3cd-3ef1c73cb6b5";
 const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
+
+const SCOTLAND_TOUR_ID = "207a93c7-70fb-4969-9ef1-6ad844e556c5";
+const SCOTLAND_HERO = "/tours/scotland_golf_trip_mobile.webp";
 
 const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
 const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
@@ -183,7 +185,7 @@ export default function MobileTourLandingPage() {
     vy: number;
     lastMoveT: number;
     lastMid: Pt;
-  }>( {
+  }>({
     mode: "none",
     startScale: 1,
     startTx: 0,
@@ -250,6 +252,7 @@ export default function MobileTourLandingPage() {
 
   const heroImage = useMemo(() => {
     if (tourId === NZ_TOUR_2026_ID) return NZ_TOUR_2026_HERO;
+    if (tourId === SCOTLAND_TOUR_ID) return SCOTLAND_HERO;
     if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
     if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
     if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
@@ -339,7 +342,6 @@ export default function MobileTourLandingPage() {
     };
   }, []);
 
-  // --- render with fixed CSS size, variable internal resolution ---
   const renderPageAtQuality = useCallback(
     async (quality: number) => {
       const page = pdfPageRef.current;
@@ -347,11 +349,7 @@ export default function MobileTourLandingPage() {
       if (!page || !canvas) return;
 
       const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-
-      // baseCssScale defines the CSS “world” size. It never changes after open.
       const baseCssScale = baseCssScaleRef.current;
-
-      // renderScale controls bitmap resolution. Higher = sharper, but heavier.
       const renderScale = baseCssScale * quality * dpr;
 
       setRendering(true);
@@ -359,11 +357,9 @@ export default function MobileTourLandingPage() {
         const viewport = page.getViewport({ scale: renderScale });
         const ctx = canvas.getContext("2d")!;
 
-        // Internal bitmap size
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
 
-        // Keep CSS size fixed to the “world” size (no overshoot!)
         const cssW = worldWRef.current;
         const cssH = worldHRef.current;
         canvas.style.width = `${cssW}px`;
@@ -374,7 +370,6 @@ export default function MobileTourLandingPage() {
 
         lastQualityRef.current = quality;
 
-        // after a redraw, clamp translation (world size unchanged, but still safe)
         const clamped = clampToBounds(txRef.current, tyRef.current, scaleRef.current);
         txRef.current = clamped.tx;
         tyRef.current = clamped.ty;
@@ -392,8 +387,6 @@ export default function MobileTourLandingPage() {
     rerenderTimerRef.current = window.setTimeout(async () => {
       rerenderTimerRef.current = null;
 
-      // Decide desired quality from interactive scale (bigger zoom wants more quality)
-      // Clamp so we don't make enormous canvases on mobile.
       const desired = clamp(scaleRef.current, 1, 3);
 
       const last = lastQualityRef.current;
@@ -403,7 +396,7 @@ export default function MobileTourLandingPage() {
       try {
         await renderPageAtQuality(desired);
       } catch {
-        // ignore; open/close handles errors
+        // ignore
       }
     }, RERENDER_DEBOUNCE_MS);
   }, [clearRerenderTimer, renderPageAtQuality]);
@@ -451,7 +444,6 @@ export default function MobileTourLandingPage() {
         const page = await pdf.getPage(1);
         pdfPageRef.current = page;
 
-        // Choose a base CSS scale that fits width (world size)
         const vp = viewportRef.current;
         const vpW = vp?.clientWidth ?? 360;
 
@@ -459,16 +451,13 @@ export default function MobileTourLandingPage() {
         const baseCssScale = clamp((vpW - 24) / raw.width, 0.7, 1.6);
         baseCssScaleRef.current = baseCssScale;
 
-        // Set world size in CSS pixels based on baseCssScale
         const cssVp = page.getViewport({ scale: baseCssScale });
         worldWRef.current = cssVp.width;
         worldHRef.current = cssVp.height;
 
-        // Initial render at quality=1 (will render with dpr internally)
         lastQualityRef.current = 1;
         await renderPageAtQuality(1);
 
-        // Reset transform: center content
         if (vp) {
           const vw = vp.clientWidth;
           const vh = vp.clientHeight;
@@ -731,7 +720,6 @@ export default function MobileTourLandingPage() {
         const speed = Math.hypot(g.vx, g.vy);
         if (speed >= INERTIA_STOP_SPEED) startInertia();
 
-        // refine after release (no overshoot now)
         scheduleRefine();
       } else if (pts.length === 1) {
         g.mode = "pan";
@@ -785,7 +773,6 @@ export default function MobileTourLandingPage() {
     "bg-blue-600 text-white",
   ];
 
-  // ✅ Matchplay button handler (blocks navigation when inactive)
   const goMatchplay = useCallback(
     (path: string) => {
       if (!matchplayIsActive) {
@@ -818,15 +805,18 @@ export default function MobileTourLandingPage() {
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
         <div className="grid grid-cols-3 gap-2">
           <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>
-            Daily<br />
+            Daily
+            <br />
             Tee times
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>
-            Daily<br />
+            Daily
+            <br />
             Results
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>
-            Score<br />
+            Score
+            <br />
             Entry
           </button>
 
@@ -841,24 +831,29 @@ export default function MobileTourLandingPage() {
           </button>
 
           <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => goMatchplay(`/m/tours/${tourId}/matches/format`)}>
-            Matchplay<br />
+            Matchplay
+            <br />
             Format
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => goMatchplay(`/m/tours/${tourId}/matches/results`)}>
-            Matchplay<br />
+            Matchplay
+            <br />
             Results
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => goMatchplay(`/m/tours/${tourId}/matches/leaderboard`)}>
-            Matchplay<br />
+            Matchplay
+            <br />
             Leaderboard
           </button>
 
           <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>
-            Tour<br />
+            Tour
+            <br />
             Details
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>
-            Tour<br />
+            Tour
+            <br />
             Admin
           </button>
           <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>
@@ -892,9 +887,12 @@ export default function MobileTourLandingPage() {
             className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(3)}
           >
-            {openingDocIdx === 3 ? "Opening…" : (
+            {openingDocIdx === 3 ? (
+              "Opening…"
+            ) : (
               <>
-                Player<br />
+                Player
+                <br />
                 Profiles
               </>
             )}
@@ -912,7 +910,8 @@ export default function MobileTourLandingPage() {
             className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
             onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
           >
-            App<br />
+            App
+            <br />
             User Guide
           </button>
         </div>
@@ -964,7 +963,6 @@ export default function MobileTourLandingPage() {
         </div>
       )}
 
-      {/* ✅ Toast */}
       {toastMsg ? (
         <div className="fixed left-0 right-0 bottom-5 z-[60] flex items-center justify-center px-4">
           <div className="max-w-md w-full bg-white text-gray-900 border border-black/10 rounded-xl px-4 py-3 shadow-lg text-sm font-semibold">
