@@ -1088,7 +1088,19 @@ export default function MobileTourAdminPage() {
                 Tee times &amp; starting holes
               </button>
 
-              <div />
+              <button
+                type="button"
+                onClick={() =>
+                  window.open(
+                    "https://docs.google.com/forms/d/e/1FAIpQLSdXfAymktxiBVMJwFDlNs-aHZOaFcQhPeRyy-ipaq8OtevxQA/viewform",
+                    "_blank",
+                    "noopener,noreferrer"
+                  )
+                }
+                className={`${chooserBtnBase} ${chooserBtnIdle}`}
+              >
+                User survey
+              </button>
             </div>
 
             {showScoreEntryLayout ? (
