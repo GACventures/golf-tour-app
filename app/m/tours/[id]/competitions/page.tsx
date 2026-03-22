@@ -98,8 +98,8 @@ function fmt2(x: number) {
 }
 
 function fmtPct0(x: number) {
-  if (!Number.isFinite(x)) return "0%";
-  return `${x.toFixed(0)}%`;
+  if (!Number.isFinite(x)) return "0.0%";
+  return `${x.toFixed(1)}%`;
 }
 
 function rankWithTies(entries: Array<{ id: string; value: number }>, lowerIsBetter: boolean) {
