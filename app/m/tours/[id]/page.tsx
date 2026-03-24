@@ -11,8 +11,11 @@ type TourRow = {
   end_date: string | null;
   image_url?: string | null;
 
-  // ✅ NEW: tour-level matchplay toggle
+  // Existing
   matchplay_active?: boolean | null;
+
+  // New
+  hide_results?: boolean | null;
 };
 
 type RoundRow = {
@@ -52,18 +55,18 @@ const PDF_TOUR_ID = NZ_TOUR_2026_ID;
 const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
 const PDF_FILES = ["itinerary.pdf", "accommodation.pdf", "dining.pdf", "profiles.pdf", "comps.pdf"] as const;
 
-// ✅ NEW: matchplay inactive message
+// Existing
 const MATCHPLAY_INACTIVE_MESSAGE = "Matchplay events not active on this tour";
 
-// Interaction
+// New
+const ACCESS_DENIED_MESSAGE = "access denied";
+
 const MIN_SCALE = 0.6;
 const MAX_SCALE = 6.0;
 
-// Debounced refine
 const RERENDER_DEBOUNCE_MS = 140;
 const RERENDER_THRESHOLD_RATIO = 1.20;
 
-// Inertia
 const INERTIA_FRICTION = 0.92;
 const INERTIA_STOP_SPEED = 18;
 
@@ -106,6 +109,54 @@ function normalizePath(p: string) {
 
 type Pt = { x: number; y: number };
 
+type TileButtonProps = {
+  className: string;
+  onClick: () => void;
+  children: React.ReactNode;
+  blocked?: boolean;
+  blockedKey?: string;
+  deniedKey: string | null;
+  showDenied: (key: string) => void;
+};
+
+function TileButton({
+  className,
+  onClick,
+  children,
+  blocked = false,
+  blockedKey,
+  deniedKey,
+  showDenied,
+}: TileButtonProps) {
+  const isDeniedShowing = blocked && blockedKey != null && deniedKey === blockedKey;
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        className={`${className} ${blocked ? "relative overflow-hidden" : ""}`}
+        onClick={() => {
+          if (blocked && blockedKey) {
+            showDenied(blockedKey);
+            return;
+          }
+          onClick();
+        }}
+      >
+        {children}
+      </button>
+
+      {isDeniedShowing ? (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl bg-black/70 px-2">
+          <div className="rounded-lg bg-white/95 px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-gray-900 shadow">
+            {ACCESS_DENIED_MESSAGE}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function MobileTourLandingPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -116,9 +167,11 @@ export default function MobileTourLandingPage() {
   const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // ✅ lightweight toast (used for “doc not available” + “matchplay inactive”)
   const [toastMsg, setToastMsg] = useState<string>("");
   const toastTimerRef = useRef<number | null>(null);
+
+  const [deniedButtonKey, setDeniedButtonKey] = useState<string | null>(null);
+  const deniedTimerRef = useRef<number | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
@@ -129,50 +182,50 @@ export default function MobileTourLandingPage() {
     }, 1800);
   }, []);
 
+  const showDenied = useCallback((key: string) => {
+    setDeniedButtonKey(key);
+    if (deniedTimerRef.current != null) window.clearTimeout(deniedTimerRef.current);
+    deniedTimerRef.current = window.setTimeout(() => {
+      deniedTimerRef.current = null;
+      setDeniedButtonKey(null);
+    }, 1400);
+  }, []);
+
   useEffect(() => {
     return () => {
       if (toastTimerRef.current != null) window.clearTimeout(toastTimerRef.current);
+      if (deniedTimerRef.current != null) window.clearTimeout(deniedTimerRef.current);
     };
   }, []);
 
-  // PDF overlay state
   const [openingDocIdx, setOpeningDocIdx] = useState<number | null>(null);
   const [viewerTitle, setViewerTitle] = useState<string>("Document");
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const [rendering, setRendering] = useState<boolean>(false);
 
-  // PDF.js
   const pdfjsRef = useRef<any>(null);
   const [pdfjsReady, setPdfjsReady] = useState(false);
 
-  // DOM refs
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // PDF refs
   const pdfDocRef = useRef<any>(null);
   const pdfPageRef = useRef<any>(null);
 
-  // Transform refs (interactive “map”)
   const scaleRef = useRef<number>(1);
   const txRef = useRef<number>(0);
   const tyRef = useRef<number>(0);
 
-  // “World” size in CSS px (IMPORTANT: now stays constant)
   const worldWRef = useRef<number>(0);
   const worldHRef = useRef<number>(0);
 
-  // Base CSS fit scale (used to render consistent CSS size)
   const baseCssScaleRef = useRef<number>(1);
 
-  // Last quality render multiplier (so we don’t thrash)
   const lastQualityRef = useRef<number>(1);
 
-  // Debounce timer
   const rerenderTimerRef = useRef<number | null>(null);
 
-  // Pointers & gesture tracking
   const pointersRef = useRef<Map<number, Pt>>(new Map());
   const gestureRef = useRef<{
     mode: "none" | "pan" | "pinch";
@@ -227,7 +280,7 @@ export default function MobileTourLandingPage() {
       setLoading(true);
 
       const [{ data: t }, { data: r }, { data: d }] = await Promise.all([
-        supabase.from("tours").select("id,name,start_date,end_date,image_url,matchplay_active").eq("id", tourId).single(),
+        supabase.from("tours").select("id,name,start_date,end_date,image_url,matchplay_active,hide_results").eq("id", tourId).single(),
         supabase.from("rounds").select("id,tour_id,played_on").eq("tour_id", tourId),
         supabase
           .from("tour_documents")
@@ -270,8 +323,8 @@ export default function MobileTourLandingPage() {
   const end = parseDate(tour?.end_date || derivedDates.end);
   const dateLabel = formatTourDates(start, end);
 
-  // ✅ matchplay gate (default: allow unless explicitly false)
   const matchplayIsActive = tour?.matchplay_active === false ? false : true;
+  const resultsHidden = tour?.hide_results === true;
 
   const stopInertia = useCallback(() => {
     if (inertiaRafRef.current != null) {
@@ -784,6 +837,32 @@ export default function MobileTourLandingPage() {
     [matchplayIsActive, router, showToast]
   );
 
+  const goProtected = useCallback(
+    (buttonKey: string, path: string) => {
+      if (resultsHidden) {
+        showDenied(buttonKey);
+        return;
+      }
+      router.push(path);
+    },
+    [resultsHidden, router, showDenied]
+  );
+
+  const goProtectedMatchplay = useCallback(
+    (buttonKey: string, path: string) => {
+      if (resultsHidden) {
+        showDenied(buttonKey);
+        return;
+      }
+      if (!matchplayIsActive) {
+        showToast(MATCHPLAY_INACTIVE_MESSAGE);
+        return;
+      }
+      router.push(path);
+    },
+    [resultsHidden, matchplayIsActive, router, showDenied, showToast]
+  );
+
   return (
     <div className="min-h-dvh bg-black text-white">
       <div className="px-4 pt-4 pb-3 max-w-md mx-auto">
@@ -804,116 +883,223 @@ export default function MobileTourLandingPage() {
 
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
         <div className="grid grid-cols-3 gap-2">
-          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}>
-            Daily
-            <br />
-            Tee times
-          </button>
-          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=results`)}>
-            Daily
-            <br />
-            Results
-          </button>
-          <button type="button" className={`${baseBtn} ${rowColors[0]}`} onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}>
-            Score
-            <br />
-            Entry
-          </button>
+          <TileButton
+            className={`${baseBtn} ${rowColors[0]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
+          >
+            <>
+              Daily
+              <br />
+              Tee times
+            </>
+          </TileButton>
 
-          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/leaderboards`)}>
-            Leaderboards
-          </button>
-          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/competitions`)}>
-            Competitions
-          </button>
-          <button type="button" className={`${baseBtn} ${rowColors[1]}`} onClick={() => router.push(`/m/tours/${tourId}/stats`)}>
-            Stats
-          </button>
+          <TileButton
+            className={`${baseBtn} ${rowColors[0]}`}
+            onClick={() => goProtected("daily-results", `/m/tours/${tourId}/rounds?mode=results`)}
+            blocked={resultsHidden}
+            blockedKey="daily-results"
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
+          >
+            <>
+              Daily
+              <br />
+              Results
+            </>
+          </TileButton>
 
-          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => goMatchplay(`/m/tours/${tourId}/matches/format`)}>
-            Matchplay
-            <br />
-            Format
-          </button>
-          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => goMatchplay(`/m/tours/${tourId}/matches/results`)}>
-            Matchplay
-            <br />
-            Results
-          </button>
-          <button type="button" className={`${baseBtn} ${rowColors[2]}`} onClick={() => goMatchplay(`/m/tours/${tourId}/matches/leaderboard`)}>
-            Matchplay
-            <br />
-            Leaderboard
-          </button>
+          <TileButton
+            className={`${baseBtn} ${rowColors[0]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
+          >
+            <>
+              Score
+              <br />
+              Entry
+            </>
+          </TileButton>
 
-          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/details`)}>
-            Tour
-            <br />
-            Details
-          </button>
-          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}>
-            Tour
-            <br />
-            Admin
-          </button>
-          <button type="button" className={`${baseBtn} ${rowColors[3]}`} onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}>
-            Rehandicapping
-          </button>
+          <TileButton
+            className={`${baseBtn} ${rowColors[1]}`}
+            onClick={() => goProtected("leaderboards", `/m/tours/${tourId}/leaderboards`)}
+            blocked={resultsHidden}
+            blockedKey="leaderboards"
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
+          >
+            <>Leaderboards</>
+          </TileButton>
 
-          <button
-            type="button"
+          <TileButton
+            className={`${baseBtn} ${rowColors[1]}`}
+            onClick={() => goProtected("competitions", `/m/tours/${tourId}/competitions`)}
+            blocked={resultsHidden}
+            blockedKey="competitions"
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
+          >
+            <>Competitions</>
+          </TileButton>
+
+          <TileButton
+            className={`${baseBtn} ${rowColors[1]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/stats`)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
+          >
+            <>Stats</>
+          </TileButton>
+
+          <TileButton
+            className={`${baseBtn} ${rowColors[2]}`}
+            onClick={() => goMatchplay(`/m/tours/${tourId}/matches/format`)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
+          >
+            <>
+              Matchplay
+              <br />
+              Format
+            </>
+          </TileButton>
+
+          <TileButton
+            className={`${baseBtn} ${rowColors[2]}`}
+            onClick={() => goProtectedMatchplay("matchplay-results", `/m/tours/${tourId}/matches/results`)}
+            blocked={resultsHidden}
+            blockedKey="matchplay-results"
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
+          >
+            <>
+              Matchplay
+              <br />
+              Results
+            </>
+          </TileButton>
+
+          <TileButton
+            className={`${baseBtn} ${rowColors[2]}`}
+            onClick={() => goProtectedMatchplay("matchplay-leaderboard", `/m/tours/${tourId}/matches/leaderboard`)}
+            blocked={resultsHidden}
+            blockedKey="matchplay-leaderboard"
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
+          >
+            <>
+              Matchplay
+              <br />
+              Leaderboard
+            </>
+          </TileButton>
+
+          <TileButton
+            className={`${baseBtn} ${rowColors[3]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/details`)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
+          >
+            <>
+              Tour
+              <br />
+              Details
+            </>
+          </TileButton>
+
+          <TileButton
+            className={`${baseBtn} ${rowColors[3]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
+          >
+            <>
+              Tour
+              <br />
+              Admin
+            </>
+          </TileButton>
+
+          <TileButton
+            className={`${baseBtn} ${rowColors[3]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
+          >
+            <>Rehandicapping</>
+          </TileButton>
+
+          <TileButton
             className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(0)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
           >
-            {openingDocIdx === 0 ? "Opening…" : "Itinerary"}
-          </button>
-          <button
-            type="button"
+            <>{openingDocIdx === 0 ? "Opening…" : "Itinerary"}</>
+          </TileButton>
+
+          <TileButton
             className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(1)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
           >
-            {openingDocIdx === 1 ? "Opening…" : "Accommodation"}
-          </button>
-          <button
-            type="button"
+            <>{openingDocIdx === 1 ? "Opening…" : "Accommodation"}</>
+          </TileButton>
+
+          <TileButton
             className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(2)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
           >
-            {openingDocIdx === 2 ? "Opening…" : "Dining"}
-          </button>
+            <>{openingDocIdx === 2 ? "Opening…" : "Dining"}</>
+          </TileButton>
 
-          <button
-            type="button"
+          <TileButton
             className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(3)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
           >
-            {openingDocIdx === 3 ? (
-              "Opening…"
-            ) : (
-              <>
-                Player
-                <br />
-                Profiles
-              </>
-            )}
-          </button>
-          <button
-            type="button"
+            <>
+              {openingDocIdx === 3 ? (
+                "Opening…"
+              ) : (
+                <>
+                  Player
+                  <br />
+                  Profiles
+                </>
+              )}
+            </>
+          </TileButton>
+
+          <TileButton
             className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(4)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
           >
-            {openingDocIdx === 4 ? "Opening…" : "Comps etc"}
-          </button>
+            <>{openingDocIdx === 4 ? "Opening…" : "Comps etc"}</>
+          </TileButton>
 
-          <button
-            type="button"
+          <TileButton
             className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
             onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
+            deniedKey={deniedButtonKey}
+            showDenied={showDenied}
           >
-            App
-            <br />
-            User Guide
-          </button>
+            <>
+              App
+              <br />
+              User Guide
+            </>
+          </TileButton>
         </div>
 
         <div className="pt-6 text-center">

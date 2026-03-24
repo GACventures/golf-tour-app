@@ -18,6 +18,7 @@ type Tour = {
   id: string;
   name: string;
   score_entry_layout?: string | null;
+  hide_results?: boolean | null;
 };
 
 type PlayerRow = {
@@ -178,6 +179,12 @@ export default function MobileTourAdminPage() {
   const [layoutMsg, setLayoutMsg] = useState("");
   const [layoutErr, setLayoutErr] = useState("");
 
+  const [showHideResults, setShowHideResults] = useState(false);
+  const [hideResults, setHideResults] = useState(false);
+  const [hideResultsSaving, setHideResultsSaving] = useState(false);
+  const [hideResultsMsg, setHideResultsMsg] = useState("");
+  const [hideResultsErr, setHideResultsErr] = useState("");
+
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
 
@@ -239,6 +246,10 @@ export default function MobileTourAdminPage() {
       setLayoutErr("");
       setLayoutSaving(false);
 
+      setHideResultsMsg("");
+      setHideResultsErr("");
+      setHideResultsSaving(false);
+
       setCourseError("");
       setCourseSaveMsg("");
       setCourseLoading(false);
@@ -260,13 +271,18 @@ export default function MobileTourAdminPage() {
       try {
         const { data: tData, error: tErr } = await supabase
           .from("tours")
-          .select("id,name,score_entry_layout")
+          .select("id,name,score_entry_layout,hide_results")
           .eq("id", tourId)
           .single();
         if (tErr) throw tErr;
 
         const nextLayout = normalizeLayout((tData as any)?.score_entry_layout);
-        if (alive) setScoreEntryLayout(nextLayout);
+        const nextHideResults = (tData as any)?.hide_results === true;
+
+        if (alive) {
+          setScoreEntryLayout(nextLayout);
+          setHideResults(nextHideResults);
+        }
 
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
@@ -352,6 +368,7 @@ export default function MobileTourAdminPage() {
 
         setActiveSection(null);
         setShowScoreEntryLayout(false);
+        setShowHideResults(false);
       } catch (e: any) {
         if (!alive) return;
         setErrorMsg(e?.message ?? "Failed to load Tour Admin page.");
@@ -384,6 +401,28 @@ export default function MobileTourAdminPage() {
       setLayoutErr(e?.message ?? "Failed to save score entry layout.");
     } finally {
       setLayoutSaving(false);
+    }
+  }
+
+  async function saveHideResults(next: boolean) {
+    if (!tourId || !isLikelyUuid(tourId)) return;
+
+    setHideResultsSaving(true);
+    setHideResultsErr("");
+    setHideResultsMsg("");
+
+    try {
+      const { error } = await supabase.from("tours").update({ hide_results: next }).eq("id", tourId);
+      if (error) throw error;
+
+      setHideResults(next);
+      setTour((prev) => (prev ? { ...prev, hide_results: next } : prev));
+      setHideResultsMsg(`Saved: results are ${next ? "hidden" : "visible"}.`);
+      window.setTimeout(() => setHideResultsMsg(""), 1400);
+    } catch (e: any) {
+      setHideResultsErr(e?.message ?? "Failed to save hide results setting.");
+    } finally {
+      setHideResultsSaving(false);
     }
   }
 
@@ -1036,6 +1075,7 @@ export default function MobileTourAdminPage() {
                 onClick={() => {
                   setActiveSection("starting");
                   setShowScoreEntryLayout(false);
+                  setShowHideResults(false);
                 }}
                 className={`${chooserBtnBase} ${activeSection === "starting" ? chooserBtnActive : chooserBtnIdle}`}
               >
@@ -1047,6 +1087,7 @@ export default function MobileTourAdminPage() {
                 onClick={() => {
                   setActiveSection("course");
                   setShowScoreEntryLayout(false);
+                  setShowHideResults(false);
                 }}
                 className={`${chooserBtnBase} ${activeSection === "course" ? chooserBtnActive : chooserBtnIdle}`}
               >
@@ -1057,6 +1098,7 @@ export default function MobileTourAdminPage() {
                 type="button"
                 onClick={() => {
                   setShowScoreEntryLayout((v) => !v);
+                  setShowHideResults(false);
                   setActiveSection(null);
                   setLayoutMsg("");
                   setLayoutErr("");
@@ -1069,8 +1111,23 @@ export default function MobileTourAdminPage() {
               <button
                 type="button"
                 onClick={() => {
+                  setShowHideResults((v) => !v);
+                  setShowScoreEntryLayout(false);
+                  setActiveSection(null);
+                  setHideResultsMsg("");
+                  setHideResultsErr("");
+                }}
+                className={`${chooserBtnBase} ${showHideResults ? chooserBtnActive : chooserBtnIdle}`}
+              >
+                Hide results?
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
                   setActiveSection("groupings");
                   setShowScoreEntryLayout(false);
+                  setShowHideResults(false);
                 }}
                 className={`${chooserBtnBase} ${activeSection === "groupings" ? chooserBtnActive : chooserBtnIdle}`}
               >
@@ -1082,6 +1139,7 @@ export default function MobileTourAdminPage() {
                 onClick={() => {
                   setActiveSection("teeTimes");
                   setShowScoreEntryLayout(false);
+                  setShowHideResults(false);
                 }}
                 className={`${chooserBtnBase} ${activeSection === "teeTimes" ? chooserBtnActive : chooserBtnIdle}`}
               >
@@ -1147,6 +1205,54 @@ export default function MobileTourAdminPage() {
 
                   {layoutMsg ? <div className="text-sm text-green-700">{layoutMsg}</div> : null}
                   {layoutErr ? <div className="text-sm text-red-700">{layoutErr}</div> : null}
+                </div>
+              </section>
+            ) : null}
+
+            {showHideResults ? (
+              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                <div className="p-4 border-b">
+                  <div className="text-sm font-semibold text-gray-900">Hide results?</div>
+                  <div className="mt-1 text-xs text-gray-600">
+                    If set to Yes, selected results pages on the tour home page will be blocked.
+                  </div>
+                </div>
+
+                <div className="p-4 space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={hideResultsSaving}
+                      onClick={() => void saveHideResults(false)}
+                      className={[
+                        "h-11 rounded-xl border text-sm font-semibold",
+                        hideResults === false ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-900",
+                        hideResultsSaving ? "opacity-60 cursor-not-allowed" : "active:bg-gray-50",
+                      ].join(" ")}
+                    >
+                      No
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={hideResultsSaving}
+                      onClick={() => void saveHideResults(true)}
+                      className={[
+                        "h-11 rounded-xl border text-sm font-semibold",
+                        hideResults === true ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-900",
+                        hideResultsSaving ? "opacity-60 cursor-not-allowed" : "active:bg-gray-50",
+                      ].join(" ")}
+                    >
+                      Yes
+                    </button>
+                  </div>
+
+                  <div className="text-xs text-gray-600">
+                    Current: <span className="font-semibold">{hideResults ? "Yes" : "No"}</span>
+                  </div>
+
+                  {hideResultsMsg ? <div className="text-sm text-green-700">{hideResultsMsg}</div> : null}
+                  {hideResultsErr ? <div className="text-sm text-red-700">{hideResultsErr}</div> : null}
                 </div>
               </section>
             ) : null}
