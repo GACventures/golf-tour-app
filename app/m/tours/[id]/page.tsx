@@ -11,10 +11,7 @@ type TourRow = {
   end_date: string | null;
   image_url?: string | null;
 
-  // Existing
   matchplay_active?: boolean | null;
-
-  // New
   hide_results?: boolean | null;
 };
 
@@ -55,18 +52,18 @@ const PDF_TOUR_ID = NZ_TOUR_2026_ID;
 const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
 const PDF_FILES = ["itinerary.pdf", "accommodation.pdf", "dining.pdf", "profiles.pdf", "comps.pdf"] as const;
 
-// Existing
 const MATCHPLAY_INACTIVE_MESSAGE = "Matchplay events not active on this tour";
-
-// New
 const ACCESS_DENIED_MESSAGE = "access denied";
 
+// Interaction
 const MIN_SCALE = 0.6;
 const MAX_SCALE = 6.0;
 
+// Debounced refine
 const RERENDER_DEBOUNCE_MS = 140;
 const RERENDER_THRESHOLD_RATIO = 1.20;
 
+// Inertia
 const INERTIA_FRICTION = 0.92;
 const INERTIA_STOP_SPEED = 18;
 
@@ -131,10 +128,10 @@ function TileButton({
   const isDeniedShowing = blocked && blockedKey != null && deniedKey === blockedKey;
 
   return (
-    <div className="relative">
+    <div className="relative h-20 w-full">
       <button
         type="button"
-        className={`${className} ${blocked ? "relative overflow-hidden" : ""}`}
+        className={`${className} h-full w-full`}
         onClick={() => {
           if (blocked && blockedKey) {
             showDenied(blockedKey);
@@ -167,9 +164,11 @@ export default function MobileTourLandingPage() {
   const [docs, setDocs] = useState<TourDocRow[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // lightweight toast
   const [toastMsg, setToastMsg] = useState<string>("");
   const toastTimerRef = useRef<number | null>(null);
 
+  // access denied overlay
   const [deniedButtonKey, setDeniedButtonKey] = useState<string | null>(null);
   const deniedTimerRef = useRef<number | null>(null);
 
@@ -198,34 +197,44 @@ export default function MobileTourLandingPage() {
     };
   }, []);
 
+  // PDF overlay state
   const [openingDocIdx, setOpeningDocIdx] = useState<number | null>(null);
   const [viewerTitle, setViewerTitle] = useState<string>("Document");
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const [rendering, setRendering] = useState<boolean>(false);
 
+  // PDF.js
   const pdfjsRef = useRef<any>(null);
   const [pdfjsReady, setPdfjsReady] = useState(false);
 
+  // DOM refs
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  // PDF refs
   const pdfDocRef = useRef<any>(null);
   const pdfPageRef = useRef<any>(null);
 
+  // Transform refs
   const scaleRef = useRef<number>(1);
   const txRef = useRef<number>(0);
   const tyRef = useRef<number>(0);
 
+  // World size in CSS px
   const worldWRef = useRef<number>(0);
   const worldHRef = useRef<number>(0);
 
+  // Base CSS fit scale
   const baseCssScaleRef = useRef<number>(1);
 
+  // Last quality render multiplier
   const lastQualityRef = useRef<number>(1);
 
+  // Debounce timer
   const rerenderTimerRef = useRef<number | null>(null);
 
+  // Pointers & gesture tracking
   const pointersRef = useRef<Map<number, Pt>>(new Map());
   const gestureRef = useRef<{
     mode: "none" | "pan" | "pinch";
@@ -280,7 +289,11 @@ export default function MobileTourLandingPage() {
       setLoading(true);
 
       const [{ data: t }, { data: r }, { data: d }] = await Promise.all([
-        supabase.from("tours").select("id,name,start_date,end_date,image_url,matchplay_active,hide_results").eq("id", tourId).single(),
+        supabase
+          .from("tours")
+          .select("id,name,start_date,end_date,image_url,matchplay_active,hide_results")
+          .eq("id", tourId)
+          .single(),
         supabase.from("rounds").select("id,tour_id,played_on").eq("tour_id", tourId),
         supabase
           .from("tour_documents")
@@ -816,7 +829,8 @@ export default function MobileTourLandingPage() {
   const zoomOut = useCallback(() => zoomBy(1 / 1.6), [zoomBy]);
   const zoomIn = useCallback(() => zoomBy(1.6), [zoomBy]);
 
-  const baseBtn = "h-20 rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
+  const baseBtn =
+    "rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
   const rowColors = [
     "bg-blue-100 text-gray-900",
     "bg-blue-200 text-gray-900",
@@ -1089,7 +1103,7 @@ export default function MobileTourLandingPage() {
           </TileButton>
 
           <TileButton
-            className="h-20 rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
+            className="rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
             onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
