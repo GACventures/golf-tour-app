@@ -185,6 +185,11 @@ export default function MobileTourAdminPage() {
   const [hideResultsMsg, setHideResultsMsg] = useState("");
   const [hideResultsErr, setHideResultsErr] = useState("");
 
+  const [showHideResultsPasswordPrompt, setShowHideResultsPasswordPrompt] = useState(false);
+  const [hideResultsPasswordInput, setHideResultsPasswordInput] = useState("");
+  const [hideResultsPasswordErr, setHideResultsPasswordErr] = useState("");
+  const [hideResultsUnlocked, setHideResultsUnlocked] = useState(false);
+
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
 
@@ -249,6 +254,10 @@ export default function MobileTourAdminPage() {
       setHideResultsMsg("");
       setHideResultsErr("");
       setHideResultsSaving(false);
+      setShowHideResultsPasswordPrompt(false);
+      setHideResultsPasswordInput("");
+      setHideResultsPasswordErr("");
+      setHideResultsUnlocked(false);
 
       setCourseError("");
       setCourseSaveMsg("");
@@ -424,6 +433,41 @@ export default function MobileTourAdminPage() {
     } finally {
       setHideResultsSaving(false);
     }
+  }
+
+  function handleHideResultsButtonClick() {
+    setShowScoreEntryLayout(false);
+    setActiveSection(null);
+    setHideResultsMsg("");
+    setHideResultsErr("");
+
+    if (showHideResults && hideResultsUnlocked) {
+      setShowHideResults(false);
+      setShowHideResultsPasswordPrompt(false);
+      return;
+    }
+
+    setShowHideResults(false);
+    setShowHideResultsPasswordPrompt(true);
+    setHideResultsPasswordInput("");
+    setHideResultsPasswordErr("");
+  }
+
+  function submitHideResultsPassword() {
+    const entered = hideResultsPasswordInput.trim();
+
+    if (entered === "9565") {
+      setHideResultsUnlocked(true);
+      setShowHideResultsPasswordPrompt(false);
+      setShowHideResults(true);
+      setHideResultsPasswordInput("");
+      setHideResultsPasswordErr("");
+      return;
+    }
+
+    setHideResultsUnlocked(false);
+    setShowHideResults(false);
+    setHideResultsPasswordErr("access denied");
   }
 
   useEffect(() => {
@@ -1076,6 +1120,8 @@ export default function MobileTourAdminPage() {
                   setActiveSection("starting");
                   setShowScoreEntryLayout(false);
                   setShowHideResults(false);
+                  setShowHideResultsPasswordPrompt(false);
+                  setHideResultsPasswordErr("");
                 }}
                 className={`${chooserBtnBase} ${activeSection === "starting" ? chooserBtnActive : chooserBtnIdle}`}
               >
@@ -1088,6 +1134,8 @@ export default function MobileTourAdminPage() {
                   setActiveSection("course");
                   setShowScoreEntryLayout(false);
                   setShowHideResults(false);
+                  setShowHideResultsPasswordPrompt(false);
+                  setHideResultsPasswordErr("");
                 }}
                 className={`${chooserBtnBase} ${activeSection === "course" ? chooserBtnActive : chooserBtnIdle}`}
               >
@@ -1099,9 +1147,11 @@ export default function MobileTourAdminPage() {
                 onClick={() => {
                   setShowScoreEntryLayout((v) => !v);
                   setShowHideResults(false);
+                  setShowHideResultsPasswordPrompt(false);
                   setActiveSection(null);
                   setLayoutMsg("");
                   setLayoutErr("");
+                  setHideResultsPasswordErr("");
                 }}
                 className={`${chooserBtnBase} ${showScoreEntryLayout ? chooserBtnActive : chooserBtnIdle}`}
               >
@@ -1110,14 +1160,8 @@ export default function MobileTourAdminPage() {
 
               <button
                 type="button"
-                onClick={() => {
-                  setShowHideResults((v) => !v);
-                  setShowScoreEntryLayout(false);
-                  setActiveSection(null);
-                  setHideResultsMsg("");
-                  setHideResultsErr("");
-                }}
-                className={`${chooserBtnBase} ${showHideResults ? chooserBtnActive : chooserBtnIdle}`}
+                onClick={handleHideResultsButtonClick}
+                className={`${chooserBtnBase} ${showHideResults || showHideResultsPasswordPrompt ? chooserBtnActive : chooserBtnIdle}`}
               >
                 Hide results?
               </button>
@@ -1128,6 +1172,8 @@ export default function MobileTourAdminPage() {
                   setActiveSection("groupings");
                   setShowScoreEntryLayout(false);
                   setShowHideResults(false);
+                  setShowHideResultsPasswordPrompt(false);
+                  setHideResultsPasswordErr("");
                 }}
                 className={`${chooserBtnBase} ${activeSection === "groupings" ? chooserBtnActive : chooserBtnIdle}`}
               >
@@ -1140,6 +1186,8 @@ export default function MobileTourAdminPage() {
                   setActiveSection("teeTimes");
                   setShowScoreEntryLayout(false);
                   setShowHideResults(false);
+                  setShowHideResultsPasswordPrompt(false);
+                  setHideResultsPasswordErr("");
                 }}
                 className={`${chooserBtnBase} ${activeSection === "teeTimes" ? chooserBtnActive : chooserBtnIdle}`}
               >
@@ -1205,6 +1253,50 @@ export default function MobileTourAdminPage() {
 
                   {layoutMsg ? <div className="text-sm text-green-700">{layoutMsg}</div> : null}
                   {layoutErr ? <div className="text-sm text-red-700">{layoutErr}</div> : null}
+                </div>
+              </section>
+            ) : null}
+
+            {showHideResultsPasswordPrompt ? (
+              <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                <div className="p-4 border-b">
+                  <div className="text-sm font-semibold text-gray-900">Hide results password</div>
+                  <div className="mt-1 text-xs text-gray-600">Enter the 4-digit password to access this setting.</div>
+                </div>
+
+                <div className="p-4 space-y-3">
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={hideResultsPasswordInput}
+                    onChange={(e) => {
+                      const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 4);
+                      setHideResultsPasswordInput(digitsOnly);
+                      if (hideResultsPasswordErr) setHideResultsPasswordErr("");
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        submitHideResultsPassword();
+                      }
+                    }}
+                    placeholder="Enter 4-digit code"
+                    className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
+                    aria-label="Hide results password"
+                  />
+
+                  <div className="flex justify-end">
+                    <button type="button" onClick={submitHideResultsPassword} className={smallBtnPrimary}>
+                      Continue
+                    </button>
+                  </div>
+
+                  {hideResultsPasswordErr ? (
+                    <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-800">
+                      {hideResultsPasswordErr}
+                    </div>
+                  ) : null}
                 </div>
               </section>
             ) : null}
