@@ -9,6 +9,7 @@ import MobileNav from "../../_components/MobileNav";
 import { recalcAndSaveTourHandicaps } from "@/lib/handicaps/recalcAndSaveTourHandicaps";
 
 type ScoreEntryLayout = "classic" | "alt";
+
 function normalizeLayout(v: unknown): ScoreEntryLayout {
   const s = String(v ?? "").trim().toLowerCase();
   return s === "alt" ? "alt" : "classic";
@@ -70,12 +71,14 @@ type RoundGroupPlayerRow = {
 };
 
 type ManualGroup = {
-  key: string; // local-only stable key
-  groupNo: number; // 1..N visual order
-  playerIds: string[]; // ordered player_ids
+  key: string;
+  groupNo: number;
+  playerIds: string[];
 };
 
 type AdminSection = "starting" | "course" | "groupings" | "teeTimes" | null;
+
+type Tee = "M" | "F";
 
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
@@ -86,6 +89,15 @@ function normalizePlayerJoin(val: any): PlayerRow | null {
   const p = Array.isArray(val) ? val[0] : val;
   if (!p?.id) return null;
   return { id: String(p.id), name: String(p.name ?? "").trim() || "(unnamed)" };
+}
+
+function normalizeTee(v: unknown): Tee {
+  const s = String(v ?? "").trim().toUpperCase();
+  return s === "F" ? "F" : "M";
+}
+
+function roundHalfUp(x: number): number {
+  return x >= 0 ? Math.floor(x + 0.5) : Math.ceil(x - 0.5);
 }
 
 function toNullableNumber(v: string): number | null {
@@ -217,7 +229,6 @@ export default function MobileTourAdminPage() {
 
   const [roundOptions, setRoundOptions] = useState<RoundOption[]>([]);
 
-  // Daily Groupings
   const [ttSelectedRoundId, setTtSelectedRoundId] = useState<string>("");
   const [ttLoading, setTtLoading] = useState(false);
   const [ttSaving, setTtSaving] = useState(false);
@@ -227,7 +238,6 @@ export default function MobileTourAdminPage() {
   const [ttGroups, setTtGroups] = useState<ManualGroup[]>([]);
   const [ttAddTargetGroupNo, setTtAddTargetGroupNo] = useState<number>(1);
 
-  // Tee times & starting holes
   const [thsSelectedRoundId, setThsSelectedRoundId] = useState<string>("");
   const [thsLoading, setThsLoading] = useState(false);
   const [thsSaving, setThsSaving] = useState(false);
@@ -317,7 +327,13 @@ export default function MobileTourAdminPage() {
               dirty: false,
             };
           })
-          .filter(Boolean) as any[];
+          .filter(Boolean) as Array<{
+          player_id: string;
+          name: string;
+          starting_handicap: number | null;
+          input: string;
+          dirty: boolean;
+        }>;
 
         const { data: roundCourseData, error: roundCourseErr } = await supabase.from("rounds").select("course_id").eq("tour_id", tourId);
         if (roundCourseErr) throw roundCourseErr;
@@ -577,6 +593,89 @@ export default function MobileTourAdminPage() {
     );
   }
 
+  async function syncRound1PlayingHandicaps(nextStartingByPlayer: Record<string, number | null>) {
+    const { data: firstRound, error: firstRoundErr } = await supabase
+      .from("rounds")
+      .select("id,round_no")
+      .eq("tour_id", tourId)
+      .order("round_no", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (firstRoundErr) throw firstRoundErr;
+
+    const firstRoundId = String((firstRound as any)?.id ?? "").trim();
+    if (!firstRoundId) {
+      return { roundId: null as string | null, updated: 0 };
+    }
+
+    const playerIds = rows.map((r) => r.player_id).filter(Boolean);
+    if (playerIds.length === 0) {
+      return { roundId: firstRoundId, updated: 0 };
+    }
+
+    const [{ data: rpData, error: rpErr }, { data: tpData, error: tpErr }] = await Promise.all([
+      supabase.from("round_players").select("round_id,player_id,playing,playing_handicap,tee").eq("round_id", firstRoundId).in("player_id", playerIds),
+      supabase
+        .from("tour_players")
+        .select("player_id,players(gender)")
+        .eq("tour_id", tourId)
+        .in("player_id", playerIds),
+    ]);
+
+    if (rpErr) throw rpErr;
+    if (tpErr) throw tpErr;
+
+    const existingByPlayerId = new Map<
+      string,
+      {
+        playing: boolean;
+        tee: Tee;
+      }
+    >();
+
+    for (const row of rpData ?? []) {
+      existingByPlayerId.set(String((row as any).player_id), {
+        playing: (row as any).playing === true,
+        tee: normalizeTee((row as any).tee),
+      });
+    }
+
+    const defaultTeeByPlayerId = new Map<string, Tee>();
+    for (const row of tpData ?? []) {
+      const playerId = String((row as any).player_id ?? "").trim();
+      if (!playerId) continue;
+
+      const playerJoin = Array.isArray((row as any).players) ? (row as any).players[0] : (row as any).players;
+      defaultTeeByPlayerId.set(playerId, normalizeTee(playerJoin?.gender));
+    }
+
+    const payload = rows.map((r) => {
+      const sh = nextStartingByPlayer[r.player_id];
+      const roundedSeed = roundHalfUp(Math.max(0, Number(sh ?? 0)));
+
+      const existing = existingByPlayerId.get(r.player_id);
+      const tee = existing?.tee ?? defaultTeeByPlayerId.get(r.player_id) ?? "M";
+
+      return {
+        round_id: firstRoundId,
+        player_id: r.player_id,
+        playing: existing?.playing === true,
+        playing_handicap: roundedSeed,
+        tee,
+      };
+    });
+
+    if (payload.length > 0) {
+      const { error: upErr } = await supabase.from("round_players").upsert(payload, {
+        onConflict: "round_id,player_id",
+      });
+      if (upErr) throw upErr;
+    }
+
+    return { roundId: firstRoundId, updated: payload.length };
+  }
+
   async function saveAll() {
     setSaving(true);
     setErrorMsg("");
@@ -602,7 +701,20 @@ export default function MobileTourAdminPage() {
       });
       if (upErr) throw upErr;
 
-      const recalcRes = await recalcAndSaveTourHandicaps({ supabase, tourId });
+      const nextStartingByPlayer: Record<string, number | null> = {};
+      for (const r of rows) {
+        nextStartingByPlayer[r.player_id] = r.starting_handicap;
+      }
+      for (const u of updates) {
+        nextStartingByPlayer[u.player_id] = u.starting_handicap;
+      }
+
+      const round1Sync = await syncRound1PlayingHandicaps(nextStartingByPlayer);
+
+      const recalcRes = round1Sync.roundId
+        ? await recalcAndSaveTourHandicaps({ supabase, tourId, fromRoundId: round1Sync.roundId })
+        : await recalcAndSaveTourHandicaps({ supabase, tourId });
+
       if (!recalcRes.ok) throw new Error(recalcRes.error);
 
       setRows((prev) =>
@@ -618,11 +730,21 @@ export default function MobileTourAdminPage() {
         })
       );
 
-      setSaveMsg(
-        `Saved ${updates.length} change${updates.length === 1 ? "" : "s"}. Rehandicapping recalculated and updated ${
-          recalcRes.updated
-        } round_player row${recalcRes.updated === 1 ? "" : "s"}.`
-      );
+      if (round1Sync.roundId) {
+        setSaveMsg(
+          `Saved ${updates.length} change${updates.length === 1 ? "" : "s"}. Round 1 playing handicaps refreshed for ${
+            round1Sync.updated
+          } player row${round1Sync.updated === 1 ? "" : "s"}. Rehandicapping recalculated and updated ${
+            recalcRes.updated
+          } later round_player row${recalcRes.updated === 1 ? "" : "s"}.`
+        );
+      } else {
+        setSaveMsg(
+          `Saved ${updates.length} change${updates.length === 1 ? "" : "s"}. Rehandicapping recalculated and updated ${
+            recalcRes.updated
+          } round_player row${recalcRes.updated === 1 ? "" : "s"}.`
+        );
+      }
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Save failed.");
     } finally {
@@ -971,10 +1093,7 @@ export default function MobileTourAdminPage() {
 
       for (const g of existingGroups ?? []) {
         teeTimeByGroupNo.set(Number((g as any).group_no), (g as any).tee_time ?? null);
-        startHoleByGroupNo.set(
-          Number((g as any).group_no),
-          (g as any).start_hole == null ? 1 : Number((g as any).start_hole)
-        );
+        startHoleByGroupNo.set(Number((g as any).group_no), (g as any).start_hole == null ? 1 : Number((g as any).start_hole));
       }
 
       const delM = await supabase.from("round_group_players").delete().eq("round_id", ttSelectedRoundId);
@@ -1213,9 +1332,7 @@ export default function MobileTourAdminPage() {
               <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                 <div className="p-4 border-b">
                   <div className="text-sm font-semibold text-gray-900">Score entry layout</div>
-                  <div className="mt-1 text-xs text-gray-600">
-                    Choose which scoring screen is used by default for this tour.
-                  </div>
+                  <div className="mt-1 text-xs text-gray-600">Choose which scoring screen is used by default for this tour.</div>
                 </div>
 
                 <div className="p-4 space-y-3">
@@ -1857,6 +1974,12 @@ export default function MobileTourAdminPage() {
                         </option>
                       ))}
                     </select>
+
+                    {!thsSelectedRoundId ? (
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                        Choose a round to load/edit tee times and starting holes.
+                      </div>
+                    ) : null}
                   </div>
 
                   {thsLoading ? (
@@ -1871,50 +1994,47 @@ export default function MobileTourAdminPage() {
 
                   {thsMsg ? <div className="text-sm text-green-700">{thsMsg}</div> : null}
 
-                  {!thsSelectedRoundId ? (
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                      Choose a round to edit tee times and starting holes.
-                    </div>
-                  ) : thsGroups.length === 0 && !thsLoading ? (
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                      No groups exist for this round yet.
-                    </div>
-                  ) : null}
-
-                  {thsGroups.length > 0 ? (
+                  {thsSelectedRoundId ? (
                     <>
-                      <div className="space-y-3">
-                        {thsGroups
-                          .slice()
-                          .sort((a, b) => a.group_no - b.group_no)
-                          .map((g) => (
-                            <div key={g.id} className="rounded-2xl border border-gray-200 bg-white p-3 space-y-3">
-                              <div className="text-sm font-semibold text-gray-900">Group {g.group_no}</div>
+                      {thsGroups.length === 0 && !thsLoading ? (
+                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                          No saved groups found for this round. Save daily groupings first.
+                        </div>
+                      ) : null}
 
-                              <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                  <div className="text-xs font-semibold text-gray-700 mb-1">Tee time</div>
+                      {thsGroups.length > 0 ? (
+                        <div className="space-y-3">
+                          {thsGroups.map((g) => (
+                            <div key={g.id} className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+                              <div className="p-3 border-b bg-gray-50 rounded-t-2xl">
+                                <div className="text-sm font-semibold text-gray-900">Group {g.group_no}</div>
+                              </div>
+
+                              <div className="p-3 grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                  <label className="block text-xs font-semibold text-gray-700" htmlFor={`tee_${g.id}`}>
+                                    Tee time
+                                  </label>
                                   <input
+                                    id={`tee_${g.id}`}
                                     type="time"
                                     value={thsTeeTimeByGroupId[g.id] ?? ""}
                                     onChange={(e) =>
                                       setThsTeeTimeByGroupId((prev) => ({
                                         ...prev,
-                                        [g.id]: normalizeTimeInput(e.target.value),
+                                        [g.id]: e.target.value,
                                       }))
                                     }
-                                    disabled={thsSaving}
                                     className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
                                   />
                                 </div>
 
-                                <div>
-                                  <div className="text-xs font-semibold text-gray-700 mb-1">Starting hole</div>
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    max={18}
-                                    step={1}
+                                <div className="space-y-1">
+                                  <label className="block text-xs font-semibold text-gray-700" htmlFor={`start_${g.id}`}>
+                                    Starting hole
+                                  </label>
+                                  <select
+                                    id={`start_${g.id}`}
                                     value={thsStartHoleByGroupId[g.id] ?? "1"}
                                     onChange={(e) =>
                                       setThsStartHoleByGroupId((prev) => ({
@@ -1922,27 +2042,31 @@ export default function MobileTourAdminPage() {
                                         [g.id]: e.target.value,
                                       }))
                                     }
-                                    disabled={thsSaving}
                                     className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm"
-                                  />
+                                  >
+                                    {Array.from({ length: 18 }, (_, i) => String(i + 1)).map((hole) => (
+                                      <option key={hole} value={hole}>
+                                        {hole}
+                                      </option>
+                                    ))}
+                                  </select>
                                 </div>
                               </div>
-
-                              <div className="text-xs text-gray-600">Default starting hole is 1.</div>
                             </div>
                           ))}
-                      </div>
 
-                      <div className="flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => void saveTeeTimesAndStartingHoles()}
-                          disabled={thsSaving || thsLoading}
-                          className={smallBtnPrimary}
-                        >
-                          {thsSaving ? "Saving…" : "Save tee times & starting holes"}
-                        </button>
-                      </div>
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={saveTeeTimesAndStartingHoles}
+                              disabled={thsLoading || thsSaving || thsGroups.length === 0}
+                              className={smallBtnPrimary}
+                            >
+                              {thsSaving ? "Saving…" : "Save tee times"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
                     </>
                   ) : null}
                 </div>
