@@ -688,6 +688,8 @@ export default function MobileCompetitionsPage() {
     return parts.join(" · ");
   }, [botb, botbRoundNos, botbRounds, coursesById]);
 
+  const showBotbColumn = botb?.enabled === true && botbRoundNos.length > 0;
+
   const definitions = useMemo(() => {
     const base = [
       { label: "Napoleon", text: "Average Stableford points on Par 3 holes" },
@@ -714,7 +716,7 @@ export default function MobileCompetitionsPage() {
     }
 
     return base;
-  }, [botbDisplayName, botbRoundsLabelDefinition]);
+  }, [botbDisplayName, botbRoundsLabelDefinition, showBotbColumn]);
 
   function toggleFixedDetail(playerId: string, key: FixedCompKey) {
     setOpenDetail((prev) => {
@@ -765,8 +767,6 @@ export default function MobileCompetitionsPage() {
     rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50";
 
   const press = "active:bg-gray-100";
-
-  const showBotbColumn = botb?.enabled === true && botbRoundNos.length > 0;
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
