@@ -967,14 +967,14 @@ export default function MobileCompetitionsPage() {
               </table>
 
               <div className="border-t bg-gray-50 px-3 py-2 text-sm text-gray-600">
-                Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown. Tap H2Z to see peak
-                score and (holes count).
+                <div>Tap Hot/Cold cells for the round+hole range.</div>
+                <div>Tap Eclectic to see the breakdown.</div>
+                <div>Tap H2Z to see peak score and (holes count).</div>
                 {showBotbColumn ? (
-                  <>
-                    {" "}
-                    · {botbDisplayName} = aggregate Stableford on {botbRoundsLabel || "(selected rounds)"}. Tap {botbDisplayName} to
-                    open the table.
-                  </>
+                  <div>
+                    {botbDisplayName} = aggregate Stableford on {botbRoundsLabel || "(selected rounds)"}. Tap{" "}
+                    {botbDisplayName} to open the table.
+                  </div>
                 ) : null}
               </div>
             </div>
