@@ -971,10 +971,10 @@ export default function MobileCompetitionsPage() {
                 <div>Tap Eclectic to see the breakdown.</div>
                 <div>Tap H2Z to see peak score and (holes count).</div>
                 {showBotbColumn ? (
-                  <div>
-                    {botbDisplayName} = aggregate Stableford on {botbRoundsLabel || "(selected rounds)"}. Tap{" "}
-                    {botbDisplayName} to open the table.
-                  </div>
+                 <div>
+  {botbDisplayName} = aggregate Stableford on {botbRoundsLabel || "(selected rounds)"}. Tap a{" "}
+  {botbDisplayName} score to show detailed scoreboard.
+</div>
                 ) : null}
               </div>
             </div>
