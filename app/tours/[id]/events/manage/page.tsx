@@ -41,6 +41,7 @@ type BotBSettingsRow = {
   tour_id: string;
   enabled: boolean;
   round_nos: number[]; // int[]
+  custom_name: string | null;
 };
 
 function asIntOrNull(v: string) {
@@ -62,12 +63,9 @@ function upper(v: any) {
 }
 
 function uuidv4() {
-  // Browser-safe UUID
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  // Fallback (very unlikely needed in modern browsers)
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
-    // eslint-disable-next-line no-mixed-operators
     const v = c === "x" ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
@@ -84,6 +82,10 @@ function uniqSortedInts(v: any): number[] {
   return Array.from(new Set(nums));
 }
 
+function normalizeBotbName(v: any): string {
+  return String(v ?? "").trim();
+}
+
 export default function ManageEventsPage() {
   const params = useParams<{ id: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -94,7 +96,6 @@ export default function ManageEventsPage() {
   const [error, setError] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
 
-  // Form state — existing events settings
   const [individualMode, setIndividualMode] = useState<"ALL" | "BEST_N">("ALL");
   const [individualBestN, setIndividualBestN] = useState<string>("");
   const [individualFinalRequired, setIndividualFinalRequired] = useState(false);
@@ -105,16 +106,14 @@ export default function ManageEventsPage() {
 
   const [teamBestY, setTeamBestY] = useState<string>("1");
 
-  // H2Z Legs state
   const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [h2zEnabled, setH2zEnabled] = useState<boolean>(false);
   const [legs, setLegs] = useState<Array<{ start_round_no: number; end_round_no: number }>>([]);
 
-  // BotB state
   const [botbEnabled, setBotbEnabled] = useState<boolean>(false);
   const [botbRoundNos, setBotbRoundNos] = useState<number[]>([]);
+  const [botbCustomName, setBotbCustomName] = useState<string>("");
 
-  // Available round numbers for dropdowns
   const roundNumbers = useMemo(() => {
     const nums = rounds
       .map((r) => Number(r.round_no))
@@ -125,7 +124,11 @@ export default function ManageEventsPage() {
 
   const maxRoundNo = roundNumbers.length ? roundNumbers[roundNumbers.length - 1] : 1;
 
-  // Preview summary
+  const botbDisplayName = useMemo(() => {
+    const trimmed = normalizeBotbName(botbCustomName);
+    return trimmed || "Best of the Best";
+  }, [botbCustomName]);
+
   const preview = useMemo(() => {
     const n = asIntOrNull(individualBestN);
     const q = asIntOrNull(pairBestQ);
@@ -150,8 +153,8 @@ export default function ManageEventsPage() {
       !botbEnabled
         ? "Disabled"
         : botbRoundNos.length === 0
-        ? "Enabled (no rounds selected)"
-        : `Enabled · Rounds: ${botbRoundNos.slice().sort((a, b) => a - b).map((x) => `R${x}`).join(", ")}`;
+        ? `${botbDisplayName} enabled (no rounds selected)`
+        : `${botbDisplayName} · Rounds: ${botbRoundNos.slice().sort((a, b) => a - b).map((x) => `R${x}`).join(", ")}`;
 
     return { indiv, pairs, teams, h2z, botb };
   }, [
@@ -166,6 +169,7 @@ export default function ManageEventsPage() {
     legs,
     botbEnabled,
     botbRoundNos,
+    botbDisplayName,
   ]);
 
   useEffect(() => {
@@ -177,7 +181,6 @@ export default function ManageEventsPage() {
       setSavedMsg("");
 
       try {
-        // 1) Load rounds (for dropdowns)
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,round_no,name")
@@ -188,7 +191,6 @@ export default function ManageEventsPage() {
         if (!alive) return;
         setRounds((rData ?? []) as RoundRow[]);
 
-        // 2) Load tour_grouping_settings
         const { data, error: sErr } = await supabase
           .from("tour_grouping_settings")
           .select(
@@ -199,7 +201,6 @@ export default function ManageEventsPage() {
 
         if (sErr) throw new Error(sErr.message);
 
-        // If missing row, seed it
         if (!data) {
           const seed: SettingsRow = {
             tour_id: tourId,
@@ -244,7 +245,6 @@ export default function ManageEventsPage() {
           setTeamBestY(y);
         }
 
-        // 3) Load existing H2Z legs
         const { data: lData, error: lErr } = await supabase
           .from("tour_h2z_legs")
           .select("id,tour_id,leg_no,start_round_no,end_round_no")
@@ -271,10 +271,9 @@ export default function ManageEventsPage() {
           setLegs([]);
         }
 
-        // 4) Load BotB settings (optional row)
         const { data: bData, error: bErr } = await supabase
           .from("tour_botb_settings")
-          .select("tour_id,enabled,round_nos")
+          .select("tour_id,enabled,round_nos,custom_name")
           .eq("tour_id", tourId)
           .maybeSingle();
 
@@ -284,10 +283,12 @@ export default function ManageEventsPage() {
         if (!bData) {
           setBotbEnabled(false);
           setBotbRoundNos([]);
+          setBotbCustomName("");
         } else {
           const row = bData as BotBSettingsRow;
           setBotbEnabled(row.enabled === true);
           setBotbRoundNos(uniqSortedInts((row as any).round_nos));
+          setBotbCustomName(normalizeBotbName((row as any).custom_name));
         }
       } catch (e: any) {
         if (!alive) return;
@@ -360,7 +361,6 @@ export default function ManageEventsPage() {
     setSavedMsg("");
 
     try {
-      // Parse + clamp inputs
       const nRaw = individualMode === "BEST_N" ? asIntOrNull(individualBestN) : null;
       const qRaw = pairMode === "BEST_Q" ? asIntOrNull(pairBestQ) : null;
       const yRaw = asIntOrNull(teamBestY) ?? 1;
@@ -369,15 +369,12 @@ export default function ManageEventsPage() {
       const q = clampInt(qRaw, 1, 99);
       const y = clampInt(yRaw, 1, 99) ?? 1;
 
-      // Validate H2Z
       const h2zErr = validateH2Z();
       if (h2zErr) throw new Error(h2zErr);
 
-      // Validate BotB
       const botbErr = validateBotB();
       if (botbErr) throw new Error(botbErr);
 
-      // 1) Save tour_grouping_settings
       const payload: SettingsRow = {
         tour_id: tourId,
 
@@ -395,8 +392,6 @@ export default function ManageEventsPage() {
       const { error: upErr } = await supabase.from("tour_grouping_settings").upsert(payload, { onConflict: "tour_id" });
       if (upErr) throw new Error(upErr.message);
 
-      // 2) Save H2Z legs
-      // Cleanest approach: delete existing legs for tour, then insert the new set
       const { error: delErr } = await supabase.from("tour_h2z_legs").delete().eq("tour_id", tourId);
       if (delErr) throw new Error(delErr.message);
 
@@ -410,8 +405,6 @@ export default function ManageEventsPage() {
           end_round_no: Number(l.end_round_no),
         }));
 
-        // If your table auto-fills created_at/updated_at, you can omit them.
-        // We'll include them only if your schema requires them; Supabase will ignore extra if not present.
         const insertPayload = rows.map((r) => ({
           id: r.id,
           tour_id: r.tour_id,
@@ -426,11 +419,11 @@ export default function ManageEventsPage() {
         if (insErr) throw new Error(insErr.message);
       }
 
-      // 3) Save BotB settings (upsert row)
       const botbPayload: BotBSettingsRow = {
         tour_id: tourId,
         enabled: botbEnabled === true,
         round_nos: uniqSortedInts(botbRoundNos),
+        custom_name: normalizeBotbName(botbCustomName) || null,
       };
 
       const { error: botbUpErr } = await supabase.from("tour_botb_settings").upsert(botbPayload, { onConflict: "tour_id" });
@@ -470,7 +463,6 @@ export default function ManageEventsPage() {
 
       <p style={{ marginTop: 8, color: "#444" }}>These settings are saved per tour and used by leaderboards (desktop + mobile).</p>
 
-      {/* Individual */}
       <section style={{ marginTop: 18, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <div style={{ fontWeight: 900, marginBottom: 8 }}>Individual (Stableford)</div>
 
@@ -504,7 +496,6 @@ export default function ManageEventsPage() {
         </div>
       </section>
 
-      {/* Pairs */}
       <section style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <div style={{ fontWeight: 900, marginBottom: 8 }}>Pairs (Better Ball)</div>
 
@@ -538,7 +529,6 @@ export default function ManageEventsPage() {
         </div>
       </section>
 
-      {/* Teams */}
       <section style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <div style={{ fontWeight: 900, marginBottom: 8 }}>Teams</div>
 
@@ -559,7 +549,6 @@ export default function ManageEventsPage() {
         </div>
       </section>
 
-      {/* BotB */}
       <section style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <div style={{ fontWeight: 900, marginBottom: 6 }}>Best of the Best (BotB)</div>
         <div style={{ color: "#555", fontSize: 13, marginBottom: 10 }}>
@@ -587,6 +576,28 @@ export default function ManageEventsPage() {
           <div style={{ color: "#666" }}>BotB is disabled.</div>
         ) : (
           <div style={{ padding: 10, borderRadius: 10, border: "1px solid #eee", background: "white" }}>
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>Event name</div>
+
+            <input
+              type="text"
+              value={botbCustomName}
+              onChange={(e) => setBotbCustomName(e.target.value)}
+              placeholder="Best of the Best"
+              maxLength={80}
+              style={{
+                width: "100%",
+                maxWidth: 360,
+                padding: "8px 10px",
+                borderRadius: 8,
+                border: "1px solid #ccc",
+                marginBottom: 8,
+              }}
+            />
+
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>
+              Competitions label: <b>{botbDisplayName}</b>
+            </div>
+
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Select rounds to include</div>
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
@@ -610,7 +621,6 @@ export default function ManageEventsPage() {
         )}
       </section>
 
-      {/* H2Z Legs */}
       <section style={{ marginTop: 12, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
         <div style={{ fontWeight: 900, marginBottom: 6 }}>Hero to Zero (H2Z)</div>
         <div style={{ color: "#555", fontSize: 13, marginBottom: 10 }}>
@@ -734,7 +744,6 @@ export default function ManageEventsPage() {
         )}
       </section>
 
-      {/* Preview */}
       <section style={{ marginTop: 12, padding: 12, border: "1px dashed #bbb", borderRadius: 10, background: "#fafafa" }}>
         <div style={{ fontWeight: 900, marginBottom: 6 }}>Preview</div>
         <div style={{ color: "#333" }}>

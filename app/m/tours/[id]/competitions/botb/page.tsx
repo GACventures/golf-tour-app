@@ -1,4 +1,3 @@
-// app/m/tours/[id]/competitions/botb/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -62,6 +61,7 @@ type BotBSettingsRow = {
   tour_id: string;
   enabled: boolean;
   round_nos: number[];
+  custom_name: string | null;
 };
 
 type CourseRow = {
@@ -81,6 +81,11 @@ function safeName(v: any, fallback: string) {
 function normalizeTee(v: any): Tee {
   const s = String(v ?? "").trim().toUpperCase();
   return s === "F" ? "F" : "M";
+}
+
+function normalizeBotbName(v: any): string {
+  const s = String(v ?? "").trim();
+  return s || "Best of the Best";
 }
 
 function n(x: any, fallback = 0): number {
@@ -106,7 +111,7 @@ function rankWithTies(entries: Array<{ id: string; value: number }>, lowerIsBett
     const v = Number.isFinite(e.value) ? e.value : 0;
 
     if (lastValue === null || v !== lastValue) {
-      currentRank = seen; // 1,1,3 ties style
+      currentRank = seen;
       lastValue = v;
     }
     rankById.set(e.id, currentRank);
@@ -130,7 +135,6 @@ export default function MobileBotBPage() {
   const [pars, setPars] = useState<ParRow[]>([]);
   const [botb, setBotb] = useState<BotBSettingsRow | null>(null);
 
-  // ✅ course id -> name map (for footer labels)
   const [courseNameById, setCourseNameById] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -148,7 +152,6 @@ export default function MobileBotBPage() {
         if (!alive) return;
         setTour(tData as Tour);
 
-        // rounds
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,name,round_no,created_at,course_id")
@@ -161,7 +164,6 @@ export default function MobileBotBPage() {
         if (!alive) return;
         setRounds(rr);
 
-        // ✅ load course names for the rounds on this tour
         const courseIds = Array.from(new Set(rr.map((r) => String(r.course_id ?? "").trim()).filter(Boolean)));
         if (courseIds.length > 0) {
           const { data: cData, error: cErr } = await supabase
@@ -186,7 +188,6 @@ export default function MobileBotBPage() {
           setCourseNameById({});
         }
 
-        // players (via tour_players join)
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("tour_id,player_id,players(id,name,gender)")
@@ -207,10 +208,9 @@ export default function MobileBotBPage() {
         if (!alive) return;
         setPlayers(ps);
 
-        // BotB settings
         const { data: bData, error: bErr } = await supabase
           .from("tour_botb_settings")
-          .select("tour_id,enabled,round_nos")
+          .select("tour_id,enabled,round_nos,custom_name")
           .eq("tour_id", tourId)
           .maybeSingle();
 
@@ -224,6 +224,7 @@ export default function MobileBotBPage() {
                 tour_id: String(bRow.tour_id),
                 enabled: bRow.enabled === true,
                 round_nos: Array.isArray((bRow as any).round_nos) ? (bRow as any).round_nos.map((x: any) => Number(x)) : [],
+                custom_name: (bRow as any).custom_name == null ? null : String((bRow as any).custom_name),
               }
             : null
         );
@@ -231,7 +232,6 @@ export default function MobileBotBPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
-        // round_players
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
@@ -254,7 +254,6 @@ export default function MobileBotBPage() {
           setRoundPlayers([]);
         }
 
-        // scores — one round at a time (avoids Supabase 1000-row issues)
         if (roundIds.length > 0 && playerIds.length > 0) {
           const allScores: ScoreRow[] = [];
 
@@ -277,7 +276,6 @@ export default function MobileBotBPage() {
           setScores([]);
         }
 
-        // pars for relevant courses (re-use courseIds derived from rounds)
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
             .from("pars")
@@ -304,7 +302,7 @@ export default function MobileBotBPage() {
         }
       } catch (e: any) {
         if (!alive) return;
-        setErrorMsg(e?.message ?? "Failed to load BotB leaderboard.");
+        setErrorMsg(e?.message ?? "Failed to load leaderboard.");
       } finally {
         if (!alive) return;
         setLoading(false);
@@ -327,6 +325,8 @@ export default function MobileBotBPage() {
     });
     return arr;
   }, [rounds]);
+
+  const botbDisplayName = useMemo(() => normalizeBotbName(botb?.custom_name), [botb]);
 
   const selectedRoundNos = useMemo(() => {
     const raw = botb?.enabled ? botb?.round_nos ?? [] : [];
@@ -399,7 +399,6 @@ export default function MobileBotBPage() {
   }, [roundPlayers]);
 
   const botbPerPlayer = useMemo(() => {
-    // per player: per selected round total stableford + overall sum
     const per: Record<string, { byRoundId: Record<string, number>; total: number }> = {};
     for (const p of players) per[p.id] = { byRoundId: {}, total: 0 };
 
@@ -430,7 +429,7 @@ export default function MobileBotBPage() {
         let sum = 0;
         for (let holeIndex = 0; holeIndex < 18; holeIndex++) {
           const raw = String(scoreArr[holeIndex] ?? "").trim().toUpperCase();
-          if (!raw) continue; // blank not entered
+          if (!raw) continue;
           const pts = n(effectiveRoundCtx.netPointsForHole?.(p.id, holeIndex), 0);
           sum += pts;
         }
@@ -448,13 +447,12 @@ export default function MobileBotBPage() {
       id: p.id,
       value: n(botbPerPlayer[p.id]?.total, 0),
     }));
-    // higher is better
     return rankWithTies(entries, false);
   }, [players, botbPerPlayer]);
 
   const botbDescription = useMemo(() => {
-    if (!botb?.enabled) return "BotB is disabled for this tour.";
-    if (selectedRounds.length === 0) return "BotB is enabled, but no rounds are selected.";
+    if (!botb?.enabled) return `${botbDisplayName} is disabled for this tour.`;
+    if (selectedRounds.length === 0) return `${botbDisplayName} is enabled, but no rounds are selected.`;
 
     const parts = selectedRounds.map((r) => {
       const rn = Number.isFinite(Number(r.round_no)) ? `R${Number(r.round_no)}` : "R?";
@@ -464,8 +462,8 @@ export default function MobileBotBPage() {
       return `${rn}: ${label}`;
     });
 
-    return `BotB = aggregate Stableford score on ${parts.join(" · ")}`;
-  }, [botb, selectedRounds, courseNameById]);
+    return `${botbDisplayName} = aggregate Stableford score on ${parts.join(" · ")}`;
+  }, [botb, botbDisplayName, selectedRounds, courseNameById]);
 
   if (!tourId || !isLikelyUuid(tourId)) {
     return (
@@ -500,8 +498,7 @@ export default function MobileBotBPage() {
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
       <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="text-sm font-semibold text-gray-900">BotB leaderboard</div>
-          {/* ✅ Removed tour name under heading (redundant) */}
+          <div className="text-sm font-semibold text-gray-900">{botbDisplayName} leaderboard</div>
         </div>
       </div>
 
@@ -527,7 +524,6 @@ export default function MobileBotBPage() {
               <table className="min-w-full border-collapse table-fixed">
                 <thead>
                   <tr className="bg-gray-50">
-                    {/* Player (sticky left) */}
                     <th
                       className={`sticky left-0 top-0 z-50 bg-gray-50 border-r border-gray-200 ${thBase} text-left whitespace-nowrap`}
                       style={{ width: 140, minWidth: 140 }}
@@ -535,15 +531,13 @@ export default function MobileBotBPage() {
                       Player
                     </th>
 
-                    {/* BotB Total (SECOND COLUMN) */}
                     <th
                       className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right whitespace-nowrap`}
-                      style={{ width: 120, minWidth: 120 }}
+                      style={{ width: 140, minWidth: 140 }}
                     >
-                      BotB total
+                      {botbDisplayName} total
                     </th>
 
-                    {/* Selected BotB rounds */}
                     {selectedRounds.map((r) => {
                       const rn = Number.isFinite(Number(r.round_no)) ? `R${Number(r.round_no)}` : "R?";
                       return (
@@ -562,7 +556,6 @@ export default function MobileBotBPage() {
 
                     return (
                       <tr key={p.id} className="border-b last:border-b-0">
-                        {/* Player */}
                         <td
                           className="sticky left-0 z-30 bg-white border-r border-gray-200 px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap"
                           style={{ width: 140, minWidth: 140 }}
@@ -570,14 +563,12 @@ export default function MobileBotBPage() {
                           {p.name}
                         </td>
 
-                        {/* BotB Total */}
-                        <td className={`${tdBase} whitespace-nowrap`} style={{ width: 120, minWidth: 120 }}>
+                        <td className={`${tdBase} whitespace-nowrap`} style={{ width: 140, minWidth: 140 }}>
                           <span className={`inline-flex justify-end rounded-md px-2 py-1 font-bold ${medalClass(rank)}`}>
                             {total} <span className="text-gray-700">&nbsp;({rank ?? 0})</span>
                           </span>
                         </td>
 
-                        {/* Round columns */}
                         {selectedRounds.map((r) => {
                           const v = botbPerPlayer[p.id]?.byRoundId?.[String(r.id)];
                           return (

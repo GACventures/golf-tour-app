@@ -76,6 +76,7 @@ type BotBSettingsRow = {
   tour_id: string;
   enabled: boolean;
   round_nos: number[];
+  custom_name: string | null;
 };
 
 function isLikelyUuid(v: string) {
@@ -90,6 +91,11 @@ function safeName(v: any, fallback: string) {
 function normalizeTee(v: any): Tee {
   const s = String(v ?? "").trim().toUpperCase();
   return s === "F" ? "F" : "M";
+}
+
+function normalizeBotbName(v: any): string {
+  const s = String(v ?? "").trim();
+  return s || "Best of the Best";
 }
 
 function fmt2(x: number) {
@@ -120,7 +126,7 @@ function rankWithTies(entries: Array<{ id: string; value: number }>, lowerIsBett
     const v = Number.isFinite(e.value) ? e.value : 0;
 
     if (lastValue === null || v !== lastValue) {
-      currentRank = seen; // 1,1,3 style
+      currentRank = seen;
       lastValue = v;
     }
     rankById.set(e.id, currentRank);
@@ -144,7 +150,7 @@ type FixedCompKey =
 type FixedCompMeta = {
   key: FixedCompKey;
   label: string;
-  competitionId: string; // matches catalog id
+  competitionId: string;
   lowerIsBetter?: boolean;
   format: (v: number) => string;
   detailFromStatsKey?: string;
@@ -241,28 +247,6 @@ export default function MobileCompetitionsPage() {
     []
   );
 
-  const definitions = useMemo(() => {
-    const base = [
-      { label: "Napoleon", text: "Average Stableford points on Par 3 holes" },
-      { label: "Big George", text: "Average Stableford points on Par 4 holes" },
-      { label: "Grand Canyon", text: "Average Stableford points on Par 5 holes" },
-      { label: "Wizard", text: "Percentage of holes where Stableford points are 4+" },
-      { label: "Bagel Man", text: "Percentage of holes where Stableford points are 0" },
-      { label: "Eclectic", text: "Total of each player’s best Stableford points per hole" },
-      { label: "Schumacher", text: "Average Stableford points on holes 1–3" },
-      { label: "Closer", text: "Average Stableford points on holes 16–18" },
-      { label: "Hot Streak", text: "Longest run in any round of consecutive holes where gross strokes is par or better" },
-      { label: "Cold Streak", text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse" },
-      {
-        label: "H2Z",
-        text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole",
-      },
-    ];
-
-    // BotB definition appended dynamically (needs rounds+courses)
-    return base;
-  }, []);
-
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
@@ -273,22 +257,19 @@ export default function MobileCompetitionsPage() {
       setErrorMsg("");
 
       try {
-        // Tour
         const { data: tData, error: tErr } = await supabase.from("tours").select("id,name").eq("id", tourId).single();
         if (tErr) throw tErr;
         if (!alive) return;
         setTour(tData as Tour);
 
-        // BotB settings (may not exist)
         {
           const { data: bData, error: bErr } = await supabase
             .from("tour_botb_settings")
-            .select("tour_id,enabled,round_nos")
+            .select("tour_id,enabled,round_nos,custom_name")
             .eq("tour_id", tourId)
             .maybeSingle();
 
           if (bErr) throw bErr;
-
           if (!alive) return;
 
           if (bData) {
@@ -296,13 +277,17 @@ export default function MobileCompetitionsPage() {
             const round_nos = Array.isArray(row.round_nos)
               ? row.round_nos.map((x: any) => asInt(x, 0)).filter((n: number) => n > 0)
               : [];
-            setBotb({ tour_id: String(row.tour_id), enabled: row.enabled === true, round_nos });
+            setBotb({
+              tour_id: String(row.tour_id),
+              enabled: row.enabled === true,
+              round_nos,
+              custom_name: row.custom_name == null ? null : String(row.custom_name),
+            });
           } else {
             setBotb(null);
           }
         }
 
-        // Rounds
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,name,round_no,created_at,course_id")
@@ -310,11 +295,11 @@ export default function MobileCompetitionsPage() {
           .order("round_no", { ascending: true, nullsFirst: false })
           .order("created_at", { ascending: true });
         if (rErr) throw rErr;
+
         const rr = (rData ?? []) as RoundRow[];
         if (!alive) return;
         setRounds(rr);
 
-        // Courses for naming in BotB definition / display (optional but helpful)
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length) {
           const { data: cData, error: cErr } = await supabase.from("courses").select("id,name").in("id", courseIds);
@@ -327,7 +312,6 @@ export default function MobileCompetitionsPage() {
           setCoursesById({});
         }
 
-        // Players (tour_players join)
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
@@ -350,7 +334,6 @@ export default function MobileCompetitionsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
-        // Round players
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
@@ -372,7 +355,6 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
-        // Scores: round-by-round (keeps you away from limits)
         if (roundIds.length > 0 && playerIds.length > 0) {
           const allScores: ScoreRow[] = [];
 
@@ -395,7 +377,6 @@ export default function MobileCompetitionsPage() {
           setScores([]);
         }
 
-        // Pars for all courses in tour rounds
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
             .from("pars")
@@ -420,7 +401,6 @@ export default function MobileCompetitionsPage() {
           setPars([]);
         }
 
-        // H2Z legs
         {
           const { data: lData, error: lErr } = await supabase
             .from("tour_h2z_legs")
@@ -617,13 +597,14 @@ export default function MobileCompetitionsPage() {
     return perPlayer;
   }, [players, sortedRounds, roundPlayers, ctx, h2zLegsNorm]);
 
-  // ---- BotB (Best of the Best) totals (computed from ctx + round_nos selection) ----
   const botbRoundNos = useMemo(() => {
     if (!botb?.enabled) return [];
     const nums = (botb.round_nos ?? []).map((n) => asInt(n, 0)).filter((n) => n > 0);
     nums.sort((a, b) => a - b);
     return Array.from(new Set(nums));
   }, [botb]);
+
+  const botbDisplayName = useMemo(() => normalizeBotbName(botb?.custom_name), [botb]);
 
   const botbRounds = useMemo(() => {
     if (!botbRoundNos.length) return [];
@@ -685,7 +666,6 @@ export default function MobileCompetitionsPage() {
     return out;
   }, [botb, botbRounds, players, roundPlayers, ctx]);
 
-  // For the footer line (under the table): keep "R#" prefix, no "Round name", no bold.
   const botbRoundsLabel = useMemo(() => {
     if (!botb?.enabled) return "";
     if (!botbRoundNos.length || botbRounds.length === 0) return "(no rounds selected)";
@@ -697,7 +677,6 @@ export default function MobileCompetitionsPage() {
     return parts.join(" · ");
   }, [botb, botbRoundNos, botbRounds, coursesById]);
 
-  // For the Definitions section: remove the "R#" prefix and show "Round # — Course".
   const botbRoundsLabelDefinition = useMemo(() => {
     if (!botb?.enabled) return "";
     if (!botbRoundNos.length || botbRounds.length === 0) return "(no rounds selected)";
@@ -708,6 +687,34 @@ export default function MobileCompetitionsPage() {
     });
     return parts.join(" · ");
   }, [botb, botbRoundNos, botbRounds, coursesById]);
+
+  const definitions = useMemo(() => {
+    const base = [
+      { label: "Napoleon", text: "Average Stableford points on Par 3 holes" },
+      { label: "Big George", text: "Average Stableford points on Par 4 holes" },
+      { label: "Grand Canyon", text: "Average Stableford points on Par 5 holes" },
+      { label: "Wizard", text: "Percentage of holes where Stableford points are 4+" },
+      { label: "Bagel Man", text: "Percentage of holes where Stableford points are 0" },
+      { label: "Eclectic", text: "Total of each player’s best Stableford points per hole" },
+      { label: "Schumacher", text: "Average Stableford points on holes 1–3" },
+      { label: "Closer", text: "Average Stableford points on holes 16–18" },
+      { label: "Hot Streak", text: "Longest run in any round of consecutive holes where gross strokes is par or better" },
+      { label: "Cold Streak", text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse" },
+      {
+        label: "H2Z",
+        text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole",
+      },
+    ];
+
+    if (showBotbColumn) {
+      base.push({
+        label: botbDisplayName,
+        text: `Aggregate Stableford on ${botbRoundsLabelDefinition || "(selected rounds)"}.`,
+      });
+    }
+
+    return base;
+  }, [botbDisplayName, botbRoundsLabelDefinition]);
 
   function toggleFixedDetail(playerId: string, key: FixedCompKey) {
     setOpenDetail((prev) => {
@@ -806,7 +813,9 @@ export default function MobileCompetitionsPage() {
                       </th>
                     ))}
 
-                    {showBotbColumn ? <th className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>BotB</th> : null}
+                    {showBotbColumn ? (
+                      <th className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>{botbDisplayName}</th>
+                    ) : null}
                   </tr>
                 </thead>
 
@@ -946,7 +955,7 @@ export default function MobileCompetitionsPage() {
                               <Link
                                 href={`/m/tours/${tourId}/competitions/botb`}
                                 className={`${boxBase} ${medalClass(botbCell.rank)} ${medalHover(botbCell.rank)} ${press}`}
-                                aria-label="Open BotB table"
+                                aria-label={`Open ${botbDisplayName} table`}
                               >
                                 {botbCell.total} <span className="text-gray-500">&nbsp;({botbCell.rank ?? 0})</span>
                               </Link>
@@ -966,7 +975,8 @@ export default function MobileCompetitionsPage() {
                 {showBotbColumn ? (
                   <>
                     {" "}
-                    · BotB = aggregate Stableford on {botbRoundsLabel || "(selected rounds)"}. Tap BotB to open the BotB table.
+                    · {botbDisplayName} = aggregate Stableford on {botbRoundsLabel || "(selected rounds)"}. Tap {botbDisplayName} to
+                    open the table.
                   </>
                 ) : null}
               </div>
@@ -982,15 +992,6 @@ export default function MobileCompetitionsPage() {
                       <span className="text-gray-600">—</span> <span className="text-gray-800">{d.text}</span>
                     </li>
                   ))}
-                  {showBotbColumn ? (
-                    <li className="leading-snug">
-                      <span className="font-semibold text-gray-900">BotB</span>{" "}
-                      <span className="text-gray-600">—</span>{" "}
-                      <span className="text-gray-800">
-                        Aggregate Stableford on {botbRoundsLabelDefinition || "(selected rounds)"}.
-                      </span>
-                    </li>
-                  ) : null}
                 </ul>
               </div>
             </div>
