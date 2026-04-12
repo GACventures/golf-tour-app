@@ -535,7 +535,7 @@ export default function MobileBotBPage() {
                       className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right whitespace-nowrap`}
                       style={{ width: 140, minWidth: 140 }}
                     >
-                      {botbDisplayName} total
+                      Total
                     </th>
 
                     {selectedRounds.map((r) => {
