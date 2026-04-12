@@ -215,7 +215,6 @@ export default function MobileCompetitionsPage() {
         key: "bagelMan",
         label: "Bagel Man",
         competitionId: "tour_bagel_man_zero_pct",
-        lowerIsBetter: true,
         format: (v) => fmtPct0(v),
       },
       {
@@ -238,7 +237,6 @@ export default function MobileCompetitionsPage() {
         key: "coldStreak",
         label: "Cold Streak",
         competitionId: "tour_cold_streak_best_run",
-        lowerIsBetter: true,
         format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
         tappable: true,
         detailFromStatsKey: "streak_where",
@@ -968,9 +966,8 @@ export default function MobileCompetitionsPage() {
                 </tbody>
               </table>
 
-              <div className="border-t bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                Ranks use “equal ranks” for ties (1, 1, 3). Bagel Man ranks lower % as better. Cold Streak ranks lower as
-                better. Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown. Tap H2Z to see peak
+              <div className="border-t bg-gray-50 px-3 py-2 text-sm text-gray-600">
+                Tap Hot/Cold cells for the round+hole range. Tap Eclectic to see the breakdown. Tap H2Z to see peak
                 score and (holes count).
                 {showBotbColumn ? (
                   <>
