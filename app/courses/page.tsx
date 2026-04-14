@@ -27,6 +27,30 @@ function clampInt(n: any, fallback: number) {
   return Math.trunc(v);
 }
 
+function validateStrokeIndexes(rows: ParRow[], tee: Tee): string | null {
+  const sis = rows
+    .filter((r) => r.tee === tee)
+    .map((r) => clampInt(r.stroke_index, NaN))
+    .filter((n) => Number.isFinite(n));
+
+  if (sis.length !== 18) {
+    return `${tee === "M" ? "Men's" : "Women's"} SI must contain 18 values.`;
+  }
+
+  const set = new Set(sis);
+  if (set.size !== 18) {
+    return `${tee === "M" ? "Men's" : "Women's"} SI must be unique with values 1–18 used once each.`;
+  }
+
+  for (let i = 1; i <= 18; i++) {
+    if (!set.has(i)) {
+      return `${tee === "M" ? "Men's" : "Women's"} SI must include every number from 1 to 18.`;
+    }
+  }
+
+  return null;
+}
+
 export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [tours, setTours] = useState<Tour[]>([]);
@@ -37,7 +61,6 @@ export default function CoursesPage() {
 
   const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
 
-  // Store as a flat list, but we will render a matrix by hole+tee
   const [pars, setPars] = useState<ParRow[]>([]);
   const [parsStatus, setParsStatus] = useState<string>("");
 
@@ -131,15 +154,12 @@ export default function CoursesPage() {
       return;
     }
 
-    // If nothing in DB yet, initialise all 18 holes x 2 tees with defaults
     if (!data || data.length === 0) {
       setPars(buildDefaultPars(courseId));
       setParsStatus("No pars found yet — defaults initialised for M/F (not saved)");
       return;
     }
 
-    // Normalize into a complete 18-hole x (M,F) set.
-    // If any old rows exist without tee (shouldn’t now), treat as M.
     const byKey = new Map<string, ParRow>();
 
     for (const row of data as any[]) {
@@ -193,7 +213,6 @@ export default function CoursesPage() {
     const found = pars.find((p) => p.hole_number === hole && p.tee === tee);
     if (found) return found;
 
-    // fallback (shouldn't happen)
     return {
       course_id: selectedCourse?.id ?? "",
       hole_number: hole,
@@ -228,7 +247,6 @@ export default function CoursesPage() {
     setParsStatus("Saving...");
     setErrorMsg("");
 
-    // Build 36 rows (18 holes x 2 tees)
     const payload: ParRow[] = [];
     for (let hole = 1; hole <= 18; hole++) {
       for (const tee of ["M", "F"] as Tee[]) {
@@ -246,17 +264,38 @@ export default function CoursesPage() {
       }
     }
 
-    const { error } = await supabase.from("pars").upsert(payload as any, {
-      onConflict: "course_id,hole_number,tee",
-    });
+    const mErr = validateStrokeIndexes(payload, "M");
+    if (mErr) {
+      setErrorMsg(mErr);
+      setParsStatus("");
+      return;
+    }
 
-    if (error) {
-      setErrorMsg(error.message);
+    const fErr = validateStrokeIndexes(payload, "F");
+    if (fErr) {
+      setErrorMsg(fErr);
+      setParsStatus("");
+      return;
+    }
+
+    const { error: deleteError } = await supabase.from("pars").delete().eq("course_id", courseId);
+
+    if (deleteError) {
+      setErrorMsg(deleteError.message);
+      setParsStatus("");
+      return;
+    }
+
+    const { error: insertError } = await supabase.from("pars").insert(payload as any);
+
+    if (insertError) {
+      setErrorMsg(insertError.message);
       setParsStatus("");
       return;
     }
 
     setParsStatus("Saved ✅");
+    await loadPars(courseId);
   }
 
   const courseCountLabel = useMemo(() => {
@@ -336,12 +375,8 @@ export default function CoursesPage() {
                   <tr key={hole}>
                     <td style={{ padding: 6, borderBottom: "1px solid #eee" }}>{hole}</td>
 
-                    {/* Par M */}
                     <td style={{ padding: 6, borderBottom: "1px solid #eee" }}>
-                      <select
-                        value={m.par}
-                        onChange={(e) => setParRow(hole, "M", { par: Number(e.target.value) })}
-                      >
+                      <select value={m.par} onChange={(e) => setParRow(hole, "M", { par: Number(e.target.value) })}>
                         {[3, 4, 5, 6].map((v) => (
                           <option key={v} value={v}>
                             {v}
@@ -350,7 +385,6 @@ export default function CoursesPage() {
                       </select>
                     </td>
 
-                    {/* SI M */}
                     <td style={{ padding: 6, borderBottom: "1px solid #eee" }}>
                       <select
                         value={m.stroke_index}
@@ -364,12 +398,8 @@ export default function CoursesPage() {
                       </select>
                     </td>
 
-                    {/* Par F */}
                     <td style={{ padding: 6, borderBottom: "1px solid #eee" }}>
-                      <select
-                        value={f.par}
-                        onChange={(e) => setParRow(hole, "F", { par: Number(e.target.value) })}
-                      >
+                      <select value={f.par} onChange={(e) => setParRow(hole, "F", { par: Number(e.target.value) })}>
                         {[3, 4, 5, 6].map((v) => (
                           <option key={v} value={v}>
                             {v}
@@ -378,7 +408,6 @@ export default function CoursesPage() {
                       </select>
                     </td>
 
-                    {/* SI F */}
                     <td style={{ padding: 6, borderBottom: "1px solid #eee" }}>
                       <select
                         value={f.stroke_index}
@@ -400,7 +429,7 @@ export default function CoursesPage() {
           <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
             <button onClick={() => savePars(selectedCourse.id)}>Save Pars (M + F)</button>
             <span style={{ fontSize: 12, opacity: 0.7 }}>
-              Saves 36 rows into <code>pars</code> using conflict key <code>(course_id,hole_number,tee)</code>.
+              Save replaces the existing 36 rows for this course with the new M/F values.
             </span>
           </div>
         </>
