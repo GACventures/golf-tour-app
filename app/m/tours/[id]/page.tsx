@@ -36,7 +36,7 @@ const JAPAN_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
 const JAPAN_HERO = "/tours/japan-poster_mobile_1080w.webp";
 
 const SUND_TOUR_ID = "544f1602-17b1-4446-9cb3-da2fffd2e4eb";
-const SUND_TOUR_HERO = "/tours/sund_golf_tour_logo.webp";
+const SUND_TOUR_HERO = "/tours/sund_golf_tour_logo_v2.webp";
 
 const PORTUGAL_TOUR_ID = "b5e5b90d-0ae5-4be5-a3cd-3ef1c73cb6b5";
 const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
