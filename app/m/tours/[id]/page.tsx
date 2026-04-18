@@ -322,16 +322,16 @@ export default function MobileTourLandingPage() {
     };
   }, [tourId]);
 
- const heroImage = useMemo(() => {
-  if (tourId === SPACE_TOUR_ID) return SPACE_TOUR_HERO; // ✅ NEW (must be first)
-  if (tourId === SUND_TOUR_ID) return SUND_TOUR_HERO;
-  if (tourId === NZ_TOUR_2026_ID) return NZ_TOUR_2026_HERO;
-  if (tourId === SCOTLAND_TOUR_ID) return SCOTLAND_HERO;
-  if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
-  if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
-  if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
-  return tour?.image_url?.trim() || DEFAULT_HERO;
-}, [tourId, tour?.image_url, tour?.name]);
+  const heroImage = useMemo(() => {
+    if (tourId === SPACE_TOUR_ID) return SPACE_TOUR_HERO;
+    if (tourId === SUND_TOUR_ID) return SUND_TOUR_HERO;
+    if (tourId === NZ_TOUR_2026_ID) return NZ_TOUR_2026_HERO;
+    if (tourId === SCOTLAND_TOUR_ID) return SCOTLAND_HERO;
+    if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
+    if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
+    if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
+    return tour?.image_url?.trim() || DEFAULT_HERO;
+  }, [tourId, tour?.image_url, tour?.name]);
 
   const derivedDates = useMemo(() => {
     const played = rounds.map((r) => r.played_on).filter(Boolean) as string[];
