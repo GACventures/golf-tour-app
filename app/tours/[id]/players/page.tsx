@@ -56,6 +56,12 @@ function fmt1(v: number | null | undefined): string {
   return (Math.round(n * 10) / 10).toFixed(1);
 }
 
+function roundWhole(v: number | null | undefined): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n);
+}
+
 export default function TourPlayersPage() {
   const params = useParams<{ id: string }>();
   const tourId = String(params?.id ?? "").trim();
@@ -146,16 +152,64 @@ export default function TourPlayersPage() {
     setTourStartHcpDraft("");
   }, [selectedPlayerId]);
 
-  // ✅ Helper: ensure a player exists in round_players for ALL rounds in this tour
+  async function getRound1Id(): Promise<string | null> {
+    const { data, error } = await supabase
+      .from("rounds")
+      .select("id,round_no,created_at")
+      .eq("tour_id", tourId)
+      .order("round_no", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true })
+      .limit(1);
+
+    if (error) throw error;
+    const row = (data ?? [])[0] as { id?: string } | undefined;
+    return row?.id ? String(row.id) : null;
+  }
+
+  async function syncRound1PlayingHandicap(playerId: string, effectiveStartingHcp: number) {
+    const round1Id = await getRound1Id();
+    if (!round1Id) return;
+
+    const playingHandicap = roundWhole(effectiveStartingHcp);
+
+    const { data: existing, error: existingErr } = await supabase
+      .from("round_players")
+      .select("id")
+      .eq("round_id", round1Id)
+      .eq("player_id", playerId)
+      .limit(1);
+
+    if (existingErr) throw existingErr;
+
+    if (existing && existing.length > 0) {
+      const { error: updErr } = await supabase
+        .from("round_players")
+        .update({ playing_handicap: playingHandicap })
+        .eq("round_id", round1Id)
+        .eq("player_id", playerId);
+
+      if (updErr) throw updErr;
+      return;
+    }
+
+    const { error: insErr } = await supabase.from("round_players").insert({
+      round_id: round1Id,
+      player_id: playerId,
+      playing: true,
+      playing_handicap: playingHandicap,
+    });
+
+    if (insErr) throw insErr;
+  }
+
+  // ensure a player exists in round_players for ALL rounds in this tour
   async function addPlayerToAllRoundsInTour(playerId: string) {
-    // get all rounds for this tour
     const { data: roundRows, error: roundsErr } = await supabase.from("rounds").select("id").eq("tour_id", tourId);
     if (roundsErr) throw roundsErr;
 
     const roundIds = (roundRows ?? []).map((r: any) => String(r.id)).filter(Boolean);
 
     for (const rid of roundIds) {
-      // check if already exists
       const { data: existing, error: exErr } = await supabase
         .from("round_players")
         .select("id")
@@ -166,7 +220,6 @@ export default function TourPlayersPage() {
       if (exErr) throw exErr;
 
       if (!existing || existing.length === 0) {
-        // Insert only required columns (defaults fill: playing=true, tee='M', playing_handicap=0, course_handicap=0)
         const { error: insErr } = await supabase.from("round_players").insert({
           round_id: rid,
           player_id: playerId,
@@ -208,6 +261,9 @@ export default function TourPlayersPage() {
       // 2) Ensure they are included in all existing rounds (default playing=true)
       await addPlayerToAllRoundsInTour(selectedPlayerId);
 
+      // 3) Seed Round 1 playing handicap from effective starting handicap
+      await syncRound1PlayingHandicap(selectedPlayerId, starting_handicap);
+
       setToast("Added ✓");
       setTourStartHcpDraft("");
       await loadAll();
@@ -243,13 +299,22 @@ export default function TourPlayersPage() {
       return;
     }
 
+    // Keep desktop player-management page in sync too
+    try {
+      await syncRound1PlayingHandicap(playerId, parsed);
+    } catch (e: any) {
+      setEditErr((prev) => ({ ...prev, [playerId]: e?.message ?? "Failed to sync Round 1 handicap." }));
+      setEditSaving((prev) => ({ ...prev, [playerId]: false }));
+      return;
+    }
+
     setToast("Saved ✓");
     setEditSaving((prev) => ({ ...prev, [playerId]: false }));
     await loadAll();
     window.setTimeout(() => setToast(""), 1200);
   }
 
-  // ✅ Tour primacy removal: remove from tour AND all rounds in this tour
+  // Tour primacy removal: remove from tour AND all rounds in this tour
   async function removePlayerFromTour(playerId: string) {
     if (!tourId || !playerId) return;
 

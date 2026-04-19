@@ -12,24 +12,21 @@ type ScoreEntryLayout = "classic" | "alt";
 type Tour = {
   id: string;
   name: string;
-  start_date: string | null; // YYYY-MM-DD
-  end_date: string | null; // YYYY-MM-DD
-  score_entry_layout: string | null; // DB text column; normalize to ScoreEntryLayout in UI
-
-  // ✅ NEW: tour-level matchplay toggle
+  start_date: string | null;
+  end_date: string | null;
+  score_entry_layout: string | null;
   matchplay_active?: boolean | null;
 };
 
 type Course = { id: string; name: string; tour_id: string | null };
 
-// ✅ start_handicap is now numeric(5,1) in DB -> treat as number
 type Player = { id: string; name: string; start_handicap: number | null };
 
 type TourPlayerRow = {
   tour_id: string;
   player_id: string;
-  starting_handicap: number | null; // ✅ numeric(5,1) in DB (tour override)
-  players: Player | Player[] | null; // global
+  starting_handicap: number | null;
+  players: Player | Player[] | null;
 };
 
 type Round = {
@@ -39,7 +36,7 @@ type Round = {
   name: string | null;
   round_no: number | null;
   created_at: string | null;
-  played_on: string | null; // date
+  played_on: string | null;
 };
 
 type RoundGroup = { id: string; round_id: string; tee_time: string | null };
@@ -58,13 +55,10 @@ type TourGroupMemberRow = { group_id: string; player_id: string };
 
 type TourGroupingSettings = {
   tour_id: string;
-
   default_team_best_m: number | null;
-
   individual_mode: "ALL" | "BEST_N" | string;
   individual_best_n: number | null;
   individual_final_required: boolean;
-
   pair_mode: "ALL" | "BEST_Q" | string;
   pair_best_q: number | null;
   pair_final_required: boolean;
@@ -101,7 +95,6 @@ function fmtDate(value: string | null) {
   });
 }
 
-// IMPORTANT: for rounds display — if played_on missing, show TBC (not created_at)
 function fmtRoundPlayedOn(played_on: string | null) {
   if (!played_on) return "TBC";
   const d = new Date(played_on);
@@ -139,20 +132,23 @@ function fmtRuleTeams(s: TourGroupingSettings | null) {
   return `Best ${y} per hole, −1 per zero (all rounds)`;
 }
 
-// ✅ One-decimal helpers
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+function roundWhole(n: number | null | undefined): number {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 0;
+  return Math.round(v);
 }
 
 function parseOneDecimalOrNull(raw: string): number | null {
   const s = String(raw ?? "").trim();
   if (!s) return null;
 
-  // allow "12", "12.", "12.3"
   const n = Number(s);
   if (!Number.isFinite(n)) return null;
 
-  // clamp to >= 0 and round to 1dp
   return round1(Math.max(0, n));
 }
 
@@ -173,7 +169,6 @@ function normalizeScoreEntryLayout(raw: any): ScoreEntryLayout {
 }
 
 function normalizeMatchplayActive(raw: any): boolean {
-  // Default true to preserve “today” behavior if column missing/null in older rows during rollout.
   if (raw === false) return false;
   return true;
 }
@@ -195,30 +190,25 @@ export default function TourPage() {
   const [tourGroupMembers, setTourGroupMembers] = useState<TourGroupMemberRow[]>([]);
   const [eventSettings, setEventSettings] = useState<TourGroupingSettings | null>(null);
 
-  // Rename tour UI state
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [nameSaving, setNameSaving] = useState(false);
   const [nameMsg, setNameMsg] = useState<string>("");
 
-  // Tour dates editing
   const [editingDates, setEditingDates] = useState(false);
-  const [startDateDraft, setStartDateDraft] = useState<string>(""); // YYYY-MM-DD or ""
-  const [endDateDraft, setEndDateDraft] = useState<string>(""); // YYYY-MM-DD or ""
+  const [startDateDraft, setStartDateDraft] = useState<string>("");
+  const [endDateDraft, setEndDateDraft] = useState<string>("");
   const [datesSaving, setDatesSaving] = useState(false);
   const [datesMsg, setDatesMsg] = useState<string>("");
 
-  // Starting handicaps (tour override editor)
   const [hcpDraftByPlayerId, setHcpDraftByPlayerId] = useState<Record<string, string>>({});
   const [hcpSaving, setHcpSaving] = useState(false);
   const [hcpMsg, setHcpMsg] = useState<string>("");
 
-  // ✅ Score entry layout (tour-level setting)
   const [scoreEntryLayout, setScoreEntryLayout] = useState<ScoreEntryLayout>("classic");
   const [layoutSaving, setLayoutSaving] = useState(false);
   const [layoutMsg, setLayoutMsg] = useState<string>("");
 
-  // ✅ NEW: Matchplay active (tour-level setting)
   const [matchplayActive, setMatchplayActive] = useState<boolean>(true);
   const [matchplaySaving, setMatchplaySaving] = useState(false);
   const [matchplayMsg, setMatchplayMsg] = useState<string>("");
@@ -233,7 +223,6 @@ export default function TourPage() {
     setMatchplayMsg("");
 
     try {
-      // Tour
       const { data: tourData, error: tourErr } = await supabase
         .from("tours")
         .select("id,name,start_date,end_date,score_entry_layout,matchplay_active")
@@ -249,13 +238,9 @@ export default function TourPage() {
       setStartDateDraft(t.start_date ?? "");
       setEndDateDraft(t.end_date ?? "");
 
-      // ✅ normalize layout (default classic)
       setScoreEntryLayout(normalizeScoreEntryLayout((tourData as any)?.score_entry_layout));
-
-      // ✅ normalize matchplay active (default true)
       setMatchplayActive(normalizeMatchplayActive((tourData as any)?.matchplay_active));
 
-      // Settings
       const { data: sData, error: sErr } = await supabase
         .from("tour_grouping_settings")
         .select(
@@ -267,7 +252,6 @@ export default function TourPage() {
       if (sErr) throw new Error(sErr.message);
       setEventSettings((sData ?? null) as TourGroupingSettings | null);
 
-      // Rounds
       const { data: roundData, error: roundErr } = await supabase
         .from("rounds")
         .select("id,tour_id,course_id,name,round_no,created_at,played_on")
@@ -279,7 +263,6 @@ export default function TourPage() {
       const roundList = (roundData ?? []) as Round[];
       setRounds(roundList);
 
-      // Courses referenced by rounds
       const courseIds = Array.from(new Set(roundList.map((r) => r.course_id).filter(Boolean))) as string[];
       if (courseIds.length) {
         const { data: cData, error: cErr } = await supabase.from("courses").select("id,name,tour_id").in("id", courseIds);
@@ -295,7 +278,6 @@ export default function TourPage() {
         setCoursesById({});
       }
 
-      // Tee times: earliest from round_groups
       const roundIds = roundList.map((r) => r.id);
       if (roundIds.length) {
         const { data: rgData, error: rgErr } = await supabase.from("round_groups").select("id,round_id,tee_time").in("round_id", roundIds);
@@ -314,7 +296,6 @@ export default function TourPage() {
         setRoundTeeTimeByRoundId({});
       }
 
-      // Tour players (global start handicap is players.start_handicap)
       const { data: tpData, error: tpErr } = await supabase
         .from("tour_players")
         .select("tour_id,player_id,starting_handicap, players(id,name,start_handicap)")
@@ -339,7 +320,6 @@ export default function TourPage() {
 
       setTourPlayers(normalizedTP);
 
-      // init drafts (prefer tour override if present, else global) -> store as 1dp strings
       const draft: Record<string, string> = {};
       for (const r of normalizedTP) {
         const p = normalizePlayerJoin(r.players);
@@ -355,7 +335,6 @@ export default function TourPage() {
       }
       setHcpDraftByPlayerId(draft);
 
-      // Pairs/Teams groups (tour scope)
       const { data: gData, error: gErr } = await supabase
         .from("tour_groups")
         .select("id,tour_id,scope,type,name,round_id,created_at")
@@ -461,7 +440,6 @@ export default function TourPage() {
     return ids.map((pid) => playerNameById.get(pid) ?? pid).join(g.type === "pair" ? " / " : ", ");
   }
 
-  // --- Tour date suggestion defaults ---
   const suggestedTourStartEnd = useMemo(() => {
     const played = rounds
       .map((r) => r.played_on)
@@ -568,13 +546,83 @@ export default function TourPage() {
     setEndDateDraft(tour?.end_date ?? "");
   }
 
+  async function getRound1Id(): Promise<string | null> {
+    const { data, error } = await supabase
+      .from("rounds")
+      .select("id,round_no,created_at")
+      .eq("tour_id", tourId)
+      .order("round_no", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true })
+      .limit(1);
+
+    if (error) throw new Error(error.message);
+    const row = (data ?? [])[0] as { id?: string } | undefined;
+    return row?.id ? String(row.id) : null;
+  }
+
+  async function syncRound1PlayingHandicaps() {
+    const round1Id = await getRound1Id();
+    if (!round1Id) return;
+
+    const { data: tpData, error: tpErr } = await supabase
+      .from("tour_players")
+      .select("player_id,starting_handicap,players(id,start_handicap)")
+      .eq("tour_id", tourId);
+
+    if (tpErr) throw new Error(tpErr.message);
+
+    for (const row of tpData ?? []) {
+      const player = normalizePlayerJoin((row as any).players);
+      const globalStart =
+        player && player.start_handicap != null && Number.isFinite(Number(player.start_handicap))
+          ? Number(player.start_handicap)
+          : 0;
+
+      const overrideStart =
+        (row as any).starting_handicap != null && Number.isFinite(Number((row as any).starting_handicap))
+          ? Number((row as any).starting_handicap)
+          : null;
+
+      const effectiveStart = overrideStart !== null ? overrideStart : globalStart;
+      const playingHandicap = roundWhole(effectiveStart);
+      const playerId = String((row as any).player_id);
+
+      const { data: existing, error: exErr } = await supabase
+        .from("round_players")
+        .select("id")
+        .eq("round_id", round1Id)
+        .eq("player_id", playerId)
+        .limit(1);
+
+      if (exErr) throw new Error(exErr.message);
+
+      if (existing && existing.length > 0) {
+        const { error: updErr } = await supabase
+          .from("round_players")
+          .update({ playing_handicap: playingHandicap })
+          .eq("round_id", round1Id)
+          .eq("player_id", playerId);
+
+        if (updErr) throw new Error(updErr.message);
+      } else {
+        const { error: insErr } = await supabase.from("round_players").insert({
+          round_id: round1Id,
+          player_id: playerId,
+          playing: true,
+          playing_handicap: playingHandicap,
+        });
+
+        if (insErr) throw new Error(insErr.message);
+      }
+    }
+  }
+
   async function saveStartingHandicaps() {
     setHcpMsg("");
     if (!tourId) return;
 
     setHcpSaving(true);
     try {
-      // Store NULL when equals global (to mean “use global”)
       const payload = playersInThisTour.map((p) => {
         const draftStr = hcpDraftByPlayerId[p.id] ?? "";
         const draft = parseOneDecimalOrNull(draftStr);
@@ -593,6 +641,9 @@ export default function TourPage() {
       });
       if (upErr) throw new Error(upErr.message);
 
+      // Sync Round 1 PH from effective starting handicap after desktop save
+      await syncRound1PlayingHandicaps();
+
       setHcpMsg("Saved ✓");
       await loadAll();
     } catch (e: any) {
@@ -602,7 +653,6 @@ export default function TourPage() {
     }
   }
 
-  // ✅ save score entry layout
   async function saveScoreEntryLayout(next: ScoreEntryLayout) {
     setLayoutMsg("");
     if (!tourId) return;
@@ -622,7 +672,6 @@ export default function TourPage() {
     }
   }
 
-  // ✅ NEW: save matchplay active toggle
   async function saveMatchplayActive(next: boolean) {
     setMatchplayMsg("");
     if (!tourId) return;
@@ -654,13 +703,11 @@ export default function TourPage() {
 
   return (
     <div style={{ padding: 16 }}>
-      {/* Title row + edit */}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         {!editingName ? (
           <div>
             <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>{tour?.name ?? "Tour"}</h1>
 
-            {/* Tour dates summary + edit */}
             <div style={{ marginTop: 6, color: "#444", fontSize: 13, fontWeight: 700 }}>
               Dates: <span style={{ fontWeight: 800 }}>{tourDatesLabel}</span>
               {!tour?.start_date || !tour?.end_date ? (
@@ -668,7 +715,6 @@ export default function TourPage() {
               ) : null}
             </div>
 
-            {/* ✅ Score entry layout selector */}
             <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
               <div style={{ fontSize: 13, fontWeight: 800, color: "#333" }}>Score entry:</div>
 
@@ -703,7 +749,6 @@ export default function TourPage() {
               ) : null}
             </div>
 
-            {/* ✅ NEW: Matchplay active toggle */}
             <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
               <div style={{ fontSize: 13, fontWeight: 800, color: "#333" }}>Matchplay:</div>
 
@@ -827,7 +872,6 @@ export default function TourPage() {
         ) : null}
       </div>
 
-      {/* Players */}
       <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Players</h2>
 
       <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -894,7 +938,6 @@ export default function TourPage() {
         </div>
       )}
 
-      {/* Events */}
       <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Events</h2>
       <div style={{ marginTop: 8, color: "#333" }}>
         <div>
@@ -912,7 +955,6 @@ export default function TourPage() {
         </div>
       </div>
 
-      {/* Pairs & Teams */}
       <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Pairs &amp; Teams</h2>
       <div style={{ marginTop: 8 }}>
         <div style={{ color: "#333" }}>
@@ -956,7 +998,6 @@ export default function TourPage() {
         </div>
       </div>
 
-      {/* Rounds */}
       <h2 style={{ marginTop: 24, fontSize: 18, fontWeight: 700 }}>Rounds</h2>
       <div style={{ marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
         <div style={{ color: "#333" }}>
@@ -983,7 +1024,7 @@ export default function TourPage() {
               {rounds.map((r, idx) => {
                 const roundNo = r.round_no ?? idx + 1;
                 const courseName = r.course_id ? coursesById[r.course_id]?.name : null;
-                const dateLabel = fmtRoundPlayedOn(r.played_on); // <-- TBC if null
+                const dateLabel = fmtRoundPlayedOn(r.played_on);
                 const tee = roundTeeTimeByRoundId[r.id] ?? "—";
 
                 return (
