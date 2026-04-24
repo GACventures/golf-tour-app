@@ -37,6 +37,7 @@ const SPACE_TOUR_HERO = "/tours/golf_space_scene.webp";
 
 const JAPAN_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
 const JAPAN_HERO = "/tours/japan-poster_mobile_1080w.webp";
+const JAPAN_ITINERARY_URL = "https://cgegolfs.tkgplatform.com.au/proposal/80/CGE";
 
 const SUND_TOUR_ID = "544f1602-17b1-4446-9cb3-da2fffd2e4eb";
 const SUND_TOUR_HERO = "/tours/sund_golf_tour_logo_v2.webp";
@@ -609,6 +610,15 @@ export default function MobileTourLandingPage() {
     [tourId, docs, stopInertia, clearRerenderTimer, showToast]
   );
 
+  const openItinerary = useCallback(() => {
+    if (tourId === JAPAN_TOUR_ID) {
+      window.open(JAPAN_ITINERARY_URL, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    void openDocByIndex(0);
+  }, [tourId, openDocByIndex]);
+
   const midpoint = (a: Pt, b: Pt): Pt => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
   const distance = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -1057,7 +1067,7 @@ export default function MobileTourLandingPage() {
 
           <TileButton
             className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(0)}
+            onClick={openItinerary}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
