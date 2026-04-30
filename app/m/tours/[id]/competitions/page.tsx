@@ -748,8 +748,8 @@ export default function MobileCompetitionsPage() {
     );
   }
 
-  const thBase = "border-b border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700";
-  const tdBase = "px-3 py-2 text-right text-sm text-gray-900 align-top";
+  const thBase = "border-b border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700";
+  const tdBase = "px-3 py-2 text-right text-base text-gray-900 align-top";
 
   const boxBase = "inline-flex min-w-[92px] justify-end rounded-md px-2 py-1";
   const medalClass = (rank: number | null) =>
@@ -825,7 +825,7 @@ export default function MobileCompetitionsPage() {
                     return (
                       <tr key={p.id} className="border-b last:border-b-0">
                         <td
-                          className="sticky left-0 z-30 bg-white border-r border-gray-200 px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap"
+                          className="sticky left-0 z-30 bg-white border-r border-gray-200 px-3 py-2 text-base font-semibold text-gray-900 whitespace-nowrap"
                           style={{ width: 140, minWidth: 140 }}
                         >
                           {p.name}
@@ -887,7 +887,7 @@ export default function MobileCompetitionsPage() {
                                 )}
 
                                 {tappable && isOpen ? (
-                                  <div className="max-w-[160px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm text-left">
+                                  <div className="max-w-[160px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-xs text-gray-700 shadow-sm text-left">
                                     {detail ? detail : <span className="text-gray-400">No streak found</span>}
                                   </div>
                                 ) : null}
@@ -933,7 +933,7 @@ export default function MobileCompetitionsPage() {
                                 )}
 
                                 {final !== null && isOpen ? (
-                                  <div className="max-w-[180px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-[11px] text-gray-700 shadow-sm text-left">
+                                  <div className="max-w-[180px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-xs text-gray-700 shadow-sm text-left">
                                     <div>
                                       Peak: <span className="font-semibold">{best ?? 0}</span>{" "}
                                       <span className="text-gray-500">({bestLen ?? 0})</span>
