@@ -336,16 +336,18 @@ export default function MobileScoreEntryAltPage() {
 
   // Preferred tee logic:
   function teeForPlayer(pid: string): Tee {
-    if (!pid) return "M";
+  if (!pid) return "M";
 
-    const rp = roundPlayers.find((x) => x.player_id === pid);
-    if (rp?.tee) return normalizeTee(rp.tee);
+  // ✅ Gender from players table is the source of truth for display + colour
+  const g = playersById[pid]?.gender;
+  if (g) return normalizeTee(g);
 
-    const g = playersById[pid]?.gender;
-    if (g) return normalizeTee(g);
+  // Fallback only if player gender is missing
+  const rp = roundPlayers.find((x) => x.player_id === pid);
+  if (rp?.tee) return normalizeTee(rp.tee);
 
-    return "M";
-  }
+  return "M";
+}
 
   async function fetchTourIdForRound(rid: string): Promise<string | null> {
     if (!rid) return null;
