@@ -1090,10 +1090,8 @@ export default function MobileScoreEntryAltPage() {
     const btnBaseBorder = tee === "F" ? "border-pink-300" : "border-sky-300";
     const btnBaseBg = tee === "F" ? "bg-pink-50" : "bg-sky-50";
 
-    const parShade = "bg-amber-200 border-amber-400 text-slate-900";
-
-    function KeyButton(props2: { text: string; onClick: () => void; shaded?: boolean; disabled?: boolean }) {
-      const { text, onClick, shaded, disabled } = props2;
+    function KeyButton(props2: { text: string; onClick: () => void; selected?: boolean; disabled?: boolean }) {
+      const { text, onClick, selected, disabled } = props2;
       return (
         <button
           type="button"
@@ -1101,7 +1099,7 @@ export default function MobileScoreEntryAltPage() {
           disabled={disabled}
           className={[
             "h-14 rounded-xl border text-xl font-black active:scale-[0.99] disabled:opacity-50",
-            shaded ? parShade : `${btnBaseBg} ${btnBaseBorder} text-slate-900`,
+            selected ? "bg-sky-600 text-white border-sky-700" : "bg-white text-slate-900 border-slate-300",
           ].join(" ")}
         >
           {text}
@@ -1109,7 +1107,12 @@ export default function MobileScoreEntryAltPage() {
       );
     }
 
-    function StatBox(props2: { label: string; value: React.ReactNode; variant?: "white" | "black" | "outline" }) {
+    function StatBox(props2: {
+      label: string;
+      value: React.ReactNode;
+      variant?: "white" | "black" | "outline" | "yellow";
+      valueClassName?: string;
+    }) {
       const variant = props2.variant ?? "white";
 
       const box =
@@ -1117,12 +1120,14 @@ export default function MobileScoreEntryAltPage() {
           ? "bg-black text-white border-black"
           : variant === "outline"
             ? "bg-white text-slate-900 border-2 border-slate-900"
-            : "bg-white text-slate-900 border border-slate-300";
+            : variant === "yellow"
+              ? "bg-yellow-200 text-slate-900 border border-yellow-400"
+              : "bg-white text-slate-900 border border-slate-300";
 
       return (
         <div className={`rounded-xl ${box} px-3 py-2 text-center`}>
           <div className="text-xs font-extrabold tracking-wide opacity-80">{props2.label}</div>
-          <div className="mt-1 text-2xl font-black leading-tight">{props2.value}</div>
+          <div className={`mt-1 text-2xl font-black leading-tight ${props2.valueClassName ?? ""}`}>{props2.value}</div>
         </div>
       );
     }
@@ -1138,8 +1143,8 @@ export default function MobileScoreEntryAltPage() {
 
           <div className="p-3 space-y-3">
             <div className="grid grid-cols-2 gap-2">
-              <StatBox label="Par" value={par || "—"} variant="white" />
-              <StatBox label="Shots" value={Number.isFinite(shotsGiven) ? shotsGiven : 0} variant="white" />
+              <StatBox label="Par" value={par || "—"} variant="yellow" />
+              <StatBox label="Shots" value={Number.isFinite(shotsGiven) ? shotsGiven : 0} variant="white" valueClassName="text-red-600" />
               <StatBox label="Strokes" value={grossDisplay} variant="outline" />
               <StatBox label="Points" value={holePts} variant="white" />
             </div>
@@ -1148,17 +1153,17 @@ export default function MobileScoreEntryAltPage() {
               <div className="text-xs font-extrabold text-slate-700 mb-2 text-center">STROKES</div>
 
               <div className="grid grid-cols-3 gap-2">
-                <KeyButton text="1" onClick={() => pressDigit(pid, 1)} shaded={par === 1} disabled={isLocked} />
-                <KeyButton text="2" onClick={() => pressDigit(pid, 2)} shaded={par === 2} disabled={isLocked} />
-                <KeyButton text="3" onClick={() => pressDigit(pid, 3)} shaded={par === 3} disabled={isLocked} />
+                <KeyButton text="1" onClick={() => pressDigit(pid, 1)} selected={raw === "1"} disabled={isLocked} />
+                <KeyButton text="2" onClick={() => pressDigit(pid, 2)} selected={raw === "2"} disabled={isLocked} />
+                <KeyButton text="3" onClick={() => pressDigit(pid, 3)} selected={raw === "3"} disabled={isLocked} />
 
-                <KeyButton text="4" onClick={() => pressDigit(pid, 4)} shaded={par === 4} disabled={isLocked} />
-                <KeyButton text="5" onClick={() => pressDigit(pid, 5)} shaded={par === 5} disabled={isLocked} />
-                <KeyButton text="6" onClick={() => pressDigit(pid, 6)} shaded={par === 6} disabled={isLocked} />
+                <KeyButton text="4" onClick={() => pressDigit(pid, 4)} selected={raw === "4"} disabled={isLocked} />
+                <KeyButton text="5" onClick={() => pressDigit(pid, 5)} selected={raw === "5"} disabled={isLocked} />
+                <KeyButton text="6" onClick={() => pressDigit(pid, 6)} selected={raw === "6"} disabled={isLocked} />
 
-                <KeyButton text="7" onClick={() => pressDigit(pid, 7)} shaded={par === 7} disabled={isLocked} />
-                <KeyButton text="8" onClick={() => pressDigit(pid, 8)} shaded={par === 8} disabled={isLocked} />
-                <KeyButton text="9" onClick={() => pressDigit(pid, 9)} shaded={par === 9} disabled={isLocked} />
+                <KeyButton text="7" onClick={() => pressDigit(pid, 7)} selected={raw === "7"} disabled={isLocked} />
+                <KeyButton text="8" onClick={() => pressDigit(pid, 8)} selected={raw === "8"} disabled={isLocked} />
+                <KeyButton text="9" onClick={() => pressDigit(pid, 9)} selected={raw === "9"} disabled={isLocked} />
 
                 <button
                   type="button"
@@ -1173,7 +1178,7 @@ export default function MobileScoreEntryAltPage() {
                   1-
                 </button>
 
-                <KeyButton text="0" onClick={() => pressZero(pid)} shaded={par === 0} disabled={isLocked} />
+                <KeyButton text="0" onClick={() => pressZero(pid)} selected={raw === "10"} disabled={isLocked} />
 
                 <button
                   type="button"
