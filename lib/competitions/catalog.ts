@@ -58,6 +58,20 @@ function getEntitiesForKind(ctx: TourLikeCtx, kind: "pair" | "team") {
   return out;
 }
 
+function shouldCountHole(r: any, playerId: string, holeIndex: number) {
+  if (r?.isSwingInSpringRound3 === true && typeof r?.isHolePlayed === "function") {
+    return r.isHolePlayed(playerId, holeIndex);
+  }
+  return true;
+}
+
+function memberPlayedHole(r: any, memberIds: string[], holeIndex: number) {
+  if (r?.isSwingInSpringRound3 === true && typeof r?.isHolePlayed === "function") {
+    return memberIds.some((pid) => r.isHolePlayed(pid, holeIndex));
+  }
+  return true;
+}
+
 function avgStablefordByPar(parTarget: 3 | 4 | 5, id: string, name: string): CompetitionDefinition {
   return {
     id,
@@ -77,14 +91,17 @@ function avgStablefordByPar(parTarget: 3 | 4 | 5, id: string, name: string): Com
 
         for (const r of ctx.rounds ?? []) {
           const holes: number[] = (r as any)?.holes ?? [];
-          const parsByHole: number[] = (r as any)?.parsByHole ?? [];
           const isComplete = (r as any)?.isComplete;
           const parForPlayerHole: ((playerId: string, holeIndex: number) => number) | undefined = (r as any)?.parForPlayerHole;
 
           if (typeof isComplete === "function" && !isComplete(p.id)) continue;
 
           for (let i = 0; i < holes.length; i++) {
-            const par = Number(typeof parForPlayerHole === "function" ? parForPlayerHole(p.id, i) : Number(parsByHole[i] ?? 0));
+            if (!shouldCountHole(r, p.id, i)) continue;
+
+            const par = Number(
+              typeof parForPlayerHole === "function" ? parForPlayerHole(p.id, i) : Number((r as any)?.parsByHole?.[i] ?? 0)
+            );
             if (par !== parTarget) continue;
 
             holesPlayed += 1;
@@ -145,10 +162,17 @@ function avgSumStablefordForHoleRange(params: {
           if (typeof isComplete === "function" && !isComplete(p.id)) continue;
 
           let roundSum = 0;
+          let countedAnyHole = false;
+
           for (let i = lo; i <= hi; i++) {
+            if (!shouldCountHole(r, p.id, i)) continue;
+
+            countedAnyHole = true;
             const pts = Number((r as any)?.netPointsForHole?.(p.id, i) ?? 0) || 0;
             roundSum += pts;
           }
+
+          if (!countedAnyHole) continue;
 
           roundsCount += 1;
           sumOfRoundSums += roundSum;
@@ -254,6 +278,11 @@ function streakCompetition(params: {
           let roundBestEnd = 1;
 
           for (let i = 0; i < 18; i++) {
+            if (!shouldCountHole(r, p.id, i)) {
+              curLen = 0;
+              continue;
+            }
+
             const raw = String(arr[i] ?? "").trim().toUpperCase();
             const gross = parseGrossStrokes(raw);
             const par = Number(parForPlayerHole(p.id, i) ?? 0);
@@ -329,6 +358,8 @@ function bagelMan(id: string, name: string): CompetitionDefinition {
           if (typeof isComplete === "function" && !isComplete(p.id)) continue;
 
           for (let i = 0; i < holes.length; i++) {
+            if (!shouldCountHole(r, p.id, i)) continue;
+
             holesPlayed += 1;
             const pts = Number((r as any)?.netPointsForHole?.(p.id, i) ?? 0) || 0;
             if (pts === 0) zeroCount += 1;
@@ -375,6 +406,8 @@ function wizard(id: string, name: string): CompetitionDefinition {
           if (typeof isComplete === "function" && !isComplete(p.id)) continue;
 
           for (let i = 0; i < holes.length; i++) {
+            if (!shouldCountHole(r, p.id, i)) continue;
+
             holesPlayed += 1;
             const pts = Number((r as any)?.netPointsForHole?.(p.id, i) ?? 0) || 0;
             if (pts >= 4) fourPlusCount += 1;
@@ -421,6 +454,8 @@ function eclectic(id: string, name: string): CompetitionDefinition {
           if (typeof isComplete === "function" && !isComplete(p.id)) continue;
 
           for (let i = 0; i < holes.length; i++) {
+            if (!shouldCountHole(r, p.id, i)) continue;
+
             holesPlayed += 1;
             const pts = Number((r as any)?.netPointsForHole?.(p.id, i) ?? 0) || 0;
             bestByHole[i] = Math.max(bestByHole[i], pts);
@@ -474,9 +509,11 @@ function tourPairBestBallStableford(id: string, name: string): CompetitionDefini
           }
 
           for (let i = 0; i < holes.length; i++) {
+            if (!memberPlayedHole(r, members, i)) continue;
+
             holesPlayed += 1;
-            const ptsA = Number((r as any)?.netPointsForHole?.(members[0], i) ?? 0) || 0;
-            const ptsB = Number((r as any)?.netPointsForHole?.(members[1], i) ?? 0) || 0;
+            const ptsA = shouldCountHole(r, members[0], i) ? Number((r as any)?.netPointsForHole?.(members[0], i) ?? 0) || 0 : 0;
+            const ptsB = shouldCountHole(r, members[1], i) ? Number((r as any)?.netPointsForHole?.(members[1], i) ?? 0) || 0 : 0;
             totalPts += Math.max(ptsA, ptsB);
           }
         }
@@ -527,9 +564,11 @@ function tourPairAggregateStableford(id: string, name: string): CompetitionDefin
           }
 
           for (let i = 0; i < holes.length; i++) {
+            if (!memberPlayedHole(r, members, i)) continue;
+
             holesPlayed += 1;
-            const ptsA = Number((r as any)?.netPointsForHole?.(members[0], i) ?? 0) || 0;
-            const ptsB = Number((r as any)?.netPointsForHole?.(members[1], i) ?? 0) || 0;
+            const ptsA = shouldCountHole(r, members[0], i) ? Number((r as any)?.netPointsForHole?.(members[0], i) ?? 0) || 0 : 0;
+            const ptsB = shouldCountHole(r, members[1], i) ? Number((r as any)?.netPointsForHole?.(members[1], i) ?? 0) || 0 : 0;
             totalPts += ptsA + ptsB;
           }
         }
@@ -583,9 +622,14 @@ function tourTeamBestMMinusZeros(id: string, name: string): CompetitionDefinitio
           }
 
           for (let i = 0; i < holes.length; i++) {
+            if (!memberPlayedHole(r, members, i)) continue;
+
             holesPlayed += 1;
 
-            const pts = members.map((pid) => Number((r as any)?.netPointsForHole?.(pid, i) ?? 0) || 0);
+            const pts = members
+              .filter((pid) => shouldCountHole(r, pid, i))
+              .map((pid) => Number((r as any)?.netPointsForHole?.(pid, i) ?? 0) || 0);
+
             const zeros = pts.filter((x) => x === 0).length;
             zeroCountTotal += zeros;
 
@@ -647,8 +691,11 @@ function tourTeamAggregateStableford(id: string, name: string): CompetitionDefin
           }
 
           for (let i = 0; i < holes.length; i++) {
+            if (!memberPlayedHole(r, members, i)) continue;
+
             holesPlayed += 1;
             for (const pid of members) {
+              if (!shouldCountHole(r, pid, i)) continue;
               totalPts += Number((r as any)?.netPointsForHole?.(pid, i) ?? 0) || 0;
             }
           }

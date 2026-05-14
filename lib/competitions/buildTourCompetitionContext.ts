@@ -1,7 +1,7 @@
 import type { CompetitionContext } from "./types";
 import { netStablefordPointsForHole } from "@/lib/stableford";
 
-export const BUILD_TOUR_CTX_VERSION = "BTC-v6-swing-spring-r3-nine-hole-complete";
+export const BUILD_TOUR_CTX_VERSION = "BTC-v7-swing-spring-r3-played-holes";
 
 export type Tee = "M" | "F";
 
@@ -56,6 +56,10 @@ export type TourRoundContextLocal = {
   netPointsForHole: (playerId: string, holeIndex: number) => number;
   isComplete: (playerId: string) => boolean;
   parForPlayerHole: (playerId: string, holeIndex: number) => number;
+
+  isSwingInSpringRound3: boolean;
+  isHolePlayed: (playerId: string, holeIndex: number) => boolean;
+  playedHoleIndexes: (playerId: string) => number[];
 };
 
 export type TourCompetitionContextLocal = {
@@ -228,6 +232,21 @@ export function buildTourCompetitionContext(params: {
         return rp ? rp.playing === true : false;
       };
 
+      const isHolePlayed = (playerId: string, holeIndex: number) => {
+        if (!isPlayingInRound(playerId)) return false;
+        const idx = Math.floor(Number(holeIndex));
+        if (!Number.isFinite(idx) || idx < 0 || idx > 17) return false;
+        return !!String(scoresMatrix[String(playerId)]?.[idx] ?? "").trim();
+      };
+
+      const playedHoleIndexes = (playerId: string) => {
+        const out: number[] = [];
+        for (let i = 0; i < 18; i++) {
+          if (isHolePlayed(playerId, i)) out.push(i);
+        }
+        return out;
+      };
+
       const isComplete = (playerId: string) => {
         if (!isPlayingInRound(playerId)) return true;
 
@@ -287,6 +306,9 @@ export function buildTourCompetitionContext(params: {
         netPointsForHole,
         isComplete,
         parForPlayerHole,
+        isSwingInSpringRound3,
+        isHolePlayed,
+        playedHoleIndexes,
       };
     });
 
