@@ -16,7 +16,7 @@ type RoundRow = {
   round_no: number | null;
   course_id: string | null;
   courses?: { name: string } | null;
-  played_on: string | null; // ✅ correct date column
+  played_on: string | null;
 };
 
 type RoundPlayerRow = {
@@ -44,16 +44,22 @@ type MobilePlayer = {
 type ParRow = {
   course_id: string;
   hole_number: number;
-  tee?: Tee | null; // modern schema
+  tee?: Tee | null;
   par?: number | null;
   stroke_index?: number | null;
-
-  // legacy optional schema (keep as fallback)
   par_m?: number | null;
   stroke_index_m?: number | null;
   par_f?: number | null;
   stroke_index_f?: number | null;
 };
+
+const SWING_IN_SPRING_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
+const SWING_IN_SPRING_SPECIAL_ROUND_NO = 3;
+const SWING_IN_SPRING_SPECIAL_MIN_HOLES = 9;
+
+function roundHalfUp(x: number): number {
+  return x >= 0 ? Math.floor(x + 0.5) : Math.ceil(x - 0.5);
+}
 
 function formatDate(iso: string | null | undefined) {
   if (!iso) return "";
@@ -82,25 +88,10 @@ function rawScoreFor(strokes: number | null, pickup?: boolean | null) {
   return Number.isFinite(n) ? String(n) : "";
 }
 
-function holesSavedCount(scores: ScoreRow[]) {
-  let n = 0;
-  for (const s of scores) {
-    if (s.pickup) n++;
-    else if (Number.isFinite(Number(s.strokes))) n++;
-  }
-  return n;
-}
-
 function thruLabel(n: number) {
   return n >= 18 ? "F" : String(n);
 }
 
-/**
- * Support either schema:
- * - tee-aware rows: tee, par, stroke_index (preferred)
- * - legacy combined rows: par_m/par_f + stroke_index_m/stroke_index_f
- * - legacy simple: par + stroke_index
- */
 function pickParSi(row: ParRow | null | undefined, tee: Tee) {
   if (!row) return { par: 0, si: 0 };
 
@@ -123,7 +114,6 @@ function pickParSi(row: ParRow | null | undefined, tee: Tee) {
 }
 
 async function loadPlayersForTour(tourId: string): Promise<MobilePlayer[]> {
-  // 1) Preferred: tour_players join players
   const { data: tpData, error: tpErr } = await supabase
     .from("tour_players")
     .select("player_id,starting_handicap,players(id,name,gender)")
@@ -140,7 +130,6 @@ async function loadPlayersForTour(tourId: string): Promise<MobilePlayer[]> {
       .filter((p: any) => !!p.id);
   }
 
-  // 2) Fallback: legacy model players.tour_id
   const { data: pData, error: pErr } = await supabase
     .from("players")
     .select("*")
@@ -172,7 +161,6 @@ function isMissingColumnError(msg: string, col: string) {
 }
 
 async function loadParsForCourse(courseId: string) {
-  // ✅ Preferred: tee-aware rows (M/F)
   const attempt1 = await supabase
     .from("pars")
     .select("course_id,hole_number,tee,par,stroke_index")
@@ -182,7 +170,6 @@ async function loadParsForCourse(courseId: string) {
 
   if (!attempt1.error) return (attempt1.data ?? []) as ParRow[];
 
-  // ✅ Fallback: legacy combined schema
   if (isMissingColumnError(attempt1.error.message, "tee")) {
     const attempt2 = await supabase
       .from("pars")
@@ -274,9 +261,6 @@ export default function MobileRoundResultsPage() {
     return m;
   }, [roundPlayers]);
 
-  // ✅ Tee-aware pars:
-  // - If tee rows exist: Map<Tee, Map<hole, row>>
-  // - Else: Map<hole, legacyRow>
   const parsModel = useMemo(() => {
     const hasTee = pars.some((p) => {
       const t = String((p as any)?.tee ?? "").toUpperCase();
@@ -307,7 +291,6 @@ export default function MobileRoundResultsPage() {
     return { hasTee, byTeeHole, byHoleLegacy };
   }, [pars]);
 
-  // Scores indexed for O(1) hole lookup per player
   const scoresByPlayerHole = useMemo(() => {
     const m = new Map<string, Map<number, ScoreRow>>();
     for (const s of scores) {
@@ -319,6 +302,10 @@ export default function MobileRoundResultsPage() {
     }
     return m;
   }, [scores]);
+
+  const isSwingInSpringRound3 = useMemo(() => {
+    return tourId === SWING_IN_SPRING_TOUR_ID && Number(round?.round_no) === SWING_IN_SPRING_SPECIAL_ROUND_NO;
+  }, [tourId, round?.round_no]);
 
   const rows = useMemo(() => {
     const playingIds = new Set<string>();
@@ -377,13 +364,28 @@ export default function MobileRoundResultsPage() {
     return list.map((x, idx) => ({ ...x, rank: idx + 1 }));
   }, [players, roundPlayers, rpByPlayer, scoresByPlayerHole, parsModel]);
 
-  // (kept to avoid logic churn; no longer displayed)
-  const headerTitle = useMemo(() => {
-    const courseName = round?.courses?.name ? ` – ${round.courses.name}` : "";
-    const roundNo = typeof round?.round_no === "number" && round.round_no ? `Round ${round.round_no}` : "Round";
-    const name = (round?.name ?? "").trim();
-    return `${name || roundNo}${courseName}`;
-  }, [round]);
+  const rehandicappingAverage = useMemo(() => {
+    const eligible = rows.filter((r) => (isSwingInSpringRound3 ? r.saved >= SWING_IN_SPRING_SPECIAL_MIN_HOLES : r.saved >= 18));
+
+    if (eligible.length === 0) {
+      return {
+        eligibleCount: 0,
+        rawAverage: null as number | null,
+        roundedAverage: null as number | null,
+        label: "—",
+      };
+    }
+
+    const rawAverage = eligible.reduce((sum, r) => sum + r.total, 0) / eligible.length;
+    const roundedAverage = roundHalfUp(rawAverage);
+
+    return {
+      eligibleCount: eligible.length,
+      rawAverage,
+      roundedAverage,
+      label: String(roundedAverage),
+    };
+  }, [rows, isSwingInSpringRound3]);
 
   const dateText = useMemo(() => formatDate(round?.played_on ?? null), [round?.played_on]);
 
@@ -403,9 +405,6 @@ export default function MobileRoundResultsPage() {
 
   return (
     <div className="bg-white text-slate-900 min-h-dvh">
-      {/* NOTE: Tour name + Home is already rendered by the layout above this page.
-          We only make this page match the Tee-times round header style underneath that layout header. */}
-
       <div className="border-b bg-white">
         <div className="mx-auto max-w-md px-4 py-3">
           <div className="flex items-center justify-between gap-3">
@@ -468,6 +467,25 @@ export default function MobileRoundResultsPage() {
                   </div>
                 </div>
               ))}
+
+              {rows.length > 0 ? (
+                <div className="rounded-xl border border-amber-300 bg-amber-50 text-slate-900 shadow-sm">
+                  <div className="grid grid-cols-[64px_1fr_64px_64px] items-center gap-2 px-3 py-3">
+                    <div />
+                    <div className="min-w-0">
+                      <div className="truncate text-base font-extrabold">Rehandicapping average</div>
+                      <div className="mt-0.5 text-xs font-semibold text-amber-900">
+                        {isSwingInSpringRound3
+                          ? `Includes players with at least ${SWING_IN_SPRING_SPECIAL_MIN_HOLES} holes`
+                          : "Includes players with 18 holes"}
+                        {rehandicappingAverage.eligibleCount > 0 ? ` · ${rehandicappingAverage.eligibleCount} player(s)` : ""}
+                      </div>
+                    </div>
+                    <div className="text-center text-base font-bold">—</div>
+                    <div className="text-center text-base font-extrabold">{rehandicappingAverage.label}</div>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             {rows.length === 0 ? (
