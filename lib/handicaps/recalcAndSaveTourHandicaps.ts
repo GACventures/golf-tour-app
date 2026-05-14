@@ -33,7 +33,7 @@ type RoundPlayerRow = {
   player_id: string;
   playing: boolean;
   playing_handicap: number | null;
-  tee: Tee; // normalized to non-null in-memory
+  tee: Tee;
 };
 
 type PlayerJoin = {
@@ -49,6 +49,10 @@ type TourPlayerJoinRow = {
   starting_handicap: number | null;
   players: PlayerJoin | PlayerJoin[] | null;
 };
+
+const SWING_IN_SPRING_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
+const SWING_IN_SPRING_SPECIAL_ROUND_NO = 3;
+const SWING_IN_SPRING_SPECIAL_MIN_HOLES = 9;
 
 function roundHalfUp(x: number): number {
   return x >= 0 ? Math.floor(x + 0.5) : Math.ceil(x - 0.5);
@@ -81,7 +85,6 @@ function normalizePlayerJoin(val: PlayerJoin | PlayerJoin[] | null | undefined):
 
   const name = String((p as any).name ?? "").trim() || "(missing player)";
 
-  // ✅ CHANGE: keep global start handicap as 1dp (not floored)
   const shNum = Number((p as any).start_handicap);
   const start_handicap = Number.isFinite(shNum) ? Math.max(0, round1dp(shNum)) : null;
 
@@ -152,7 +155,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
     warnings: [],
   };
 
-  // 0) Read tour flag
   const { data: tourRow, error: tourErr } = await supabase
     .from("tours")
     .select("id,rehandicapping_enabled")
@@ -163,7 +165,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
   const rehandicappingEnabled = (tourRow as any)?.rehandicapping_enabled === true;
 
-  // 1) load rounds
   const { data: roundsData, error: roundsErr } = await supabase
     .from("rounds")
     .select("id,tour_id,course_id,round_no,played_on,created_at")
@@ -174,7 +175,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
   const roundsRaw = (roundsData ?? []) as Round[];
   if (roundsRaw.length === 0) return { ok: true, updated: 0, debug };
 
-  // Stable ordering: round_no → played_on → created_at
   const rounds = [...roundsRaw].sort((a, b) => {
     const c1 = cmpNullableNum(a.round_no, b.round_no);
     if (c1 !== 0) return c1;
@@ -196,7 +196,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
   debug.roundsOrdered = rounds.map((r) => ({ id: r.id, round_no: r.round_no ?? null, course_id: r.course_id ?? null }));
 
-  // trigger index
   let triggerIndex: number | null = null;
   if (fromRoundId) {
     const idx = rounds.findIndex((r) => String(r.id) === String(fromRoundId));
@@ -204,7 +203,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
   }
   debug.triggerIndex = triggerIndex;
 
-  // only write future rounds after trigger
   const targetRounds = triggerIndex == null ? rounds : rounds.slice(triggerIndex + 1);
   debug.targetRoundsCount = targetRounds.length;
 
@@ -213,7 +211,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
   const roundIds = rounds.map((r) => r.id);
   const courseIds = Array.from(new Set(rounds.map((r) => r.course_id).filter(Boolean))) as string[];
 
-  // 2) load players
   const { data: tpData, error: tpErr } = await supabase
     .from("tour_players")
     .select("tour_id,player_id,starting_handicap, players(id,name,start_handicap,gender)")
@@ -228,7 +225,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
       const pj = normalizePlayerJoin(r.players);
       if (!pj) return null;
 
-      // ✅ CHANGE: keep tour override as 1dp (not floored)
       const overrideRaw = Number((r as any).starting_handicap);
       const tour_starting_handicap = Number.isFinite(overrideRaw) ? Math.max(0, round1dp(overrideRaw)) : null;
 
@@ -236,8 +232,8 @@ export async function recalcAndSaveTourHandicaps(opts: {
         id: pj.id,
         name: pj.name,
         gender: pj.gender ?? null,
-        global_start: pj.start_handicap ?? 0, // 1dp
-        tour_start: tour_starting_handicap, // 1dp or null
+        global_start: pj.start_handicap ?? 0,
+        tour_start: tour_starting_handicap,
       };
     })
     .filter(Boolean) as Array<{
@@ -251,7 +247,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
   if (players.length === 0) return { ok: true, updated: 0, debug };
   const playerIds = players.map((p) => p.id);
 
-  // 3) round_players
   const { data: rpData, error: rpErr } = await supabase
     .from("round_players")
     .select("round_id,player_id,playing,playing_handicap,tee")
@@ -275,24 +270,18 @@ export async function recalcAndSaveTourHandicaps(opts: {
   const rpByKey = new Map<string, RoundPlayerRow>();
   for (const rp of roundPlayers) rpByKey.set(rpKey(rp.round_id, rp.player_id), rp);
 
-  // ✅ NEW: store decimal starts (1dp) + integer seed for round PH
-  const startDecimalByPlayer: Record<string, number> = {};
   const startIntByPlayer: Record<string, number> = {};
   const defaultTeeByPlayer: Record<string, Tee> = {};
 
   for (const p of players) {
-    const shDec = p.tour_start ?? p.global_start ?? 0; // 1dp
+    const shDec = p.tour_start ?? p.global_start ?? 0;
     const shDecNorm = Math.max(0, round1dp(Number(shDec) || 0));
-
-    // round 1 playing handicap seed must be whole number
     const shInt = roundHalfUp(shDecNorm);
 
-    startDecimalByPlayer[p.id] = shDecNorm;
     startIntByPlayer[p.id] = Math.max(0, shInt);
     defaultTeeByPlayer[p.id] = p.gender ? normalizeTee(p.gender) : "M";
   }
 
-  // If OFF: reset PHs to starting for target rounds (whole numbers)
   if (!rehandicappingEnabled) {
     const payload: Array<{
       round_id: string;
@@ -329,7 +318,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
     return { ok: true, updated: payload.length, debug };
   }
 
-  // 4) pars
   const { data: parsData, error: parsErr } = await supabase
     .from("pars")
     .select("course_id,hole_number,par,stroke_index,tee")
@@ -347,7 +335,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
     parsByCourseTee[cid][tee][hole] = { par: Number(row.par), si: Number(row.stroke_index) };
   }
 
-  // 5) scores (pagination-safe)
   const PAGE_SIZE = 1000;
   const scores: ScoreRow[] = [];
   let from = 0;
@@ -408,6 +395,13 @@ export async function recalcAndSaveTourHandicaps(opts: {
     return defaultTeeByPlayer[playerId] ?? "M";
   };
 
+  const isSwingInSpringRound3 = (r: Round): boolean => {
+    return (
+      String(r.tour_id) === SWING_IN_SPRING_TOUR_ID &&
+      Number(r.round_no) === SWING_IN_SPRING_SPECIAL_ROUND_NO
+    );
+  };
+
   const holesFilledCount = (roundId: string, playerId: string): number => {
     let n = 0;
     for (let hole = 1; hole <= 18; hole++) {
@@ -417,21 +411,34 @@ export async function recalcAndSaveTourHandicaps(opts: {
     return n;
   };
 
-  const isPlayerComplete = (roundId: string, playerId: string): boolean => {
-    return holesFilledCount(roundId, playerId) === 18;
+  const isPlayerComplete = (r: Round, playerId: string): boolean => {
+    const filled = holesFilledCount(r.id, playerId);
+
+    if (isSwingInSpringRound3(r)) {
+      return filled >= SWING_IN_SPRING_SPECIAL_MIN_HOLES;
+    }
+
+    return filled === 18;
   };
 
-  const stablefordTotal = (roundId: string, courseId: string, playerId: string, ph: number): number => {
+  const stablefordTotal = (r: Round, playerId: string, ph: number): number => {
+    const courseId = r.course_id;
+    if (!courseId) return 0;
+
     const cid = String(courseId);
-    const tee = teeForRoundPlayer(roundId, playerId);
+    const tee = teeForRoundPlayer(r.id, playerId);
     const holes = parsByCourseTee[cid]?.[tee] ?? parsByCourseTee[cid]?.M ?? null;
     if (!holes) return 0;
 
     let total = 0;
     for (let hole = 1; hole <= 18; hole++) {
+      const raw = scoreMap[r.id]?.[playerId]?.[hole] ?? "";
+
+      if (isSwingInSpringRound3(r) && !raw) continue;
+
       const info = holes[hole];
       if (!info) continue;
-      const raw = scoreMap[roundId]?.[playerId]?.[hole] ?? "";
+
       total += netStablefordPointsForHole({
         rawScore: raw,
         par: info.par,
@@ -442,10 +449,8 @@ export async function recalcAndSaveTourHandicaps(opts: {
     return total;
   };
 
-  // sequential PH map (whole numbers)
   const phByRoundPlayer: Record<string, Record<string, number>> = {};
 
-  // init round 1
   const r1 = rounds[0];
   phByRoundPlayer[r1.id] = {};
   for (const p of players) phByRoundPlayer[r1.id][p.id] = startIntByPlayer[p.id];
@@ -493,7 +498,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
     }
 
     const playedPlayers = players.filter((pl) => playingMap[r.id]?.[pl.id] === true);
-    const completePlayers = playedPlayers.filter((pl) => isPlayerComplete(r.id, pl.id));
+    const completePlayers = playedPlayers.filter((pl) => isPlayerComplete(r, pl.id));
 
     const playedCount = playedPlayers.length;
     const completeCount = completePlayers.length;
@@ -523,14 +528,14 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
     for (const p of players) {
       const isPlaying = playingMap[r.id]?.[p.id] === true;
-      const isComplete = isPlaying && isPlayerComplete(r.id, p.id);
+      const isComplete = isPlaying && isPlayerComplete(r, p.id);
       if (!isComplete) {
         scoreByPlayer[p.id] = null;
         continue;
       }
 
       const ph = phByRoundPlayer[r.id][p.id];
-      const sc = stablefordTotal(r.id, r.course_id, p.id, ph);
+      const sc = stablefordTotal(r, p.id, ph);
       scoreByPlayer[p.id] = sc;
       playedScores.push(sc);
     }
@@ -541,7 +546,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
     const sample = completePlayers.slice(0, 6).map((pl) => ({
       player_id: pl.id,
       prevPH: phByRoundPlayer[r.id][pl.id],
-      holesFilled: 18,
+      holesFilled: holesFilledCount(r.id, pl.id),
       stableford: scoreByPlayer[pl.id],
       nextPH: null as number | null,
     }));
@@ -562,7 +567,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
         const prevPH = phByRoundPlayer[r.id][p.id];
 
         const isPlaying = playingMap[r.id]?.[p.id] === true;
-        const isComplete = isPlaying && isPlayerComplete(r.id, p.id);
+        const isComplete = isPlaying && isPlayerComplete(r, p.id);
 
         if (!isComplete || avgRounded === null) {
           phByRoundPlayer[next.id][p.id] = prevPH;
@@ -578,7 +583,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
         const diff = (avgRounded - prevScore) / 3;
         const raw = roundHalfUp(prevPH + diff);
 
-        // ✅ IMPORTANT: min/max are based on the integer seed start (whole-number handicap rules)
         const sh = startIntByPlayer[p.id];
         const max = sh + 3;
         const min = ceilHalfStart(sh);
@@ -593,7 +597,6 @@ export async function recalcAndSaveTourHandicaps(opts: {
     }
   }
 
-  // Upsert PH only for targetRounds
   const payload: Array<{
     round_id: string;
     player_id: string;
