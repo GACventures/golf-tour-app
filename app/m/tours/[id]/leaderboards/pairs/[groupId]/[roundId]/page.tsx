@@ -53,6 +53,9 @@ type GroupMemberRow = {
 
 type Shade = "ace" | "eagle" | "birdie" | "par" | "bogey" | "dbogey" | "none";
 
+const SWING_IN_SPRING_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
+const SWING_IN_SPRING_SPECIAL_PAIRS_ROUND_NO = 3;
+
 /* ----------------------------------
    Colour helpers (same as individual)
 ----------------------------------- */
@@ -265,6 +268,9 @@ export default function MobilePairsRoundDetailPage() {
   const p1 = members[0] ?? null;
   const p2 = members[1] ?? null;
 
+  const isSwingInSpringRound3 =
+    tourId === SWING_IN_SPRING_TOUR_ID && Number(round?.round_no) === SWING_IN_SPRING_SPECIAL_PAIRS_ROUND_NO;
+
   const hcpByPlayer = useMemo(() => {
     const m = new Map<string, number>();
     for (const rp of roundPlayers) {
@@ -289,6 +295,39 @@ export default function MobilePairsRoundDetailPage() {
     for (const s of scores) m.set(`${String(s.player_id)}|${Number(s.hole_number)}`, s);
     return m;
   }, [scores]);
+
+  function getPlayerHoleCell(player: PlayerLite, hole: number) {
+    const tee = normalizeTee(player.gender);
+    const parsForTee = parByTeeHole.get(tee);
+    const pr = parsForTee?.get(hole) ?? { par: 0, si: 0 };
+
+    const sc = scoreByPlayerHole.get(`${player.id}|${hole}`);
+    const pickup = sc?.pickup === true;
+    const gross = Number.isFinite(Number(sc?.strokes)) ? Number(sc?.strokes) : null;
+    const raw = rawScoreFor(gross, pickup);
+    const hcp = hcpByPlayer.get(player.id) ?? 0;
+
+    const net =
+      raw && pr.par > 0 && pr.si > 0
+        ? netStablefordPointsForHole({
+            rawScore: raw,
+            par: pr.par,
+            strokeIndex: pr.si,
+            playingHandicap: hcp,
+          })
+        : 0;
+
+    const shade = pr.par > 0 && (pickup || gross !== null) ? shadeForGross(gross, pickup, pr.par) : "none";
+
+    return {
+      hole,
+      gross: pickup ? "P" : gross !== null ? String(gross) : "",
+      net,
+      shade,
+      contributes: false,
+      tied: false,
+    };
+  }
 
   const rows = useMemo(() => {
     if (!p1 || !p2) return [];
@@ -372,6 +411,39 @@ export default function MobilePairsRoundDetailPage() {
     return out;
   }, [p1, p2, parByTeeHole, hcpByPlayer, scoreByPlayerHole]);
 
+  const specialRows = useMemo(() => {
+    if (!p1 || !p2) return [];
+
+    const out: any[] = [];
+
+    for (let displayHole = 1; displayHole <= 9; displayHole++) {
+      const p1Front = getPlayerHoleCell(p1, displayHole);
+      const p1Back = getPlayerHoleCell(p1, displayHole + 9);
+      const p2Front = getPlayerHoleCell(p2, displayHole);
+      const p2Back = getPlayerHoleCell(p2, displayHole + 9);
+
+      const cells = [p1Front, p1Back, p2Front, p2Back];
+      const best = Math.max(...cells.map((c) => Number(c.net) || 0));
+      const tied = cells.filter((c) => Number(c.net) === best).length > 1;
+
+      for (const c of cells) {
+        c.contributes = tied ? Number(c.net) === best : Number(c.net) === best;
+        c.tied = tied && Number(c.net) === best;
+      }
+
+      out.push({
+        displayHole,
+        p1Front,
+        p1Back,
+        p2Front,
+        p2Back,
+        best,
+      });
+    }
+
+    return out;
+  }, [p1, p2, parByTeeHole, hcpByPlayer, scoreByPlayerHole]);
+
   const totals = useMemo(() => {
     const sum = (arr: typeof rows) => {
       const grossNum = (v: string) => {
@@ -408,6 +480,30 @@ export default function MobilePairsRoundDetailPage() {
     return { out, inn, total, contrib: contrib(rows) };
   }, [rows]);
 
+  const specialTotals = useMemo(() => {
+    const grossNum = (v: string) => {
+      if (!v) return 0;
+      if (v === "P") return 0;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    const sumCell = (key: "p1Front" | "p1Back" | "p2Front" | "p2Back") => {
+      const gross = specialRows.reduce((s, r) => s + grossNum(r[key].gross), 0);
+      const net = specialRows.reduce((s, r) => s + (Number(r[key].net) || 0), 0);
+      const contrib = specialRows.reduce((s, r) => s + (r[key].contributes ? Number(r[key].net) || 0 : 0), 0);
+      return { gross, net, contrib };
+    };
+
+    return {
+      p1Front: sumCell("p1Front"),
+      p1Back: sumCell("p1Back"),
+      p2Front: sumCell("p2Front"),
+      p2Back: sumCell("p2Back"),
+      best: specialRows.reduce((s, r) => s + (Number(r.best) || 0), 0),
+    };
+  }, [specialRows]);
+
   // Header lines
   const headerLine1 = useMemo(() => {
     if (!p1 || !p2) return "Pair";
@@ -425,6 +521,33 @@ export default function MobilePairsRoundDetailPage() {
   // Existing block shading vars (unchanged)
   const P1_BG = "bg-slate-50";
   const P2_BG = "bg-slate-100/70";
+
+  function SpecialScoreCell({
+    cell,
+    bg,
+  }: {
+    cell: {
+      hole: number;
+      gross: string;
+      net: number;
+      shade: Shade;
+      contributes: boolean;
+      tied: boolean;
+    };
+    bg: string;
+  }) {
+    return (
+      <td className={`px-2 py-2 text-center ${bg}`}>
+        <div className="flex flex-col items-center gap-1">
+          <div className="text-[10px] font-bold text-slate-500">H{cell.hole}</div>
+          <div className="flex items-center justify-center gap-1">
+            <GrossBox shade={cell.shade} label={cell.gross || ""} />
+            <StablefordBox value={cell.net} contributes={cell.contributes} tied={cell.tied} />
+          </div>
+        </div>
+      </td>
+    );
+  }
 
   return (
     <div className="min-h-dvh bg-white text-slate-900">
@@ -455,6 +578,107 @@ export default function MobilePairsRoundDetailPage() {
           <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
             Pair members not found.
           </div>
+        ) : isSwingInSpringRound3 ? (
+          <>
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900">
+              Round 3 pairs scoring: each row takes the highest Stableford score from both players’ matching front-nine
+              and back-nine holes.
+            </div>
+
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <table className="min-w-full border-collapse">
+                <thead>
+                  <tr className="text-[12px] font-extrabold text-slate-800">
+                    <th className="border-b border-slate-200 bg-white px-2 py-2 text-center w-[54px]">Score Hole</th>
+                    <th colSpan={2} className={`border-b border-slate-200 px-2 py-2 text-center ${P1_BG}`}>
+                      {p1.name}
+                    </th>
+                    <th colSpan={2} className={`border-b border-slate-200 px-2 py-2 text-center ${P2_BG}`}>
+                      {p2.name}
+                    </th>
+                    <th className="border-b border-slate-200 bg-white px-2 py-2 text-center w-[70px]">Better</th>
+                  </tr>
+
+                  <tr className="bg-slate-50 text-[11px] font-semibold text-slate-700">
+                    <th className="border-b border-slate-200 px-2 py-2 text-center"> </th>
+                    <th className={`border-b border-slate-200 px-2 py-2 text-center ${P1_BG}`}>Front</th>
+                    <th className={`border-b border-slate-200 px-2 py-2 text-center ${P1_BG}`}>Back</th>
+                    <th className={`border-b border-slate-200 px-2 py-2 text-center ${P2_BG}`}>Front</th>
+                    <th className={`border-b border-slate-200 px-2 py-2 text-center ${P2_BG}`}>Back</th>
+                    <th className="border-b border-slate-200 px-2 py-2 text-center">BB</th>
+                  </tr>
+                </thead>
+
+                <tbody className="text-sm text-slate-900">
+                  {specialRows.map((r) => (
+                    <tr key={r.displayHole} className="border-b border-slate-100">
+                      <td className="px-2 py-2 text-center font-semibold">{r.displayHole}</td>
+
+                      <SpecialScoreCell cell={r.p1Front} bg={P1_BG} />
+                      <SpecialScoreCell cell={r.p1Back} bg={P1_BG} />
+                      <SpecialScoreCell cell={r.p2Front} bg={P2_BG} />
+                      <SpecialScoreCell cell={r.p2Back} bg={P2_BG} />
+
+                      <td className="px-2 py-2 text-center font-extrabold">{r.best}</td>
+                    </tr>
+                  ))}
+
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-900">Total</td>
+
+                    <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>
+                      <div>G {specialTotals.p1Front.gross}</div>
+                      <div>N {specialTotals.p1Front.net}</div>
+                    </td>
+                    <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>
+                      <div>G {specialTotals.p1Back.gross}</div>
+                      <div>N {specialTotals.p1Back.net}</div>
+                    </td>
+                    <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>
+                      <div>G {specialTotals.p2Front.gross}</div>
+                      <div>N {specialTotals.p2Front.net}</div>
+                    </td>
+                    <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>
+                      <div>G {specialTotals.p2Back.gross}</div>
+                      <div>N {specialTotals.p2Back.net}</div>
+                    </td>
+
+                    <td className="px-2 py-2 text-center text-[12px] font-extrabold">{specialTotals.best}</td>
+                  </tr>
+
+                  <tr className="bg-white">
+                    <td className="px-2 py-2 text-center text-[12px] font-extrabold text-slate-700">Contrib</td>
+
+                    <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>
+                      {specialTotals.p1Front.contrib}
+                    </td>
+                    <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P1_BG}`}>
+                      {specialTotals.p1Back.contrib}
+                    </td>
+                    <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>
+                      {specialTotals.p2Front.contrib}
+                    </td>
+                    <td className={`px-2 py-2 text-center text-[12px] font-extrabold ${P2_BG}`}>
+                      {specialTotals.p2Back.contrib}
+                    </td>
+
+                    <td className="px-2 py-2 text-center" />
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-3 text-xs text-slate-600">
+              Each scoring hole uses the best Stableford score from the front/back matching holes for both players.
+              Dotted borders show the value contributing to the Better score.
+            </div>
+
+            <div className="mt-4 text-center">
+              <Link className="text-sm font-semibold underline" href={`/m/tours/${tourId}/leaderboards`}>
+                Back to Leaderboards
+              </Link>
+            </div>
+          </>
         ) : (
           <>
             <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
