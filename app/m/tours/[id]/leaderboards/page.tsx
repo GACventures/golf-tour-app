@@ -98,6 +98,10 @@ type TourGroupMemberRow = {
   position: number | null;
 };
 
+const SWING_IN_SPRING_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
+const SWING_IN_SPRING_INDIVIDUAL_BEST_N = 5;
+const SWING_IN_SPRING_REQUIRED_ROUND_NOS = [3, 7];
+
 // -----------------------------
 // Helpers
 // -----------------------------
@@ -226,6 +230,41 @@ function pickBestRoundIds(args: {
   for (const r of ranked) {
     if (chosen.size >= N) break;
     if (mustIncludeFinal && r.rid === finalRoundId) continue;
+    chosen.add(r.rid);
+  }
+
+  return chosen;
+}
+
+// Pick BEST N rounds while always including specific round numbers where those rounds exist.
+function pickBestRoundIdsWithRequiredRoundNos(args: {
+  sortedRounds: RoundRow[];
+  perRoundTotals: Record<string, number>;
+  n: number;
+  requiredRoundNos: number[];
+}) {
+  const { sortedRounds, perRoundTotals, n, requiredRoundNos } = args;
+
+  const N = clampInt(n, 1, 99);
+  const required = new Set(requiredRoundNos.map((x) => Number(x)).filter((x) => Number.isFinite(x)));
+  const chosen = new Set<string>();
+
+  sortedRounds.forEach((r, idx) => {
+    const roundNo = Number.isFinite(Number(r.round_no)) ? Number(r.round_no) : idx + 1;
+    if (required.has(roundNo)) chosen.add(r.id);
+  });
+
+  const ranked = sortedRounds.map((r, idx) => ({
+    rid: r.id,
+    idx,
+    val: Number.isFinite(Number(perRoundTotals[r.id])) ? Number(perRoundTotals[r.id]) : 0,
+  }));
+
+  ranked.sort((a, b) => b.val - a.val || a.idx - b.idx);
+
+  for (const r of ranked) {
+    if (chosen.size >= N) break;
+    if (chosen.has(r.rid)) continue;
     chosen.add(r.rid);
   }
 
@@ -620,6 +659,8 @@ export default function MobileLeaderboardsPage() {
 
   const sortedRoundIds = useMemo(() => sortedRounds.map((r) => r.id), [sortedRounds]);
 
+  const isSwingInSpringTour = tourId === SWING_IN_SPRING_TOUR_ID;
+
   // Pair/Team membership grouped (ordered)
   const memberIdsByPair = useMemo(() => {
     const m = new Map<string, string[]>();
@@ -702,6 +743,10 @@ export default function MobileLeaderboardsPage() {
 
   const description = useMemo(() => {
     if (kind === "individual") {
+      if (isSwingInSpringTour) {
+        return "Individual Stableford · Best 5 rounds (R3 and R7 required)";
+      }
+
       if (individualRule.mode === "ALL") return "Individual Stableford · Total points across all rounds";
       const r = individualRule;
       return r.finalRequired
@@ -716,7 +761,7 @@ export default function MobileLeaderboardsPage() {
     }
 
     return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 for each zero · All rounds`;
-  }, [kind, individualRule, pairRule, teamRule.bestY]);
+  }, [kind, individualRule, pairRule, teamRule.bestY, isSwingInSpringTour]);
 
   const individualRows = useMemo(() => {
     const rows: Array<{
@@ -775,7 +820,15 @@ export default function MobileLeaderboardsPage() {
       let tourTotal = 0;
       let countedIds = new Set<string>();
 
-      if (individualRule.mode === "BEST_N") {
+      if (isSwingInSpringTour) {
+        countedIds = pickBestRoundIdsWithRequiredRoundNos({
+          sortedRounds,
+          perRoundTotals: perRound,
+          n: SWING_IN_SPRING_INDIVIDUAL_BEST_N,
+          requiredRoundNos: SWING_IN_SPRING_REQUIRED_ROUND_NOS,
+        });
+        for (const rid of countedIds) tourTotal += Number(perRound[rid] ?? 0) || 0;
+      } else if (individualRule.mode === "BEST_N") {
         countedIds = pickBestRoundIds({
           sortedRoundIds,
           perRoundTotals: perRound,
@@ -793,7 +846,17 @@ export default function MobileLeaderboardsPage() {
 
     rows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
     return rows;
-  }, [players, sortedRounds, sortedRoundIds, parsByCourseTeeHole, rpByRoundPlayer, scoreByRoundPlayerHole, individualRule, finalRoundId]);
+  }, [
+    players,
+    sortedRounds,
+    sortedRoundIds,
+    parsByCourseTeeHole,
+    rpByRoundPlayer,
+    scoreByRoundPlayerHole,
+    individualRule,
+    finalRoundId,
+    isSwingInSpringTour,
+  ]);
 
   const femaleIndividualRows = useMemo(() => {
     return individualRows.filter((r) => normalizeTee(playerById.get(r.playerId)?.gender) === "F");
@@ -1043,7 +1106,7 @@ export default function MobileLeaderboardsPage() {
 
         {sortedRounds.map((r) => {
           const val = row.perRound[r.id] ?? 0;
-          const counted = individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
+          const counted = isSwingInSpringTour || individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
           const href = `/m/tours/${tourId}/rounds/${r.id}/results/${row.playerId}`;
 
           return (
@@ -1290,7 +1353,8 @@ export default function MobileLeaderboardsPage() {
               </table>
             </div>
 
-            {(kind === "individual" && individualRule.mode === "BEST_N") || (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
+            {(kind === "individual" && (isSwingInSpringTour || individualRule.mode === "BEST_N")) ||
+            (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
               <div className="mt-3 text-xs text-gray-600">
                 Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour total.
               </div>
