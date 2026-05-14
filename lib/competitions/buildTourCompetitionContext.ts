@@ -1,14 +1,20 @@
 import type { CompetitionContext } from "./types";
 import { netStablefordPointsForHole } from "@/lib/stableford";
 
-export const BUILD_TOUR_CTX_VERSION = "BTC-v5-direct-fill-debug";
+export const BUILD_TOUR_CTX_VERSION = "BTC-v6-swing-spring-r3-nine-hole-complete";
 
 export type Tee = "M" | "F";
+
+const SWING_IN_SPRING_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
+const SWING_IN_SPRING_SPECIAL_ROUND_NO = 3;
+const SWING_IN_SPRING_SPECIAL_MIN_HOLES = 9;
 
 export type TourRoundLite = {
   id: string;
   name?: string | null;
   course_id: string | null;
+  tour_id?: string | null;
+  round_no?: number | null;
 };
 
 export type PlayerLiteForTour = {
@@ -44,13 +50,11 @@ export type TourRoundContextLocal = {
   roundId: string;
   roundName: string;
   holes: number[];
-  parsByHole: number[]; // baseline only (kept for backwards compatibility)
-  strokeIndexByHole: number[]; // baseline only
+  parsByHole: number[];
+  strokeIndexByHole: number[];
   scores: Record<string, string[]>;
   netPointsForHole: (playerId: string, holeIndex: number) => number;
   isComplete: (playerId: string) => boolean;
-
-  // ✅ tee-specific par for bucketing (Napoleon/Big George/Grand Canyon)
   parForPlayerHole: (playerId: string, holeIndex: number) => number;
 };
 
@@ -84,6 +88,14 @@ function clampHoleTo1to18(h: any): number | null {
   return n;
 }
 
+function countCompletedHoles(arr: string[]) {
+  let count = 0;
+  for (let i = 0; i < 18; i++) {
+    if (String(arr[i] ?? "").trim()) count += 1;
+  }
+  return count;
+}
+
 export function buildTourCompetitionContext(params: {
   rounds: TourRoundLite[];
   players: PlayerLiteForTour[];
@@ -93,11 +105,9 @@ export function buildTourCompetitionContext(params: {
 }): TourCompetitionContextLocal {
   const { rounds, players, roundPlayers, scores, pars } = params;
 
-  // round|player -> rp
   const rpByRoundPlayer = new Map<string, RoundPlayerLiteForTour>();
   for (const rp of roundPlayers) rpByRoundPlayer.set(`${String(rp.round_id)}|${String(rp.player_id)}`, rp);
 
-  // course -> tee -> hole -> {par, si}
   const parsByCourseTeeHole = new Map<string, Map<Tee, Map<number, { par: number; si: number }>>>();
   for (const p of pars) {
     const courseId = String(p.course_id);
@@ -113,10 +123,6 @@ export function buildTourCompetitionContext(params: {
     byTee.get(tee)!.set(holeNo, { par: Number(p.par), si: Number(p.stroke_index) });
   }
 
-  /**
-   * ✅ Direct-fill score matrices:
-   * roundId -> playerId -> 18-slot raw array
-   */
   const holes = Array.from({ length: 18 }, (_, i) => i + 1);
 
   const scoresByRoundId = new Map<string, Record<string, string[]>>();
@@ -127,7 +133,6 @@ export function buildTourCompetitionContext(params: {
     scoresByRoundId.set(rid, byPlayer);
   }
 
-  // ✅ Debug accounting for why nothing is being written
   const debug = {
     version: BUILD_TOUR_CTX_VERSION,
     roundsIn: rounds.length,
@@ -182,7 +187,6 @@ export function buildTourCompetitionContext(params: {
     const raw = normalizeRawScore((s as any).strokes, (s as any).pickup).trim().toUpperCase();
     const idx = holeNo - 1;
 
-    // Don't overwrite a real value with blank
     if (raw === "" && String(arr[idx] ?? "").trim() !== "") {
       debug.skipOverwriteBlank += 1;
       continue;
@@ -203,6 +207,11 @@ export function buildTourCompetitionContext(params: {
     .map((r) => {
       const courseId = r.course_id ? String(r.course_id) : null;
       const roundId = String(r.id);
+      const roundTourId = String(r.tour_id ?? "");
+      const roundNo = Number.isFinite(Number(r.round_no)) ? Number(r.round_no) : null;
+
+      const isSwingInSpringRound3 =
+        roundTourId === SWING_IN_SPRING_TOUR_ID && roundNo === SWING_IN_SPRING_SPECIAL_ROUND_NO;
 
       const byTee = courseId ? parsByCourseTeeHole.get(courseId) : undefined;
 
@@ -221,9 +230,15 @@ export function buildTourCompetitionContext(params: {
 
       const isComplete = (playerId: string) => {
         if (!isPlayingInRound(playerId)) return true;
+
         const arr = scoresMatrix[String(playerId)] ?? Array(18).fill("");
-        for (let i = 0; i < 18; i++) if (!String(arr[i] ?? "").trim()) return false;
-        return true;
+        const completedHoles = countCompletedHoles(arr);
+
+        if (isSwingInSpringRound3) {
+          return completedHoles >= SWING_IN_SPRING_SPECIAL_MIN_HOLES;
+        }
+
+        return completedHoles >= 18;
       };
 
       const parForPlayerHole = (playerId: string, holeIndex: number) => {
@@ -292,7 +307,6 @@ export function buildTourCompetitionContext(params: {
     rounds: tourRounds,
   };
 
-  // Keep debug banner compatibility + attach accounting
   (ctx as any).__ctxVersion = BUILD_TOUR_CTX_VERSION;
   (ctx as any).__debugScoreFill = debug;
 

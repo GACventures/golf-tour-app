@@ -439,10 +439,12 @@ export default function MobileCompetitionsPage() {
 
   const ctx = useMemo(() => {
     const roundsLite: TourRoundLite[] = sortedRounds.map((r) => ({
-      id: r.id,
-      name: r.name,
-      course_id: r.course_id,
-    }));
+  id: r.id,
+  tour_id: r.tour_id,
+  name: r.name,
+  round_no: r.round_no,
+  course_id: r.course_id,
+}));
 
     const playersLite: PlayerLiteForTour[] = players.map((p) => ({
       id: p.id,
