@@ -473,13 +473,8 @@ export default function MobileRoundResultsPage() {
                   <div className="grid grid-cols-[64px_1fr_64px_64px] items-center gap-2 px-3 py-3">
                     <div />
                     <div className="min-w-0">
-                      <div className="truncate text-base font-extrabold">Rehandicapping average</div>
-                      <div className="mt-0.5 text-xs font-semibold text-amber-900">
-                        {isSwingInSpringRound3
-                          ? `Includes players with at least ${SWING_IN_SPRING_SPECIAL_MIN_HOLES} holes`
-                          : "Includes players with 18 holes"}
-                        {rehandicappingAverage.eligibleCount > 0 ? ` · ${rehandicappingAverage.eligibleCount} player(s)` : ""}
-                      </div>
+                      <div className="truncate text-base font-extrabold">Average</div>
+                      
                     </div>
                     <div className="text-center text-base font-bold">—</div>
                     <div className="text-center text-base font-extrabold">{rehandicappingAverage.label}</div>
