@@ -10,15 +10,10 @@ function pct2(num: number, den: number) {
   return round2((num / den) * 100);
 }
 
-/**
- * ✅ Runtime narrowing because your current CompetitionContext typing may not expose scope.
- */
 type TourLikeCtx = {
   scope?: "tour";
   players: Array<{ id: string; name: string; playing?: boolean }>;
   rounds: Array<any>;
-
-  // Optional entity support for pair/team comps
   entities?: Array<{ entityId: string; label?: string; memberPlayerIds: string[] }>;
   entityMembersById?: Record<string, string[]>;
   entityLabelsById?: Record<string, string>;
@@ -39,20 +34,16 @@ function memberNamesLabel(ctx: TourLikeCtx, memberIds: string[]) {
 function getEntitiesForKind(ctx: TourLikeCtx, kind: "pair" | "team") {
   const out: Array<{ entityId: string; label: string; memberPlayerIds: string[] }> = [];
 
-  // Prefer explicit entities list if present
   if (Array.isArray(ctx.entities) && ctx.entities.length) {
     for (const e of ctx.entities) {
       const ids = (e as any)?.memberPlayerIds ?? [];
       if (!Array.isArray(ids) || ids.length === 0) continue;
-      const label = String(
-        (e as any)?.label ?? (ctx.entityLabelsById?.[(e as any)?.entityId] ?? (e as any)?.entityId)
-      );
+      const label = String((e as any)?.label ?? (ctx.entityLabelsById?.[(e as any)?.entityId] ?? (e as any)?.entityId));
       out.push({ entityId: String((e as any)?.entityId), label, memberPlayerIds: ids.map(String) });
     }
     return out;
   }
 
-  // Fallback to maps if present
   const membersById = ctx.entityMembersById ?? {};
   const labelsById = ctx.entityLabelsById ?? {};
   for (const entityId of Object.keys(membersById)) {
@@ -67,12 +58,6 @@ function getEntitiesForKind(ctx: TourLikeCtx, kind: "pair" | "team") {
   return out;
 }
 
-/**
- * Helper for “Napoleon-style” averages by par (3/4/5).
- * Tour scope, individual.
- *
- * ✅ UPDATED: par classification is tee-specific if round context provides parForPlayerHole().
- */
 function avgStablefordByPar(parTarget: 3 | 4 | 5, id: string, name: string): CompetitionDefinition {
   return {
     id,
@@ -94,17 +79,12 @@ function avgStablefordByPar(parTarget: 3 | 4 | 5, id: string, name: string): Com
           const holes: number[] = (r as any)?.holes ?? [];
           const parsByHole: number[] = (r as any)?.parsByHole ?? [];
           const isComplete = (r as any)?.isComplete;
-          const parForPlayerHole: ((playerId: string, holeIndex: number) => number) | undefined = (r as any)
-            ?.parForPlayerHole;
+          const parForPlayerHole: ((playerId: string, holeIndex: number) => number) | undefined = (r as any)?.parForPlayerHole;
 
-          // requireComplete for this player in this round
           if (typeof isComplete === "function" && !isComplete(p.id)) continue;
 
           for (let i = 0; i < holes.length; i++) {
-            const par = Number(
-              typeof parForPlayerHole === "function" ? parForPlayerHole(p.id, i) : Number(parsByHole[i] ?? 0)
-            );
-
+            const par = Number(typeof parForPlayerHole === "function" ? parForPlayerHole(p.id, i) : Number(parsByHole[i] ?? 0));
             if (par !== parTarget) continue;
 
             holesPlayed += 1;
@@ -130,16 +110,11 @@ function avgStablefordByPar(parTarget: 3 | 4 | 5, id: string, name: string): Com
   };
 }
 
-/**
- * Schumacher / Closer helper:
- * For each round: sum net Stableford points for a hole range (inclusive),
- * then return the average of those per-round sums across all qualifying rounds.
- */
 function avgSumStablefordForHoleRange(params: {
   id: string;
   name: string;
-  startHole: number; // 1..18
-  endHole: number; // 1..18
+  startHole: number;
+  endHole: number;
 }): CompetitionDefinition {
   const { id, name, startHole, endHole } = params;
 
@@ -206,7 +181,6 @@ function parseGrossStrokes(raw: any): number | null {
 }
 
 function roundLabel(idx: number) {
-  // idx is 0-based
   return `R${idx + 1}`;
 }
 
@@ -220,13 +194,12 @@ function fmtWhere(rIdx: number, startHole: number, endHole: number) {
 
 type StreakResult = {
   len: number;
-  roundIdx: number; // 0-based index in ctx.rounds
-  startHole: number; // 1..18
-  endHole: number; // 1..18
+  roundIdx: number;
+  startHole: number;
+  endHole: number;
 };
 
 function betterStreakDisplay(a: StreakResult | null, b: StreakResult): StreakResult {
-  // Prefer larger len; if tie, earliest round; if tie, earliest startHole.
   if (!a) return b;
   if (b.len > a.len) return b;
   if (b.len < a.len) return a;
@@ -236,21 +209,13 @@ function betterStreakDisplay(a: StreakResult | null, b: StreakResult): StreakRes
   return a;
 }
 
-/**
- * Hot/Cold streak competition:
- * - For each round, compute the longest consecutive run meeting a predicate on gross strokes vs tee-par.
- * - Tour total = max run length across rounds.
- * - Store the "where" string for UI toggles.
- *
- * Tie-break for displayed where: earliest round, earliest start hole.
- */
 function streakCompetition(params: {
   id: string;
   name: string;
-  // predicate returns true if this hole counts towards the streak
   qualifies: (gross: number, par: number) => boolean;
 }): CompetitionDefinition {
   const { id, name, qualifies } = params;
+  const isColdStreak = id === "tour_cold_streak_best_run";
 
   return {
     id,
@@ -274,11 +239,9 @@ function streakCompetition(params: {
           if (typeof isComplete === "function" && !isComplete(p.id)) continue;
 
           const scoresMatrix: Record<string, string[]> = (r as any)?.scores ?? {};
-          const parForPlayerHole: ((playerId: string, holeIndex: number) => number) | undefined = (r as any)
-            ?.parForPlayerHole;
+          const parForPlayerHole: ((playerId: string, holeIndex: number) => number) | undefined = (r as any)?.parForPlayerHole;
 
           if (typeof parForPlayerHole !== "function") {
-            // We rely on tee-specific par; if missing, treat as no streaks.
             continue;
           }
 
@@ -291,10 +254,14 @@ function streakCompetition(params: {
           let roundBestEnd = 1;
 
           for (let i = 0; i < 18; i++) {
-            const gross = parseGrossStrokes(arr[i]);
+            const raw = String(arr[i] ?? "").trim().toUpperCase();
+            const gross = parseGrossStrokes(raw);
             const par = Number(parForPlayerHole(p.id, i) ?? 0);
 
-            const ok = gross !== null && Number.isFinite(par) && par > 0 && qualifies(gross, par);
+            const pickupCountsForColdStreak = isColdStreak && raw === "P";
+            const normalQualifies = gross !== null && Number.isFinite(par) && par > 0 && qualifies(gross, par);
+
+            const ok = pickupCountsForColdStreak || normalQualifies;
 
             if (ok) {
               if (curLen === 0) curStart = i + 1;
@@ -339,10 +306,6 @@ function streakCompetition(params: {
   };
 }
 
-/**
- * Bagel Man: % of holes with 0 Stableford points
- * Tour scope, individual.
- */
 function bagelMan(id: string, name: string): CompetitionDefinition {
   return {
     id,
@@ -389,10 +352,6 @@ function bagelMan(id: string, name: string): CompetitionDefinition {
   };
 }
 
-/**
- * Wizard: % of holes with 4+ points
- * Tour scope, individual.
- */
 function wizard(id: string, name: string): CompetitionDefinition {
   return {
     id,
@@ -439,10 +398,6 @@ function wizard(id: string, name: string): CompetitionDefinition {
   };
 }
 
-/**
- * Eclectic: best Stableford per hole across tour
- * Tour scope, individual.
- */
 function eclectic(id: string, name: string): CompetitionDefinition {
   return {
     id,
@@ -487,8 +442,6 @@ function eclectic(id: string, name: string): CompetitionDefinition {
     },
   };
 }
-
-// ----- Pair/Team comps unchanged -----
 
 function tourPairBestBallStableford(id: string, name: string): CompetitionDefinition {
   return {
@@ -717,7 +670,6 @@ function tourTeamAggregateStableford(id: string, name: string): CompetitionDefin
 }
 
 export const competitionCatalog: CompetitionDefinition[] = [
-  // Individual tour comps
   avgStablefordByPar(3, "tour_napoleon_par3_avg", "Napoleon (Par 3 avg)"),
   avgStablefordByPar(4, "tour_big_george_par4_avg", "Big George (Par 4 avg)"),
   avgStablefordByPar(5, "tour_grand_canyon_par5_avg", "Grand Canyon (Par 5 avg)"),
@@ -726,7 +678,6 @@ export const competitionCatalog: CompetitionDefinition[] = [
   wizard("tour_wizard_four_plus_pct", "Wizard (% 4+ holes)"),
   eclectic("tour_eclectic_total", "Eclectic (best per hole)"),
 
-  // ✅ NEW: Schumacher + Closer
   avgSumStablefordForHoleRange({
     id: "tour_schumacher_first3_avg",
     name: "Schumacher (Avg Stableford holes 1–3)",
@@ -740,7 +691,6 @@ export const competitionCatalog: CompetitionDefinition[] = [
     endHole: 18,
   }),
 
-  // ✅ NEW: Hot/Cold streaks (gross vs tee-par)
   streakCompetition({
     id: "tour_hot_streak_best_run",
     name: "Hot Streak (Best par-or-better run)",
@@ -752,11 +702,9 @@ export const competitionCatalog: CompetitionDefinition[] = [
     qualifies: (gross, par) => gross >= par + 1,
   }),
 
-  // Pair tour comps
   tourPairBestBallStableford("tour_pair_best_ball_stableford", "Pairs: Best Ball (Stableford)"),
   tourPairAggregateStableford("tour_pair_aggregate_stableford", "Pairs: Aggregate (Stableford)"),
 
-  // Team tour comps
   tourTeamBestMMinusZeros("tour_team_best_m_minus_zeros", "Teams: Best M per hole − zeros"),
   tourTeamAggregateStableford("tour_team_aggregate_stableford", "Teams: Aggregate (Stableford)"),
 ];
