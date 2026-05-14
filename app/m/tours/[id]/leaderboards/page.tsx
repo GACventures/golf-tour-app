@@ -99,8 +99,9 @@ type TourGroupMemberRow = {
 };
 
 const SWING_IN_SPRING_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
-const SWING_IN_SPRING_INDIVIDUAL_BEST_N = 5;
+const SWING_IN_SPRING_BEST_N = 5;
 const SWING_IN_SPRING_REQUIRED_ROUND_NOS = [3, 7];
+const SWING_IN_SPRING_PAIRS_NINE_HOLE_ROUND_NO = 3;
 
 // -----------------------------
 // Helpers
@@ -755,6 +756,10 @@ export default function MobileLeaderboardsPage() {
     }
 
     if (kind === "pairs") {
+      if (isSwingInSpringTour) {
+        return "Pairs Better Ball · Best 5 rounds (R3 and R7 required) · R3 is 9-hole combined-front/back scoring";
+      }
+
       if (pairRule.mode === "ALL") return "Pairs Better Ball · Total points across all rounds";
       const r = pairRule;
       return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
@@ -824,7 +829,7 @@ export default function MobileLeaderboardsPage() {
         countedIds = pickBestRoundIdsWithRequiredRoundNos({
           sortedRounds,
           perRoundTotals: perRound,
-          n: SWING_IN_SPRING_INDIVIDUAL_BEST_N,
+          n: SWING_IN_SPRING_BEST_N,
           requiredRoundNos: SWING_IN_SPRING_REQUIRED_ROUND_NOS,
         });
         for (const rid of countedIds) tourTotal += Number(perRound[rid] ?? 0) || 0;
@@ -875,6 +880,39 @@ export default function MobileLeaderboardsPage() {
       countedIds: Set<string>;
     }> = [];
 
+    function pairPlayerStablefordForHole(params: {
+      round: RoundRow;
+      playerId: string;
+      holeNumber: number;
+    }) {
+      const { round, playerId, holeNumber } = params;
+
+      const rp = rpByRoundPlayer.get(`${round.id}|${playerId}`);
+      if (!rp?.playing) return 0;
+
+      const courseId = round.course_id;
+      if (!courseId) return 0;
+
+      const sc = scoreByRoundPlayerHole.get(`${round.id}|${playerId}|${holeNumber}`);
+      if (!sc) return 0;
+
+      const pl = playerById.get(playerId);
+      const tee: Tee = normalizeTee(pl?.gender);
+
+      const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(holeNumber);
+      if (!pr) return 0;
+
+      const raw = normalizeRawScore(sc.strokes, sc.pickup);
+      const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
+
+      return netStablefordPointsForHole({
+        rawScore: raw,
+        par: pr.par,
+        strokeIndex: pr.si,
+        playingHandicap: hcp,
+      });
+    }
+
     for (const g of pairGroups) {
       const memberIds = memberIdsByPair.get(g.id) ?? [];
       const displayName = pairDisplayName(g.id);
@@ -888,34 +926,36 @@ export default function MobileLeaderboardsPage() {
           continue;
         }
 
+        const roundNo = Number.isFinite(Number(r.round_no)) ? Number(r.round_no) : null;
+        const useSwingInSpringRound3PairsScoring =
+          isSwingInSpringTour && roundNo === SWING_IN_SPRING_PAIRS_NINE_HOLE_ROUND_NO;
+
         let sum = 0;
+
+        if (useSwingInSpringRound3PairsScoring) {
+          for (let h = 1; h <= 9; h++) {
+            let best = 0;
+
+            for (const pid of memberIds) {
+              const frontPts = pairPlayerStablefordForHole({ round: r, playerId: pid, holeNumber: h });
+              const backPts = pairPlayerStablefordForHole({ round: r, playerId: pid, holeNumber: h + 9 });
+
+              if (frontPts > best) best = frontPts;
+              if (backPts > best) best = backPts;
+            }
+
+            sum += best;
+          }
+
+          perRound[r.id] = sum;
+          continue;
+        }
 
         for (let h = 1; h <= 18; h++) {
           let best = 0;
 
           for (const pid of memberIds) {
-            const rp = rpByRoundPlayer.get(`${r.id}|${pid}`);
-            if (!rp?.playing) continue;
-
-            const sc = scoreByRoundPlayerHole.get(`${r.id}|${pid}|${h}`);
-            if (!sc) continue;
-
-            const pl = playerById.get(pid);
-            const tee: Tee = normalizeTee(pl?.gender);
-
-            const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(h);
-            if (!pr) continue;
-
-            const raw = normalizeRawScore(sc.strokes, sc.pickup);
-            const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
-
-            const pts = netStablefordPointsForHole({
-              rawScore: raw,
-              par: pr.par,
-              strokeIndex: pr.si,
-              playingHandicap: hcp,
-            });
-
+            const pts = pairPlayerStablefordForHole({ round: r, playerId: pid, holeNumber: h });
             if (pts > best) best = pts;
           }
 
@@ -928,7 +968,15 @@ export default function MobileLeaderboardsPage() {
       let tourTotal = 0;
       let countedIds = new Set<string>();
 
-      if (pairRule.mode === "BEST_Q") {
+      if (isSwingInSpringTour) {
+        countedIds = pickBestRoundIdsWithRequiredRoundNos({
+          sortedRounds,
+          perRoundTotals: perRound,
+          n: SWING_IN_SPRING_BEST_N,
+          requiredRoundNos: SWING_IN_SPRING_REQUIRED_ROUND_NOS,
+        });
+        for (const rid of countedIds) tourTotal += Number(perRound[rid] ?? 0) || 0;
+      } else if (pairRule.mode === "BEST_Q") {
         countedIds = pickBestRoundIds({
           sortedRoundIds,
           perRoundTotals: perRound,
@@ -957,6 +1005,7 @@ export default function MobileLeaderboardsPage() {
     playerById,
     parsByCourseTeeHole,
     scoreByRoundPlayerHole,
+    isSwingInSpringTour,
   ]);
 
   const teamRows = useMemo(() => {
@@ -1298,7 +1347,7 @@ export default function MobileLeaderboardsPage() {
 
                           {sortedRounds.map((r) => {
                             const val = row.perRound[r.id] ?? 0;
-                            const counted = pairRule.mode === "BEST_Q" ? row.countedIds.has(r.id) : false;
+                            const counted = isSwingInSpringTour || pairRule.mode === "BEST_Q" ? row.countedIds.has(r.id) : false;
                             const href = `/m/tours/${tourId}/leaderboards/pairs/${row.groupId}/${r.id}`;
 
                             return (
@@ -1354,7 +1403,7 @@ export default function MobileLeaderboardsPage() {
             </div>
 
             {(kind === "individual" && (isSwingInSpringTour || individualRule.mode === "BEST_N")) ||
-            (kind === "pairs" && pairRule.mode === "BEST_Q") ? (
+            (kind === "pairs" && (isSwingInSpringTour || pairRule.mode === "BEST_Q")) ? (
               <div className="mt-3 text-xs text-gray-600">
                 Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour total.
               </div>
