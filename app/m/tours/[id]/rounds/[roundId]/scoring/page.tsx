@@ -59,17 +59,13 @@ export default function MobileRoundScoringSelectPage() {
   const [round, setRound] = useState<Round | null>(null);
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
   const [playersById, setPlayersById] = useState<Record<string, PlayerRow>>({});
-
-  // group memberships for this round (optional)
   const [groupPlayers, setGroupPlayers] = useState<RoundGroupPlayerRow[]>([]);
 
   const [meId, setMeId] = useState("");
   const [buddyId, setBuddyId] = useState("");
 
-  // ✅ Tour-level score entry layout (classic | alt)
   const [scoreEntryLayout, setScoreEntryLayout] = useState<ScoreEntryLayout>("classic");
 
-  // Tracks if the user explicitly chose a buddy (so we don't overwrite their choice)
   const buddyManuallySetRef = useRef(false);
 
   useEffect(() => {
@@ -82,8 +78,6 @@ export default function MobileRoundScoringSelectPage() {
       setErrorMsg("");
 
       try {
-        // ✅ Load tour layout first (small, independent query)
-        // If this fails, we safely fall back to classic.
         const { data: tData, error: tErr } = await supabase
           .from("tours")
           .select("score_entry_layout")
@@ -132,7 +126,6 @@ export default function MobileRoundScoringSelectPage() {
           }
         }
 
-        // group memberships for this round (if groups exist)
         let gpRows: RoundGroupPlayerRow[] = [];
         if (ids.length > 0) {
           const { data: gpData, error: gpErr } = await supabase
@@ -141,7 +134,6 @@ export default function MobileRoundScoringSelectPage() {
             .eq("round_id", roundId)
             .in("player_id", ids);
 
-          // soft-fail
           if (gpErr) {
             const msg = gpErr.message ?? "";
             if (!msg.toLowerCase().includes("does not exist")) {
@@ -188,7 +180,6 @@ export default function MobileRoundScoringSelectPage() {
   const roundLabel = useMemo(() => {
     const n = round?.round_no;
     if (Number.isFinite(Number(n)) && Number(n) > 0) return `Round ${Number(n)}`;
-    // fallback if round_no is null
     return round?.name?.trim() ? round.name.trim() : "Round";
   }, [round]);
 
@@ -223,12 +214,9 @@ export default function MobileRoundScoringSelectPage() {
 
     peers.sort((a, b) => a.seat - b.seat);
 
-    return peers
-      .map((p) => playersById[p.player_id])
-      .filter((p): p is PlayerRow => !!p && !!p.id);
+    return peers.map((p) => playersById[p.player_id]).filter((p): p is PlayerRow => !!p && !!p.id);
   }, [meId, groupIdByPlayer, groupPlayers, playersById]);
 
-  // Auto-suggest buddy when Me changes (unless user already picked buddy manually)
   useEffect(() => {
     if (!meId) {
       buddyManuallySetRef.current = false;
@@ -241,17 +229,15 @@ export default function MobileRoundScoringSelectPage() {
 
     const suggested = playersInSameGroup[0]?.id ?? "";
     setBuddyId(suggested || "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meId, playersInSameGroup]);
 
-  const targetUrl = useMemo(() => {
+  const liveScoringUrl = useMemo(() => {
     if (!meId) return "";
 
     const qs = new URLSearchParams();
     qs.set("meId", meId);
     if (buddyId && buddyId !== meId) qs.set("buddyId", buddyId);
 
-    // ✅ Decide classic vs alt here
     const base =
       scoreEntryLayout === "alt"
         ? `/m/tours/${tourId}/rounds/${roundId}/scoring/score-alt`
@@ -259,6 +245,16 @@ export default function MobileRoundScoringSelectPage() {
 
     return `${base}?${qs.toString()}`;
   }, [tourId, roundId, meId, buddyId, scoreEntryLayout]);
+
+  const endOfRoundScoringUrl = useMemo(() => {
+    if (!meId) return "";
+
+    const qs = new URLSearchParams();
+    qs.set("meId", meId);
+    if (buddyId && buddyId !== meId) qs.set("buddyId", buddyId);
+
+    return `/m/tours/${tourId}/rounds/${roundId}/scoring/end?${qs.toString()}`;
+  }, [tourId, roundId, meId, buddyId]);
 
   const buddyLabel = useMemo(() => {
     if (!meId) return "Buddy (optional)";
@@ -269,7 +265,6 @@ export default function MobileRoundScoringSelectPage() {
   }, [meId, buddyId, playersInSameGroup]);
 
   function goBack() {
-    // ✅ back to ROUNDS LIST (avoid 404)
     router.push(`/m/tours/${tourId}/rounds`);
   }
 
@@ -282,22 +277,15 @@ export default function MobileRoundScoringSelectPage() {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xl font-semibold">Scoring</div>
-
-          {/* ✅ show round number/label clearly */}
           <div className="mt-1 truncate text-base font-semibold text-gray-800">{roundLabel}</div>
-
           <div className="mt-1 text-base text-gray-700">Course: {courseName}</div>
-
           <div className="mt-1 text-base">
             Status:{" "}
             <span className={isLocked ? "text-red-600 font-semibold" : "text-green-700 font-semibold"}>
               {isLocked ? "Locked" : "Open"}
             </span>
           </div>
-
-          {/* Optional: tiny debug hint for testers (won’t affect scoring logic) */}
           <div className="mt-1 text-xs text-gray-500">Layout: {scoreEntryLayout}</div>
-
           {errorMsg ? <div className="mt-2 text-sm text-red-600">{errorMsg}</div> : null}
         </div>
 
@@ -396,12 +384,21 @@ export default function MobileRoundScoringSelectPage() {
           ) : null}
 
           {meId && !isLocked ? (
-            <Link
-              href={targetUrl}
-              className="block w-full rounded-2xl bg-gray-900 px-4 py-4 text-center text-base font-semibold text-white hover:bg-gray-800 active:bg-gray-700"
-            >
-              Continue to scoring
-            </Link>
+            <div className="space-y-3">
+              <Link
+                href={liveScoringUrl}
+                className="block w-full rounded-2xl bg-gray-900 px-4 py-4 text-center text-base font-semibold text-white hover:bg-gray-800 active:bg-gray-700"
+              >
+                Continue to Live Scoring
+              </Link>
+
+              <Link
+                href={endOfRoundScoringUrl}
+                className="block w-full rounded-2xl border border-gray-900 bg-white px-4 py-4 text-center text-base font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
+              >
+                Continue to End of Round Scoring
+              </Link>
+            </div>
           ) : (
             <button
               type="button"
