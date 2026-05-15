@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { netStablefordPointsForHole } from "@/lib/stableford";
+import { recalcAndSaveTourHandicaps } from "@/lib/handicaps/recalcAndSaveTourHandicaps";
 
 type Tee = "M" | "F";
 
@@ -16,6 +17,7 @@ type RoundRow = {
   course_id: string | null;
   courses?: { name: string } | null;
   played_on: string | null;
+  is_locked?: boolean | null;
 };
 
 type ScoreRow = {
@@ -42,6 +44,12 @@ type MobilePlayer = { id: string; name: string; gender?: string | null; startHan
 
 const SHOW_DIAGNOSTICS = false;
 
+type Shade = "ace" | "eagle" | "birdie" | "par" | "bogey" | "dbogey" | "none";
+
+const BLUE_ACE = "#082B5C";
+const BLUE_EAGLE = "#1757D6";
+const BLUE_BIRDIE = "#4DA3FF";
+
 function formatDate(iso: string | null | undefined) {
   if (!iso) return "";
   const raw = String(iso).trim();
@@ -55,6 +63,21 @@ function formatDate(iso: string | null | undefined) {
     month: "short",
     year: "numeric",
   }).format(d);
+}
+
+function normalizeRawInput(v: string): string {
+  const s = String(v ?? "").trim().toUpperCase();
+  if (!s) return "";
+  if (s === "P") return "P";
+  if (/^\d+$/.test(s)) return s;
+  return "";
+}
+
+function rawToStrokes(raw: string): number | null {
+  const s = normalizeRawInput(raw);
+  if (!s || s === "P") return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
 }
 
 function rawScoreFor(strokes: number | null, pickup?: boolean | null) {
@@ -72,11 +95,10 @@ function pickParSiFromRow(row: ParRow | undefined | null, tee: Tee) {
   if (!row) return { par: 0, si: 0 };
 
   const hasMF =
-    row &&
-    (row.par_m !== undefined ||
-      row.par_f !== undefined ||
-      row.stroke_index_m !== undefined ||
-      row.stroke_index_f !== undefined);
+    row.par_m !== undefined ||
+    row.par_f !== undefined ||
+    row.stroke_index_m !== undefined ||
+    row.stroke_index_f !== undefined;
 
   if (hasMF) {
     const par = Number(tee === "F" ? row.par_f ?? row.par_m : row.par_m ?? row.par_f);
@@ -88,12 +110,6 @@ function pickParSiFromRow(row: ParRow | undefined | null, tee: Tee) {
   const si = Number(row.stroke_index);
   return { par: Number.isFinite(par) ? par : 0, si: Number.isFinite(si) ? si : 0 };
 }
-
-type Shade = "ace" | "eagle" | "birdie" | "par" | "bogey" | "dbogey" | "none";
-
-const BLUE_ACE = "#082B5C";
-const BLUE_EAGLE = "#1757D6";
-const BLUE_BIRDIE = "#4DA3FF";
 
 function shadeForGross(gross: number | null, pickup: boolean | null | undefined, par: number): Shade {
   if (pickup) return "dbogey";
@@ -163,7 +179,10 @@ function isMissingColumnError(msg: string, column: string) {
 }
 
 async function loadParsForCourse(courseId: string) {
-  const attempt1 = await supabase.from("pars").select("course_id,hole_number,tee,par,stroke_index").eq("course_id", courseId);
+  const attempt1 = await supabase
+    .from("pars")
+    .select("course_id,hole_number,tee,par,stroke_index")
+    .eq("course_id", courseId);
 
   if (!attempt1.error) return (attempt1.data ?? []) as ParRow[];
 
@@ -189,15 +208,24 @@ export default function MobileEndOfRoundScoreEntryPage() {
   const roundId = String(params?.roundId ?? "").trim();
   const playerId = String(searchParams.get("meId") ?? "").trim();
 
+  const initialScoresRef = useRef<Record<number, string>>({});
+
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [submitMsg, setSubmitMsg] = useState("");
 
   const [round, setRound] = useState<RoundRow | null>(null);
   const [player, setPlayer] = useState<MobilePlayer | null>(null);
   const [hcp, setHcp] = useState<number>(0);
 
-  const [scores, setScores] = useState<ScoreRow[]>([]);
+  const [scores, setScores] = useState<Record<number, string>>({});
   const [pars, setPars] = useState<ParRow[]>([]);
+
+  const [selectedHole, setSelectedHole] = useState(1);
+  const [prefix1, setPrefix1] = useState(false);
+
+  const isLocked = round?.is_locked === true;
 
   function goBack() {
     router.push(`/m/tours/${tourId}/rounds/${roundId}/scoring`);
@@ -214,11 +242,12 @@ export default function MobileEndOfRoundScoreEntryPage() {
 
       setLoading(true);
       setErrorMsg("");
+      setSubmitMsg("");
 
       try {
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
-          .select("id,tour_id,name,created_at,played_on,round_no,course_id,courses(name)")
+          .select("id,tour_id,name,created_at,played_on,round_no,course_id,is_locked,courses(name)")
           .eq("id", roundId)
           .eq("tour_id", tourId)
           .single();
@@ -247,6 +276,13 @@ export default function MobileEndOfRoundScoreEntryPage() {
           .eq("player_id", playerId);
         if (sErr) throw sErr;
 
+        const nextScores: Record<number, string> = {};
+        for (const row of (sData ?? []) as ScoreRow[]) {
+          const hole = Number(row.hole_number);
+          if (!Number.isFinite(hole)) continue;
+          nextScores[hole] = normalizeRawInput(row.pickup ? "P" : row.strokes === null || row.strokes === undefined ? "" : String(row.strokes));
+        }
+
         const ps = courseId ? await loadParsForCourse(courseId) : [];
 
         if (cancelled) return;
@@ -254,8 +290,12 @@ export default function MobileEndOfRoundScoreEntryPage() {
         setRound(rData as any);
         setPlayer(p);
         setHcp(h);
-        setScores((sData ?? []) as any);
+        setScores(nextScores);
+        initialScoresRef.current = nextScores;
         setPars(ps);
+
+        const firstBlank = Array.from({ length: 18 }, (_, i) => i + 1).find((hNo) => !nextScores[hNo]);
+        setSelectedHole(firstBlank ?? 1);
       } catch (e: any) {
         if (cancelled) return;
         setErrorMsg(e?.message ?? "Failed to load end of round score entry.");
@@ -296,15 +336,6 @@ export default function MobileEndOfRoundScoreEntryPage() {
     return { byHole, hasTee };
   }, [pars]);
 
-  const scoreByHole = useMemo(() => {
-    const m = new Map<number, ScoreRow>();
-    for (const s of scores) {
-      const hole = Number(s.hole_number);
-      if (Number.isFinite(hole)) m.set(hole, s);
-    }
-    return m;
-  }, [scores]);
-
   const computed = useMemo(() => {
     const tee: Tee = normalizeTee(player?.gender ?? null);
 
@@ -326,11 +357,10 @@ export default function MobileEndOfRoundScoreEntryPage() {
         si = picked.si;
       }
 
-      const sc = scoreByHole.get(hole);
-      const gross = Number.isFinite(Number(sc?.strokes)) ? Number(sc?.strokes) : null;
-      const pickup = sc?.pickup === true;
+      const raw = normalizeRawInput(scores[hole] ?? "");
+      const pickup = raw === "P";
+      const gross = pickup ? null : rawToStrokes(raw);
 
-      const raw = rawScoreFor(sc?.strokes ?? null, sc?.pickup ?? null);
       const pts =
         raw && par > 0 && si > 0
           ? netStablefordPointsForHole({
@@ -343,7 +373,7 @@ export default function MobileEndOfRoundScoreEntryPage() {
 
       const shade = par > 0 && (pickup || gross !== null) ? shadeForGross(gross, pickup, par) : "none";
 
-      return { hole, par, gross, pickup, pts, shade, teeUsed: tee };
+      return { hole, par, gross, pickup, raw, pts, shade, teeUsed: tee };
     });
 
     const front = holes.slice(0, 9);
@@ -357,7 +387,7 @@ export default function MobileEndOfRoundScoreEntryPage() {
     };
 
     return { tee, holes, front, back, out: sum(front), inn: sum(back), total: sum(holes) };
-  }, [parRowsByHole, scoreByHole, player?.gender, hcp]);
+  }, [parRowsByHole, scores, player?.gender, hcp]);
 
   const diag = useMemo(() => {
     const holes = [1, 2, 14];
@@ -402,31 +432,203 @@ export default function MobileEndOfRoundScoreEntryPage() {
     return String(c ?? "").trim();
   }, [round?.courses?.name]);
 
-  function ScoreBox({ shade, label }: { shade: Shade; label: string | number }) {
-    const isBlue = shade === "ace" || shade === "eagle" || shade === "birdie";
-    const base = "min-w-[28px] px-1.5 py-0.5 rounded text-center text-sm font-extrabold";
-
-    const className =
-      shade === "par"
-        ? `${base} bg-white text-gray-900 border border-gray-300`
-        : shade === "bogey"
-        ? `${base} bg-[#f8cfcf] text-gray-900`
-        : shade === "dbogey"
-        ? `${base} bg-[#c0392b] text-white`
-        : `${base} bg-transparent text-gray-900`;
-
-    return (
-      <div className={className} style={isBlue ? blueStyleForShade(shade) : undefined}>
-        {label}
-      </div>
-    );
+  async function fetchTourIdForRound(rid: string): Promise<string | null> {
+    if (!rid) return null;
+    const { data, error } = await supabase.from("rounds").select("tour_id").eq("id", rid).maybeSingle();
+    if (error) throw error;
+    const tid = (data as any)?.tour_id ? String((data as any).tour_id) : "";
+    return tid.trim() ? tid : null;
   }
 
-  function KeyButton({ label }: { label: string }) {
+  async function saveAll(): Promise<boolean> {
+    setErrorMsg("");
+    setSubmitMsg("");
+
+    if (!roundId || !playerId) return false;
+
+    if (isLocked) {
+      setErrorMsg("Round is locked.");
+      return false;
+    }
+
+    const upserts: ScoreRow[] = [];
+    const deletes: { round_id: string; player_id: string; hole_number: number }[] = [];
+
+    const initial = initialScoresRef.current ?? {};
+
+    for (let hole = 1; hole <= 18; hole++) {
+      const raw = normalizeRawInput(scores[hole] ?? "");
+      const had = normalizeRawInput(initial[hole] ?? "");
+
+      if (!raw) {
+        if (had) deletes.push({ round_id: roundId, player_id: playerId, hole_number: hole });
+        continue;
+      }
+
+      const isPickup = raw === "P";
+      const strokes = isPickup ? null : Number(raw);
+
+      upserts.push({
+        round_id: roundId,
+        player_id: playerId,
+        hole_number: hole,
+        strokes: Number.isFinite(strokes as any) ? (strokes as any) : null,
+        pickup: isPickup,
+      });
+    }
+
+    setSaving(true);
+
+    try {
+      for (const d of deletes) {
+        const { error } = await supabase
+          .from("scores")
+          .delete()
+          .eq("round_id", d.round_id)
+          .eq("player_id", d.player_id)
+          .eq("hole_number", d.hole_number);
+        if (error) throw error;
+      }
+
+      if (upserts.length > 0) {
+        const { error } = await supabase.from("scores").upsert(upserts as any, {
+          onConflict: "round_id,player_id,hole_number",
+        });
+        if (error) throw error;
+      }
+
+      try {
+        const tid = await fetchTourIdForRound(roundId);
+        if (tid) {
+          await recalcAndSaveTourHandicaps({
+            supabase,
+            tourId: tid,
+            fromRoundId: roundId,
+          });
+        }
+      } catch {
+        // keep score save successful even if handicap refresh fails
+      }
+
+      initialScoresRef.current = { ...scores };
+      setSubmitMsg("Score submitted");
+      return true;
+    } catch (e: any) {
+      setErrorMsg(e?.message ?? "Save failed.");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function advanceAfterEntry(currentHole: number) {
+    setPrefix1(false);
+    const next = currentHole < 18 ? currentHole + 1 : currentHole;
+    setSelectedHole(next);
+  }
+
+  function setHoleRaw(hole: number, raw: string, shouldAdvance = true) {
+    if (isLocked) return;
+
+    const norm = normalizeRawInput(raw);
+
+    setScores((prev) => ({
+      ...prev,
+      [hole]: norm,
+    }));
+
+    setSubmitMsg("");
+    setErrorMsg("");
+
+    if (shouldAdvance) advanceAfterEntry(hole);
+  }
+
+  function pressDigit(digit: number) {
+    if (isLocked) return;
+
+    const next = prefix1 ? String(10 + digit) : String(digit);
+    setHoleRaw(selectedHole, next, true);
+  }
+
+  function pressPrefix1() {
+    if (isLocked) return;
+    setPrefix1((prev) => !prev);
+  }
+
+  function pressZero() {
+    if (isLocked) return;
+
+    if (prefix1) {
+      setHoleRaw(selectedHole, "10", true);
+      return;
+    }
+
+    setHoleRaw(selectedHole, "", true);
+  }
+
+  function pressPickup() {
+    if (isLocked) return;
+    setHoleRaw(selectedHole, "P", true);
+  }
+
+  function ScoreBox({
+    shade,
+    label,
+    hole,
+  }: {
+    shade: Shade;
+    label: string | number;
+    hole: number;
+  }) {
+    const isSelected = selectedHole === hole;
+    const isBlue = shade === "ace" || shade === "eagle" || shade === "birdie";
+    const base = "min-w-[28px] px-1.5 py-0.5 rounded text-center text-sm font-extrabold border";
+
+    const colourClass =
+      shade === "par"
+        ? `${base} bg-white text-gray-900 border-gray-300`
+        : shade === "bogey"
+        ? `${base} bg-[#f8cfcf] text-gray-900 border-transparent`
+        : shade === "dbogey"
+        ? `${base} bg-[#c0392b] text-white border-transparent`
+        : `${base} bg-transparent text-gray-900 border-transparent`;
+
+    const selectedClass = isSelected ? "ring-4 ring-slate-400 bg-slate-300 border-slate-500" : "";
+
     return (
       <button
         type="button"
-        className="rounded-2xl border border-slate-300 bg-white px-2 py-5 text-center text-xl font-extrabold text-slate-900 shadow-sm active:bg-slate-100"
+        onClick={() => {
+          setSelectedHole(hole);
+          setPrefix1(false);
+          setSubmitMsg("");
+        }}
+        className={`${colourClass} ${selectedClass}`}
+        style={isBlue && !isSelected ? blueStyleForShade(shade) : undefined}
+      >
+        {label}
+      </button>
+    );
+  }
+
+  function KeyButton({
+    label,
+    onClick,
+    selected,
+  }: {
+    label: string;
+    onClick: () => void;
+    selected?: boolean;
+  }) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={isLocked || saving}
+        className={[
+          "h-14 rounded-xl border text-xl font-black active:scale-[0.99] disabled:opacity-50",
+          selected ? "bg-sky-600 text-white border-sky-700" : "bg-white text-slate-900 border-slate-300",
+        ].join(" ")}
       >
         {label}
       </button>
@@ -456,8 +658,9 @@ export default function MobileEndOfRoundScoreEntryPage() {
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-md px-4 pt-4 pb-24">
+      <div className="mx-auto w-full max-w-md px-4 pt-3 pb-24">
         {errorMsg ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMsg}</div> : null}
+        {submitMsg ? <div className="mt-2 rounded-xl border border-green-200 bg-green-50 p-3 text-sm font-semibold text-green-700">{submitMsg}</div> : null}
 
         {!playerId ? (
           <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -478,24 +681,26 @@ export default function MobileEndOfRoundScoreEntryPage() {
               </div>
             ) : null}
 
-            <div className="mt-4 grid grid-cols-[1fr_auto_1fr] items-start gap-3">
-              <div className="min-w-0">
+            <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-start gap-3">
+              <div className="min-w-0 pt-1">
                 <div className="truncate text-2xl font-extrabold">{player?.name ?? "(player)"}</div>
                 <div className="mt-1 text-sm text-slate-600">
                   HCP: <span className="font-semibold text-slate-900">{hcp}</span>
                 </div>
               </div>
 
-              <div className="rounded-2xl bg-white text-gray-900 px-4 py-3 text-center shadow-sm border border-slate-200">
+              <div className="rounded-2xl bg-white text-gray-900 px-4 py-2 text-center shadow-sm border border-slate-200">
                 <div className="text-4xl font-extrabold">{computed.total.pts}</div>
                 <div className="text-sm font-extrabold tracking-wide">POINTS</div>
               </div>
 
               <button
                 type="button"
-                className="rounded-2xl bg-gray-900 px-4 py-4 text-center text-base font-semibold text-white shadow-sm active:bg-gray-700"
+                onClick={() => void saveAll()}
+                disabled={saving || isLocked}
+                className="rounded-2xl bg-gray-900 px-4 py-3 text-center text-base font-semibold text-white shadow-sm active:bg-gray-700 disabled:bg-gray-400"
               >
-                Submit Score
+                {saving ? "Submitting…" : isLocked ? "Locked" : "Submit Score"}
               </button>
             </div>
 
@@ -520,10 +725,10 @@ export default function MobileEndOfRoundScoreEntryPage() {
 
               <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b border-slate-200">
                 {computed.front.map((h) => {
-                  const label = h.pickup ? "P" : h.gross ?? "";
+                  const label = h.pickup ? "P" : h.raw || "";
                   return (
                     <div key={h.hole} className="py-2 flex items-center justify-center">
-                      <ScoreBox shade={h.shade} label={label} />
+                      <ScoreBox shade={h.shade} label={label} hole={h.hole} />
                     </div>
                   );
                 })}
@@ -561,10 +766,10 @@ export default function MobileEndOfRoundScoreEntryPage() {
 
               <div className="grid grid-cols-[repeat(9,1fr)_64px] border-b border-slate-200">
                 {computed.back.map((h) => {
-                  const label = h.pickup ? "P" : h.gross ?? "";
+                  const label = h.pickup ? "P" : h.raw || "";
                   return (
                     <div key={h.hole} className="py-2 flex items-center justify-center">
-                      <ScoreBox shade={h.shade} label={label} />
+                      <ScoreBox shade={h.shade} label={label} hole={h.hole} />
                     </div>
                   );
                 })}
@@ -581,10 +786,24 @@ export default function MobileEndOfRoundScoreEntryPage() {
               </div>
             </div>
 
-            <div className="mt-5 grid grid-cols-6 gap-2">
-              {["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "0", "P"].map((label) => (
-                <KeyButton key={label} label={label} />
-              ))}
+            <div className="mt-5 rounded-2xl border border-sky-300 bg-sky-100 px-3 py-3">
+              <div className="mb-2 text-center text-xs font-extrabold text-slate-700">Enter Strokes</div>
+
+              <div className="grid grid-cols-6 gap-2">
+                <KeyButton label="1" onClick={() => pressDigit(1)} selected={!prefix1 && scores[selectedHole] === "1"} />
+                <KeyButton label="2" onClick={() => pressDigit(2)} selected={!prefix1 && scores[selectedHole] === "2"} />
+                <KeyButton label="3" onClick={() => pressDigit(3)} selected={!prefix1 && scores[selectedHole] === "3"} />
+                <KeyButton label="4" onClick={() => pressDigit(4)} selected={!prefix1 && scores[selectedHole] === "4"} />
+                <KeyButton label="5" onClick={() => pressDigit(5)} selected={!prefix1 && scores[selectedHole] === "5"} />
+                <KeyButton label="6" onClick={() => pressDigit(6)} selected={!prefix1 && scores[selectedHole] === "6"} />
+
+                <KeyButton label="7" onClick={() => pressDigit(7)} selected={!prefix1 && scores[selectedHole] === "7"} />
+                <KeyButton label="8" onClick={() => pressDigit(8)} selected={!prefix1 && scores[selectedHole] === "8"} />
+                <KeyButton label="9" onClick={() => pressDigit(9)} selected={!prefix1 && scores[selectedHole] === "9"} />
+                <KeyButton label="1-" onClick={pressPrefix1} selected={prefix1 || /^1\d$/.test(scores[selectedHole] ?? "")} />
+                <KeyButton label="0" onClick={pressZero} selected={false} />
+                <KeyButton label="P" onClick={pressPickup} selected={scores[selectedHole] === "P"} />
+              </div>
             </div>
           </>
         )}
