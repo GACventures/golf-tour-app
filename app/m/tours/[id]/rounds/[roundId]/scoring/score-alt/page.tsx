@@ -189,7 +189,12 @@ export default function MobileScoreEntryAltPage() {
   const [savedMsg, setSavedMsg] = useState("");
   const [submitMsg, setSubmitMsg] = useState("");
 
-  const [hole, setHole] = useState(1);
+  const initialHoleFromUrl = useMemo(() => {
+  const n = Number(sp.get("hole"));
+  return Number.isFinite(n) ? clamp(Math.floor(n), 1, 18) : 1;
+}, [sp]);
+
+const [hole, setHole] = useState(initialHoleFromUrl);
   const [tab, setTab] = useState<TabKey>("entry");
   const [summaryPid, setSummaryPid] = useState<string>("");
 
@@ -243,7 +248,19 @@ export default function MobileScoreEntryAltPage() {
     setSavedMsg("");
     setSubmitMsg("");
   }
+function updateHoleInUrl(nextHole: number) {
+  const n = clamp(Math.floor(Number(nextHole)), 1, 18);
 
+  const qs = new URLSearchParams(sp.toString());
+  qs.set("hole", String(n));
+
+  router.replace(
+    `/m/tours/${tourId}/rounds/${roundId}/scoring/score-alt?${qs.toString()}`,
+    {
+      scroll: false,
+    }
+  );
+}
   function getMissingMeHoles(): number[] {
     if (!meId) return [];
     const missing: number[] = [];
@@ -757,7 +774,8 @@ export default function MobileScoreEntryAltPage() {
 
     fxTimerRef.current = window.setTimeout(() => {
       setHole(nextHole);
-      triggerHolePulse();
+updateHoleInUrl(nextHole);
+triggerHolePulse();
 
       setHoleFx({ stage: "inSnap", dir });
 
@@ -981,8 +999,9 @@ async function handleSwipe(dir: "next" | "prev") {
           onClick={() => {
             if (onJumpTo) {
               setHole(onJumpTo);
-              setTab("entry");
-              triggerHolePulse();
+updateHoleInUrl(onJumpTo);
+setTab("entry");
+triggerHolePulse();
             }
           }}
         >
@@ -1033,8 +1052,9 @@ async function handleSwipe(dir: "next" | "prev") {
                   className="rounded-md px-3 py-2 text-left font-bold bg-slate-100 text-slate-900"
                   onClick={() => {
                     setHole(h);
-                    setTab("entry");
-                    triggerHolePulse();
+updateHoleInUrl(h);
+setTab("entry");
+triggerHolePulse();
                   }}
                 >
                   {h}

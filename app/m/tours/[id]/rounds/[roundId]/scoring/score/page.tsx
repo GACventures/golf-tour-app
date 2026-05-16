@@ -176,7 +176,7 @@ export default function MobileScoreEntryPage() {
   const [savedMsg, setSavedMsg] = useState("");
   const [submitMsg, setSubmitMsg] = useState("");
 
-  const [hole, setHole] = useState(1);
+ const [hole, setHole] = useState(1);
   const [tab, setTab] = useState<TabKey>("entry");
   const [summaryPid, setSummaryPid] = useState<string>("");
 
@@ -758,8 +758,8 @@ export default function MobileScoreEntryPage() {
     setHoleFx({ stage: "out", dir });
 
     fxTimerRef.current = window.setTimeout(() => {
-      setHole(nextHole);
-      triggerHolePulse();
+     setHole(nextHole);
+triggerHolePulse();
 
       setHoleFx({ stage: "inSnap", dir });
 
