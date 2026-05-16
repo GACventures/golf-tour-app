@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import PlayerPageTracker from "./_components/PlayerPageTracker";
 
 type TourRow = {
   id: string;
@@ -20,29 +21,21 @@ export default function TourLayout({ children }: { children: React.ReactNode }) 
 
   const tourId = useMemo(() => String(params?.id ?? "").trim(), [params]);
 
-  // Landing page is exactly: /m/tours/[id]
   const isLandingPage = useMemo(() => {
     if (!tourId) return false;
     const base = `/m/tours/${tourId}`;
     return pathname === base || pathname === `${base}/`;
   }, [pathname, tourId]);
 
-  // ✅ Exclude layout chrome for score entry pages (classic + alt)
   const isScoreEntryPage = useMemo(() => {
     if (!tourId) return false;
 
     const base = `/m/tours/${tourId}/rounds/`;
     if (!pathname.startsWith(base)) return false;
 
-    // Expected:
-    // /m/tours/{tourId}/rounds/{roundId}/scoring/score
-    // /m/tours/{tourId}/rounds/{roundId}/scoring/score-alt
-    //
-    // After ".../rounds/" we get: "{roundId}/scoring/{leaf}(/* optional)"
     const rest = pathname.slice(base.length);
     const parts = rest.split("/").filter(Boolean);
 
-    // Must have at least: [roundId, "scoring", "score" | "score-alt"]
     if (parts.length < 3) return false;
 
     const [roundId, a, leaf] = parts;
@@ -62,7 +55,6 @@ export default function TourLayout({ children }: { children: React.ReactNode }) 
     async function loadTourName() {
       setLoadErr("");
 
-      // If route param is not present/valid, don't crash the whole section.
       if (!tourId || !isLikelyUuid(tourId)) {
         setTourName("Tour");
         return;
@@ -89,17 +81,21 @@ export default function TourLayout({ children }: { children: React.ReactNode }) 
     };
   }, [tourId]);
 
-  // ✅ If score entry page: render ONLY children (no header/footer/padding)
   if (isScoreEntryPage) {
-    return <>{children}</>;
+    return (
+      <>
+        <PlayerPageTracker />
+        {children}
+      </>
+    );
   }
 
-  // Footer sizing so page content doesn't get hidden behind sticky footer
-  const FOOTER_PX = 76; // approx height incl border + padding
+  const FOOTER_PX = 76;
 
   return (
     <div className="min-h-dvh bg-white text-gray-900">
-      {/* Top bar (sticky) — hidden on landing page */}
+      <PlayerPageTracker />
+
       {!isLandingPage ? (
         <div className="sticky top-0 z-20 border-b bg-white">
           <div className="mx-auto w-full max-w-md px-4 h-14 flex items-center justify-between gap-3">
@@ -115,10 +111,8 @@ export default function TourLayout({ children }: { children: React.ReactNode }) 
         </div>
       ) : null}
 
-      {/* Pad so content never hides behind the fixed footer */}
       <div style={!isLandingPage ? { paddingBottom: FOOTER_PX } : undefined}>{children}</div>
 
-      {/* Footer hidden on landing page */}
       {!isLandingPage ? (
         <footer className="fixed bottom-0 left-0 right-0 z-30 bg-white">
           <div className="border-t border-slate-200">
