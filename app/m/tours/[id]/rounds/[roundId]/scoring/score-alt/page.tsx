@@ -772,30 +772,32 @@ export default function MobileScoreEntryAltPage() {
     }, SWIPE_MS);
   }
 
-  async function handleSwipe(dir: "next" | "prev") {
-    if (tab !== "entry") return;
-    if (holeFx.stage !== "idle") return;
+async function handleSwipe(dir: "next" | "prev") {
+  if (tab !== "entry") return;
+  if (holeFx.stage !== "idle") return;
 
-    if (dir === "next" && hole === 18) {
-      openMeSummary();
-      return;
-    }
+  if (dir === "next" && hole === 18) {
+    openMeSummary();
+    return;
+  }
 
-    const nextHole = clamp(hole + (dir === "next" ? 1 : -1), 1, 18);
-    if (nextHole === hole) return;
+  const previousHole = hole;
+  const nextHole = clamp(hole + (dir === "next" ? 1 : -1), 1, 18);
+  if (nextHole === hole) return;
 
+  setPrefix1ByPid({});
+  animateHoleChange(dir);
+
+  void (async () => {
     if (!isLocked && buddyId) {
-      await saveBuddyCheckHole(hole);
+      await saveBuddyCheckHole(previousHole);
     }
 
     if (!isLocked && !saving && isDirty()) {
       await saveAll();
     }
-
-    setPrefix1ByPid({});
-
-    animateHoleChange(dir);
-  }
+  })();
+}
 
   function onTouchStart(e: React.TouchEvent) {
     const t = e.touches[0];
