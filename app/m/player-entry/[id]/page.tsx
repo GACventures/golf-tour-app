@@ -7,17 +7,13 @@ import { supabase } from "@/lib/supabaseClient";
 type TourRow = {
   id: string;
   name: string | null;
+  start_date: string | null;
+  end_date: string | null;
 };
 
 type PlayerRow = {
   id: string;
   name: string;
-};
-
-type TourPlayerJoinRow = {
-  tour_id: string;
-  player_id: string;
-  players: PlayerRow | PlayerRow[] | null;
 };
 
 function isLikelyUuid(v: string) {
@@ -48,12 +44,37 @@ function safeLastPage(tourId: string, value: string | null) {
 
   if (!v) return "";
   if (!v.startsWith(`/m/tours/${tourId}`)) return "";
-  if (v.includes(`/m/tours/${tourId}/players`)) return "";
+  if (v.startsWith(`/m/tours/${tourId}/admin`)) return "";
 
   return v;
 }
 
-export default function MobileTourPlayerSelectPage() {
+function parseDate(value: string | null): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function fmtDate(d: Date) {
+  return d.toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatTourDates(start: Date | null, end: Date | null) {
+  if (start && end) {
+    if (start.toDateString() === end.toDateString()) return fmtDate(start);
+    return `${fmtDate(start)} – ${fmtDate(end)}`;
+  }
+  if (start) return fmtDate(start);
+  if (end) return fmtDate(end);
+  return "";
+}
+
+export default function PlayerEntryPage() {
   const params = useParams<{ id?: string }>();
   const router = useRouter();
 
@@ -80,7 +101,7 @@ export default function MobileTourPlayerSelectPage() {
 
       try {
         const [{ data: tData, error: tErr }, { data: tpData, error: tpErr }] = await Promise.all([
-          supabase.from("tours").select("id,name").eq("id", tourId).single(),
+          supabase.from("tours").select("id,name,start_date,end_date").eq("id", tourId).single(),
           supabase
             .from("tour_players")
             .select("tour_id,player_id,players(id,name)")
@@ -91,10 +112,10 @@ export default function MobileTourPlayerSelectPage() {
         if (tErr) throw tErr;
         if (tpErr) throw tpErr;
 
-        const list = ((tpData ?? []) as TourPlayerJoinRow[])
-          .map((row) => normalizePlayerJoin(row.players))
-          .filter((p): p is PlayerRow => !!p)
-          .sort((a, b) => a.name.localeCompare(b.name));
+        const list = (tpData ?? [])
+          .map((row: any) => normalizePlayerJoin(row.players))
+          .filter((p: PlayerRow | null): p is PlayerRow => !!p)
+          .sort((a: PlayerRow, b: PlayerRow) => a.name.localeCompare(b.name));
 
         if (!alive) return;
 
@@ -122,6 +143,10 @@ export default function MobileTourPlayerSelectPage() {
     return name || "Tour";
   }, [tour?.name]);
 
+  const dateLabel = useMemo(() => {
+    return formatTourDates(parseDate(tour?.start_date ?? null), parseDate(tour?.end_date ?? null));
+  }, [tour?.start_date, tour?.end_date]);
+
   function handleSelectPlayer(playerId: string) {
     if (!tourId || !playerId) return;
 
@@ -137,61 +162,48 @@ export default function MobileTourPlayerSelectPage() {
     router.push(`/m/tours/${tourId}`);
   }
 
-  function goHome() {
-    router.push(`/m/tours/${tourId}`);
-  }
-
   return (
-    <div className="min-h-dvh bg-white text-gray-900">
-      <div className="border-b bg-white">
-        <div className="mx-auto max-w-md px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-base font-semibold">{title}</div>
-              <div className="mt-0.5 text-xs font-semibold uppercase tracking-wide text-gray-500">Select Player</div>
-            </div>
-
-            <button
-              type="button"
-              onClick={goHome}
-              className="rounded-lg px-2 py-1 text-sm font-semibold text-gray-800 hover:bg-gray-100 active:bg-gray-200"
-            >
-              Home
-            </button>
+    <main className="min-h-dvh bg-white text-gray-900">
+      <div className="mx-auto w-full max-w-md px-4 py-5 pb-24">
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="text-center">
+            <div className="text-xs font-black uppercase tracking-[0.22em] text-slate-500">Golf Tour</div>
+            <h1 className="mt-2 text-3xl font-black leading-tight text-slate-900">{title}</h1>
+            {dateLabel ? <div className="mt-2 text-sm font-semibold text-slate-600">{dateLabel}</div> : null}
           </div>
-        </div>
+
+          <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-center text-sm font-semibold text-slate-700">
+            Select your name to continue
+          </div>
+        </section>
+
+        <section className="mt-4">
+          {loading ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm">
+              Loading players…
+            </div>
+          ) : errorMsg ? (
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{errorMsg}</div>
+          ) : players.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm">
+              No players found for this tour.
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-2">
+              {players.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => handleSelectPlayer(p.id)}
+                  className="min-h-20 rounded-xl bg-slate-900 px-2 py-3 text-center text-sm font-black leading-tight text-white shadow-sm active:bg-slate-700"
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
-
-      <main className="mx-auto w-full max-w-md px-4 py-5 pb-24">
-        {loading ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm">
-            Loading players…
-          </div>
-        ) : errorMsg ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{errorMsg}</div>
-        ) : players.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm">
-            No players found for this tour.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-              Tap your name to continue. This device will remember the last page used for each player.
-            </div>
-
-            {players.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => handleSelectPlayer(p.id)}
-                className="block w-full rounded-2xl border border-slate-300 bg-white px-4 py-4 text-left text-lg font-extrabold text-slate-900 shadow-sm hover:bg-slate-50 active:bg-slate-100"
-              >
-                {p.name}
-              </button>
-            ))}
-          </div>
-        )}
-      </main>
-    </div>
+    </main>
   );
 }
