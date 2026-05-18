@@ -1,7 +1,7 @@
 import type { CompetitionContext } from "./types";
 import { netStablefordPointsForHole } from "@/lib/stableford";
 
-export const BUILD_TOUR_CTX_VERSION = "BTC-v7-swing-spring-r3-played-holes";
+export const BUILD_TOUR_CTX_VERSION = "BTC-v8-exclude-non-playing-rounds";
 
 export type Tee = "M" | "F";
 
@@ -248,7 +248,12 @@ export function buildTourCompetitionContext(params: {
       };
 
       const isComplete = (playerId: string) => {
-        if (!isPlayingInRound(playerId)) return true;
+        // Important:
+        // A player who is not playing in a round must NOT be treated as complete.
+        // Otherwise future/unplayed rounds can be included in tour averages with
+        // zero points, inflating denominators for events such as Napoleon,
+        // Big George, and Grand Canyon.
+        if (!isPlayingInRound(playerId)) return false;
 
         const arr = scoresMatrix[String(playerId)] ?? Array(18).fill("");
         const completedHoles = countCompletedHoles(arr);
