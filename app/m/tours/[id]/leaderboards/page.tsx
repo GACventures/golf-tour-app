@@ -765,7 +765,7 @@ export default function MobileLeaderboardsPage() {
       return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
     }
 
-    return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1 for each zero · All rounds`;
+    return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 0.5 for each zero · All rounds`;
   }, [kind, individualRule, pairRule, teamRule.bestY, isSwingInSpringTour]);
 
   const individualRows = useMemo(() => {
@@ -1073,7 +1073,7 @@ export default function MobileLeaderboardsPage() {
 
           let holeSum = 0;
           for (const pts of selected) holeSum += pts;
-          holeSum -= zeroCount;
+          holeSum -= zeroCount * 0.5;
 
           roundSum += holeSum;
         }

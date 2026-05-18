@@ -39,7 +39,6 @@ type TeamRule = {
 
 /* ---------------- Helpers ---------------- */
 
-/** ✅ Align with your scorecard logic: treat W/FEMALE as F */
 function normalizeTee(v: any): Tee {
   const s = String(v ?? "").trim().toUpperCase();
   const isF = s === "F" || s === "FEMALE" || s === "W" || s === "WOMEN" || s === "WOMAN";
@@ -58,9 +57,8 @@ function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
   return Number.isFinite(n) ? String(n) : "";
 }
 
-// Stableford (net) per hole (same as mobile leaderboards page)
 function netStablefordPointsForHole(params: {
-  rawScore: string; // "" | "P" | "number"
+  rawScore: string;
   par: number;
   strokeIndex: number;
   playingHandicap: number;
@@ -91,10 +89,6 @@ function clampInt(n: any, min: number, max: number) {
   return Math.max(min, Math.min(max, x));
 }
 
-/**
- * Deterministic selection of EXACTLY top N positives per hole (no tie expansion).
- * Tie-break: higher points first, then table order (lower orderIndex wins).
- */
 function pickTopNPositivesExact(args: {
   entries: Array<{ playerId: string; pts: number; orderIndex: number }>;
   n: number;
@@ -104,7 +98,7 @@ function pickTopNPositivesExact(args: {
 
   positives.sort((a, b) => {
     if (b.pts !== a.pts) return b.pts - a.pts;
-    return a.orderIndex - b.orderIndex; // table order tie-break
+    return a.orderIndex - b.orderIndex;
   });
 
   return positives.slice(0, Math.min(N, positives.length));
@@ -142,7 +136,6 @@ export default function TeamRoundDetailPage() {
       setError("");
 
       try {
-        // 1) Team meta
         const { data: teamRow, error: teamErr } = await supabase
           .from("tour_groups")
           .select("id,name")
@@ -150,7 +143,6 @@ export default function TeamRoundDetailPage() {
           .maybeSingle();
         if (teamErr) throw teamErr;
 
-        // 2) Members + player info (ordered)
         const { data: memRows, error: memErr } = await supabase
           .from("tour_group_members")
           .select("group_id,player_id,position,players(id,name,gender)")
@@ -167,7 +159,6 @@ export default function TeamRoundDetailPage() {
             gender: p.gender ? normalizeTee(p.gender) : null,
           }));
 
-        // 3) Round (only course_id)
         const { data: rRow, error: rErr } = await supabase
           .from("rounds")
           .select("id,course_id")
@@ -178,7 +169,6 @@ export default function TeamRoundDetailPage() {
 
         const playerIds = ps.map((p) => p.id);
 
-        // 4) Round players (playing + handicap)
         let rpMap = new Map<string, RoundPlayer>();
         if (playerIds.length > 0) {
           const { data: rpRows, error: rpErr } = await supabase
@@ -198,7 +188,6 @@ export default function TeamRoundDetailPage() {
           });
         }
 
-        // 5) Scores
         let scRows: ScoreRow[] = [];
         if (playerIds.length > 0) {
           const { data: sRows, error: sErr } = await supabase
@@ -217,7 +206,6 @@ export default function TeamRoundDetailPage() {
             })) ?? [];
         }
 
-        // 6) Pars (both tees)
         const courseId = rr.course_id;
         let parsMap = new Map<Tee, Map<number, { par: number; si: number }>>();
         if (courseId) {
@@ -240,7 +228,6 @@ export default function TeamRoundDetailPage() {
           });
         }
 
-        // 7) Team rule bestY
         const { data: setRow, error: setErr } = await supabase
           .from("tour_grouping_settings")
           .select("default_team_best_m")
@@ -288,16 +275,13 @@ export default function TeamRoundDetailPage() {
     return m;
   }, [scores]);
 
-  // Per-player per-hole stableford points (net)
   const ptsByPlayerHole = useMemo(() => {
-    const m = new Map<string, number>(); // key: player|hole -> pts
+    const m = new Map<string, number>();
     if (!round?.course_id) return m;
 
     for (const p of players) {
       const tee: Tee = p.gender ? normalizeTee(p.gender) : "M";
-      // ✅ mild safety fallback if a tee map is missing
-      const pars =
-        parsByTeeHole.get(tee) || parsByTeeHole.get("M") || parsByTeeHole.get("F") || null;
+      const pars = parsByTeeHole.get(tee) || parsByTeeHole.get("M") || parsByTeeHole.get("F") || null;
       if (!pars) continue;
 
       const rp = roundPlayers.get(p.id);
@@ -330,19 +314,18 @@ export default function TeamRoundDetailPage() {
   const computed = useMemo(() => {
     const N = clampInt(teamRule.bestY, 1, 99);
 
-    const teamHoleTotals: number[] = Array.from({ length: 19 }).map(() => 0); // index 1..18
+    const teamHoleTotals: number[] = Array.from({ length: 19 }).map(() => 0);
 
     const playerContributionTotals = new Map<string, number>();
     for (const p of players) playerContributionTotals.set(p.id, 0);
 
-    const boxedBlueByHole = new Map<number, Set<string>>(); // exactly N (or fewer)
-    const zeroByHole = new Map<number, Set<string>>(); // red
+    const boxedBlueByHole = new Map<number, Set<string>>();
+    const zeroByHole = new Map<number, Set<string>>();
 
     for (let h = 1; h <= 18; h++) {
       const zeroSet = new Set<string>();
       const entries: Array<{ playerId: string; pts: number; orderIndex: number }> = [];
 
-      // collect in table order
       for (let idx = 0; idx < players.length; idx++) {
         const p = players[idx];
         const rp = roundPlayers.get(p.id);
@@ -353,27 +336,22 @@ export default function TeamRoundDetailPage() {
 
         if (pts === 0) {
           zeroSet.add(p.id);
-          playerContributionTotals.set(p.id, (playerContributionTotals.get(p.id) || 0) - 1);
+          playerContributionTotals.set(p.id, (playerContributionTotals.get(p.id) || 0) - 0.5);
         } else if (pts > 0) {
           entries.push({ playerId: p.id, pts, orderIndex: idx });
         }
       }
 
-      // pick EXACTLY top N positives (ties broken by table order)
       const picked = pickTopNPositivesExact({ entries, n: N });
-
-      // blue boxes correspond exactly to picked positives
       const blueSet = new Set<string>(picked.map((x) => x.playerId));
 
-      // add picked positives to player totals
       let posSum = 0;
       for (const x of picked) {
         posSum += x.pts;
         playerContributionTotals.set(x.playerId, (playerContributionTotals.get(x.playerId) || 0) + x.pts);
       }
 
-      // team hole total
-      const holeTotal = posSum - zeroSet.size;
+      const holeTotal = posSum - zeroSet.size * 0.5;
 
       teamHoleTotals[h] = holeTotal;
       boxedBlueByHole.set(h, blueSet);
@@ -391,7 +369,6 @@ export default function TeamRoundDetailPage() {
     };
   }, [players, roundPlayers, ptsByPlayerHole, teamRule.bestY]);
 
-  // per-player stableford "round total" (sum of points 1..18)
   const playerRoundStablefordTotals = useMemo(() => {
     const totals = new Map<string, number>();
     for (const p of players) totals.set(p.id, 0);
@@ -412,7 +389,6 @@ export default function TeamRoundDetailPage() {
     return totals;
   }, [players, roundPlayers, ptsByPlayerHole]);
 
-  // cutoff per hole (lowest value among BLUE-boxed scores for that hole)
   const cutoffByHole = useMemo(() => {
     const m = new Map<number, number | null>();
 
@@ -438,7 +414,6 @@ export default function TeamRoundDetailPage() {
 
   const N = clampInt(teamRule.bestY, 1, 99);
 
-  // New: qualifies (light-blue) per hole set
   const qualifiesByHole = useMemo(() => {
     const m = new Map<number, Set<string>>();
 
@@ -472,7 +447,6 @@ export default function TeamRoundDetailPage() {
     return m;
   }, [players, roundPlayers, ptsByPlayerHole, computed.boxedBlueByHole, computed.zeroByHole, cutoffByHole]);
 
-  // New: recompute Contribution as (blue + qualifies) - 1 per red zero
   const playerContributionByBoxes = useMemo(() => {
     const totals = new Map<string, number>();
     for (const p of players) totals.set(p.id, 0);
@@ -492,7 +466,7 @@ export default function TeamRoundDetailPage() {
         const isZero = computed.zeroByHole.get(h)?.has(p.id) ?? false;
 
         if (isZero) {
-          sum -= 1;
+          sum -= 0.5;
         } else if (isBlue || isQualifies) {
           sum += val;
         }
@@ -646,7 +620,6 @@ export default function TeamRoundDetailPage() {
                 );
               })}
 
-              {/* Team totals row */}
               <tr className="bg-gray-50">
                 <td className="sticky left-0 z-10 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-700">Team</td>
 
@@ -675,8 +648,8 @@ export default function TeamRoundDetailPage() {
         <div className="mt-3 text-xs text-gray-600">
           Rule: only the top {N} positive scores are counted (ties are resolved by table order). Blue boxes show exactly{" "}
           {N} counted positives (or fewer if fewer positives exist). Light-blue boxes show players who qualify for top {N}{" "}
-          scores by tying the cutoff value. Zeros are always boxed red and count as −1. Contribution is the sum of all
-          boxed blue + boxed light-blue scores minus 1 per red zero.
+          scores by tying the cutoff value. Zeros are always boxed red and count as −0.5. Contribution is the sum of all
+          boxed blue + boxed light-blue scores minus 0.5 per red zero.
         </div>
       </div>
     </div>
