@@ -1,3 +1,991 @@
+ChatGPT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Pasted code(58).ts
+TypeScript
+here is the leaderboard file.  For the tour i am working on, i would like the individual  leaderboard should be based on the best five rounds,  with round 3 and round 7 to be included in the best five.  Please summarise what is required, i will confirm, and then provide replacment code
+
+
+Pasted code(59).ts
+TypeScript
+I have added the file that calculates the pairs scorecard when you clikc a score on the pairs leaderboard.  Can you prepare a specifla version to apply for ruond 3 of this tour.  please summarise what the page will look like.  i will confirm and then you provide full replacemetn code
+
+
+Pasted code(60).ts
+TypeScript
+here is the competitions file.  Does it only include rounds if all 18 holes have been played
+
+
+Pasted code(61).ts
+TypeScript
+
+Pasted code (2)(11).ts
+TypeScript
+// lib/competitions/engine.ts
+import type { CompetitionContext, CompetitionDefinition } from "./types";
+
+export type CompetitionRow = {
+  entryId: string;
+  label: string;
+  total: number;
+  stats?: Record<string, any>;
+};
+
+export type CompetitionResult = {
+  rows: CompetitionRow[];
+};
+
+function isTourContext(ctx: CompetitionContext): boolean {
+  const c = ctx as any;
+  if (typeof c?.scope === "string") return c.scope === "tour";
+  return Array.isArray(c?.rounds);
+}
+
+function isRoundContext(ctx: CompetitionContext): boolean {
+  const c = ctx as any;
+  if (typeof c?.scope === "string") return c.scope === "round";
+  return !Array.isArray(c?.rounds);
+}
+
+function safeNumber(n: any): number {
+  const x = Number(n);
+  return Number.isFinite(x) ? x : 0;
+}
+
+/**
+ * Decide if a player is "complete" for ROUND scope.
+ * For TOUR scope, we intentionally DO NOT enforce completeness here,
+ * because tour competitions already handle completeness per-round
+ * (via r.isComplete(playerId) inside the competition compute).
+ */
+function isPlayerCompleteForRoundScope(ctx: any, playerId: string): boolean {
+  // Common patterns:
+  // - ctx.isComplete(playerId)
+  // - ctx.round.isComplete(playerId)
+  if (typeof ctx?.isComplete === "function") return !!ctx.isComplete(playerId);
+  if (typeof ctx?.round?.isComplete === "function") return !!ctx.round.isComplete(playerId);
+
+  // If no completeness fn exists, be permissive.
+  return true;
+}
+
+export function runCompetition(def: CompetitionDefinition, ctx: CompetitionContext): CompetitionResult {
+  // 1) Eligibility filtering (players)
+  const rawPlayers = ((ctx as any)?.players ?? []) as Array<any>;
+  let players = rawPlayers;
+
+  // onlyPlaying: keep those marked playing === true
+  if (def.eligibility?.onlyPlaying) {
+    players = players.filter((p) => p?.playing === true);
+  }
+
+  // requireComplete:
+  // ✅ Apply only for ROUND scope. For TOUR scope, competitions already skip incomplete rounds themselves.
+  if (def.eligibility?.requireComplete) {
+    if (isRoundContext(ctx)) {
+      players = players.filter((p) => isPlayerCompleteForRoundScope(ctx as any, p.id));
+    }
+    // If tour context: do NOT filter here.
+  }
+
+  // 2) Run compute with the filtered players injected
+  const ctxForCompute = { ...(ctx as any), players };
+  const rowsRaw = (def.compute(ctxForCompute as CompetitionContext) ?? []) as any[];
+
+  const rows: CompetitionRow[] = rowsRaw
+    .map((r) => ({
+      entryId: String(r.entryId ?? ""),
+      label: String(r.label ?? ""),
+      total: safeNumber(r.total),
+      stats: r.stats ?? undefined,
+    }))
+    .filter((r) => r.entryId && r.label);
+
+  // 3) Sort: highest score first, then label
+  rows.sort((a, b) => {
+    if (b.total !== a.total) return b.total - a.total;
+    return a.label.localeCompare(b.label);
+  });
+
+  return { rows };
+}
+
+
+Pasted code(62).ts
+TypeScript
+here is the rehandicapping file does it only recalcuate handicaps after a round where all players have played 18 holes
+
+
+Pasted code(63).ts
+TypeScript
+is this the file
+
+
+Pasted code(64).ts
+TypeScript
+can you modify the attachde file so that the average score used for rehandicapping is shown in a new row at the bottom of the table.  summarise what is being requiested and if it is possible 
+
+
+Pasted code(65).ts
+TypeScript
+here is the competitions file the calculatins for many of the competitions look too low.  For instance the Napoleon, Big George and Grand Canyon scores look too low.  I think the denominators might be too high - in particulqr it might be using all the holes in round 3 in the denominator but it should only be using half the holes.  Can you see if there is some error in the calcuation. ask clarifying questions if something is unclear
+
+
+Pasted code(66).ts
+TypeScript
+
+Pasted code (2)(12).ts
+TypeScript
+
+
+Pasted code(68).ts
+TypeScript
+
+Pasted code (2)(14).ts
+TypeScript
+I want to now add a page theat allows scores to be entered atthe end of the round. i will make changes in two steps first the layout and then the scoring logic.  The layout change requires the button on the scoring page which says "Continue to Scoring" after me is selected should say "Continue to Live Scoring" and a new button added which says "Continue to End of Round Scoring" below it. if the Continue to End of Round Scoring button is clicked, it takes the player to a page which has a similar layout to the detailed daily results page, with the following changes: 1 The word Scorecard in the second row is replaced with Score Entry - End of Round 2. The bos with the stableford total is moved fom the top right to the top centre 3. A "Submit Score" button is placed where the Stableford total currrently appears 4. The legrnd below the scorecard is removed. 5. Instead of the legend, there are 12 buttons (two rows by six columns) with the first row beign 1,2,3,4,5,6 and the second row being 7.8.9.1-,0,P.  These buttons need to be large enough to use as the way to enter scores.  Attached are two relevenat files.  Please summarise what is requird and how you will proceed.  I will then confimr
+
+
+Pasted code(69).ts
+TypeScript
+ok a couple of UI changes to the end of scoring page.The button with the total stableford score and the submit score button should be raised a little to align with the player name 2. The 12 buttons should  be enclosed in a larger block (using same colour scheme as the score alt page. 3. The words Enter Strokes should appear (in small text) inside this larger box and just above the first row of score entry buttons.  The scoring functionality is as follows.  the box containing the score for hole 1 should be shaded grey.  The number of strokes is chosen by pressing the buttons (like the score alt functionality) and this score appears for hole 1, and then the box for hole 2 goes grey.  then score for hole 2 is entereed and the box for hole 3 goes grey and so on.   the submit button will save the all the holes scores when clikced.  Each hole score button should be able to be clikced, and will then turn grey again  and a score can then be reetnered for that hole (this allows incorrect scores to be fixed).  Attached is the alt score file.  Please summarise what is required, ask any clarifying questions, and then explain how you will proceed.  i will then confirm
+
+
+Pasted code(70).ts
+TypeScript
+
+Pasted text (2)(3).txt
+Document
+I would like to add a page at the front of the app that has buttons with the name of each player on the tour.  when the player presses theirname for the first time on this page they would be taken to the home page.  However when the player comes back to the app again they should be taken to the pagge that they had last been on ie for each player the app should track what page the player has been on.  Attached is the home page file.  please summarise what is required and if this is possible.  let me know if have any clarifying questions or require any other files. Provide access to this page of player names via a new button on the tour admin page
+
+
+Pasted text(16).txt
+Document
+this is the file that needs to be amended please let me know where to add
+
+
+Pasted code(71).ts
+TypeScript
+what are the steps that need to be done - is it just to change the score alt file ? here it is 
+
+
+Pasted code(72).ts
+TypeScript
+i made the changes but i think i made some of them to the score file as well what else do i need to do to this file 
+
+
+Pasted code(73).ts
+TypeScript
+HEre is the file that calculates comeptititions.  It seems like the scores for the Napoleon, Big Goerge and Grand Canyon are too low for the Japan Swing in Spring Tour, which might mean the denominators are too high. Please check if these calculations are workign as explected 
+
+
+Pasted code(74).ts
+TypeScript
+
+Pasted code (2)(15).ts
+TypeScript
+
+
+Pasted text(17).txt
+Document
+
+
+Pasted text(18).txt
+Document
+
+
+Pasted code(75).ts
+TypeScript
+here is the file is this helpful
+
+
+Pasted code(76).ts
+TypeScript
+
+Pasted code (2)(16).ts
+TypeScript
+i would like to change the teams leaderboard calculation by deduction 0.5 points for a zero stableford score rather than 1 point.  please summarise what is required and then provide full replacement code, one file at a time
+
+I’ll change the team calculation in both places it appears: the main teams leaderboard total and the team round detail page. I’ll start with the leaderboard file first, then the detail file in the next response.
+
+Thought for 1m 14s
+Required change: teams now subtract 0.5 per zero Stableford, not 1 per zero, in the teams leaderboard calculation. The current file subtracts zeroCount from each hole total. 
+
+
+First full replacement file:
+
+Download replacement leaderboards/page.tsx
+
+
+ok provide other file
+
+Thought for 12s
+Replace the team round detail file with the same file, changing zero deductions from -1 to -0.5. Affected logic is in the team detail calculation and contribution text. 
+
+
+Path:
+
+app/m/tours/[id]/leaderboards/teams/[roundId]/[teamId]/page.tsx
+Use this full replacement file:
+
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
+
+/* ---------------- Types ---------------- */
+
+type Tee = "M" | "F";
+
+type Player = {
+  id: string;
+  name: string;
+  gender: Tee | null;
+};
+
+type RoundRow = {
+  id: string;
+  course_id: string | null;
+};
+
+type RoundPlayer = {
+  player_id: string;
+  playing: boolean;
+  playing_handicap: number | null;
+};
+
+type ScoreRow = {
+  player_id: string;
+  hole_number: number;
+  strokes: number | null;
+  pickup: boolean | null;
+};
+
+type TeamRule = {
+  bestY: number;
+};
+
+/* ---------------- Helpers ---------------- */
+
+function normalizeTee(v: any): Tee {
+  const s = String(v ?? "").trim().toUpperCase();
+  const isF = s === "F" || s === "FEMALE" || s === "W" || s === "WOMEN" || s === "WOMAN";
+  return isF ? "F" : "M";
+}
+
+function safeName(v: any, fallback: string) {
+  const s = String(v ?? "").trim();
+  return s ? s : fallback;
+}
+
+function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
+  if (pickup) return "P";
+  if (strokes === null || strokes === undefined) return "";
+  const n = Number(strokes);
+  return Number.isFinite(n) ? String(n) : "";
+}
+
+function netStablefordPointsForHole(params: {
+  rawScore: string;
+  par: number;
+  strokeIndex: number;
+  playingHandicap: number;
+}) {
+  const { rawScore, par, strokeIndex, playingHandicap } = params;
+
+  const raw = String(rawScore ?? "").trim().toUpperCase();
+  if (!raw) return 0;
+  if (raw === "P") return 0;
+
+  const strokes = Number(raw);
+  if (!Number.isFinite(strokes)) return 0;
+
+  const hcp = Math.max(0, Math.floor(Number(playingHandicap) || 0));
+  const base = Math.floor(hcp / 18);
+  const rem = hcp % 18;
+  const extra = strokeIndex <= rem ? 1 : 0;
+  const shotsReceived = base + extra;
+
+  const net = strokes - shotsReceived;
+  const pts = 2 + (par - net);
+  return Math.max(0, Math.min(pts, 10));
+}
+
+function clampInt(n: any, min: number, max: number) {
+  const x = Math.floor(Number(n));
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
+function pickTopNPositivesExact(args: {
+  entries: Array<{ playerId: string; pts: number; orderIndex: number }>;
+  n: number;
+}) {
+  const N = clampInt(args.n, 1, 99);
+  const positives = args.entries.filter((e) => e.pts > 0);
+
+  positives.sort((a, b) => {
+    if (b.pts !== a.pts) return b.pts - a.pts;
+    return a.orderIndex - b.orderIndex;
+  });
+
+  return positives.slice(0, Math.min(N, positives.length));
+}
+
+/* ---------------- Page ---------------- */
+
+export default function TeamRoundDetailPage() {
+  const params = useParams<{
+    id?: string;
+    roundId?: string;
+    teamId?: string;
+  }>();
+
+  const tourId = String(params?.id ?? "").trim();
+  const roundId = String(params?.roundId ?? "").trim();
+  const teamId = String(params?.teamId ?? "").trim();
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const [teamName, setTeamName] = useState<string>("Team");
+  const [players, setPlayers] = useState<Player[]>([]);
+  const [round, setRound] = useState<RoundRow | null>(null);
+  const [roundPlayers, setRoundPlayers] = useState<Map<string, RoundPlayer>>(new Map());
+  const [scores, setScores] = useState<ScoreRow[]>([]);
+  const [parsByTeeHole, setParsByTeeHole] = useState<Map<Tee, Map<number, { par: number; si: number }>>>(new Map());
+  const [teamRule, setTeamRule] = useState<TeamRule>({ bestY: 1 });
+
+  useEffect(() => {
+    let alive = true;
+
+    async function load() {
+      setLoading(true);
+      setError("");
+
+      try {
+        const { data: teamRow, error: teamErr } = await supabase
+          .from("tour_groups")
+          .select("id,name")
+          .eq("id", teamId)
+          .maybeSingle();
+        if (teamErr) throw teamErr;
+
+        const { data: memRows, error: memErr } = await supabase
+          .from("tour_group_members")
+          .select("group_id,player_id,position,players(id,name,gender)")
+          .eq("group_id", teamId)
+          .order("position", { ascending: true, nullsFirst: true });
+        if (memErr) throw memErr;
+
+        const ps: Player[] = (memRows ?? [])
+          .map((m: any) => m.players)
+          .filter(Boolean)
+          .map((p: any) => ({
+            id: String(p.id),
+            name: safeName(p.name, "(unnamed)"),
+            gender: p.gender ? normalizeTee(p.gender) : null,
+          }));
+
+        const { data: rRow, error: rErr } = await supabase
+          .from("rounds")
+          .select("id,course_id")
+          .eq("id", roundId)
+          .single();
+        if (rErr) throw rErr;
+        const rr = rRow as RoundRow;
+
+        const playerIds = ps.map((p) => p.id);
+
+        let rpMap = new Map<string, RoundPlayer>();
+        if (playerIds.length > 0) {
+          const { data: rpRows, error: rpErr } = await supabase
+            .from("round_players")
+            .select("player_id,playing,playing_handicap")
+            .eq("round_id", roundId)
+            .in("player_id", playerIds);
+          if (rpErr) throw rpErr;
+
+          rpMap = new Map();
+          (rpRows ?? []).forEach((x: any) => {
+            rpMap.set(String(x.player_id), {
+              player_id: String(x.player_id),
+              playing: x.playing === true,
+              playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
+            });
+          });
+        }
+
+        let scRows: ScoreRow[] = [];
+        if (playerIds.length > 0) {
+          const { data: sRows, error: sErr } = await supabase
+            .from("scores")
+            .select("player_id,hole_number,strokes,pickup")
+            .eq("round_id", roundId)
+            .in("player_id", playerIds);
+          if (sErr) throw sErr;
+
+          scRows =
+            (sRows ?? []).map((s: any) => ({
+              player_id: String(s.player_id),
+              hole_number: Number(s.hole_number),
+              strokes: s.strokes === null || s.strokes === undefined ? null : Number(s.strokes),
+              pickup: s.pickup === true ? true : s.pickup === false ? false : (s.pickup ?? null),
+            })) ?? [];
+        }
+
+        const courseId = rr.course_id;
+        let parsMap = new Map<Tee, Map<number, { par: number; si: number }>>();
+        if (courseId) {
+          const { data: pRows, error: pErr } = await supabase
+            .from("pars")
+            .select("hole_number,par,stroke_index,tee")
+            .eq("course_id", courseId)
+            .in("tee", ["M", "F"])
+            .order("hole_number", { ascending: true });
+          if (pErr) throw pErr;
+
+          parsMap = new Map();
+          (pRows ?? []).forEach((p: any) => {
+            const tee: Tee = normalizeTee(p.tee);
+            if (!parsMap.has(tee)) parsMap.set(tee, new Map());
+            parsMap.get(tee)!.set(Number(p.hole_number), {
+              par: Number(p.par),
+              si: Number(p.stroke_index),
+            });
+          });
+        }
+
+        const { data: setRow, error: setErr } = await supabase
+          .from("tour_grouping_settings")
+          .select("default_team_best_m")
+          .eq("tour_id", tourId)
+          .maybeSingle();
+        if (setErr) throw setErr;
+
+        const y = Number.isFinite(Number((setRow as any)?.default_team_best_m))
+          ? Number((setRow as any)?.default_team_best_m)
+          : 1;
+
+        if (!alive) return;
+
+        const nm = String((teamRow as any)?.name ?? "").trim();
+        setTeamName(nm || "Team");
+        setPlayers(ps);
+        setRound(rr);
+        setRoundPlayers(rpMap);
+        setScores(scRows);
+        setParsByTeeHole(parsMap);
+        setTeamRule({ bestY: clampInt(y, 1, 99) });
+      } catch (e: any) {
+        if (!alive) return;
+        setError(e?.message ?? "Failed to load team round detail.");
+      } finally {
+        if (!alive) return;
+        setLoading(false);
+      }
+    }
+
+    if (tourId && roundId && teamId) void load();
+    else {
+      setError("Missing route params.");
+      setLoading(false);
+    }
+
+    return () => {
+      alive = false;
+    };
+  }, [tourId, roundId, teamId]);
+
+  const scoreByPlayerHole = useMemo(() => {
+    const m = new Map<string, ScoreRow>();
+    for (const s of scores) m.set(`${s.player_id}|${s.hole_number}`, s);
+    return m;
+  }, [scores]);
+
+  const ptsByPlayerHole = useMemo(() => {
+    const m = new Map<string, number>();
+    if (!round?.course_id) return m;
+
+    for (const p of players) {
+      const tee: Tee = p.gender ? normalizeTee(p.gender) : "M";
+      const pars = parsByTeeHole.get(tee) || parsByTeeHole.get("M") || parsByTeeHole.get("F") || null;
+      if (!pars) continue;
+
+      const rp = roundPlayers.get(p.id);
+      if (!rp?.playing) continue;
+
+      const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
+
+      for (let h = 1; h <= 18; h++) {
+        const pr = pars.get(h);
+        if (!pr) continue;
+
+        const sc = scoreByPlayerHole.get(`${p.id}|${h}`);
+        if (!sc) continue;
+
+        const raw = normalizeRawScore(sc.strokes, sc.pickup);
+        const pts = netStablefordPointsForHole({
+          rawScore: raw,
+          par: pr.par,
+          strokeIndex: pr.si,
+          playingHandicap: hcp,
+        });
+
+        m.set(`${p.id}|${h}`, pts);
+      }
+    }
+
+    return m;
+  }, [players, round, roundPlayers, parsByTeeHole, scoreByPlayerHole]);
+
+  const computed = useMemo(() => {
+    const N = clampInt(teamRule.bestY, 1, 99);
+
+    const teamHoleTotals: number[] = Array.from({ length: 19 }).map(() => 0);
+
+    const playerContributionTotals = new Map<string, number>();
+    for (const p of players) playerContributionTotals.set(p.id, 0);
+
+    const boxedBlueByHole = new Map<number, Set<string>>();
+    const zeroByHole = new Map<number, Set<string>>();
+
+    for (let h = 1; h <= 18; h++) {
+      const zeroSet = new Set<string>();
+      const entries: Array<{ playerId: string; pts: number; orderIndex: number }> = [];
+
+      for (let idx = 0; idx < players.length; idx++) {
+        const p = players[idx];
+        const rp = roundPlayers.get(p.id);
+        if (!rp?.playing) continue;
+
+        const pts = ptsByPlayerHole.get(`${p.id}|${h}`);
+        if (pts === undefined) continue;
+
+        if (pts === 0) {
+          zeroSet.add(p.id);
+          playerContributionTotals.set(p.id, (playerContributionTotals.get(p.id) || 0) - 0.5);
+        } else if (pts > 0) {
+          entries.push({ playerId: p.id, pts, orderIndex: idx });
+        }
+      }
+
+      const picked = pickTopNPositivesExact({ entries, n: N });
+      const blueSet = new Set<string>(picked.map((x) => x.playerId));
+
+      let posSum = 0;
+      for (const x of picked) {
+        posSum += x.pts;
+        playerContributionTotals.set(x.playerId, (playerContributionTotals.get(x.playerId) || 0) + x.pts);
+      }
+
+      const holeTotal = posSum - zeroSet.size * 0.5;
+
+      teamHoleTotals[h] = holeTotal;
+      boxedBlueByHole.set(h, blueSet);
+      zeroByHole.set(h, zeroSet);
+    }
+
+    const teamTotal = teamHoleTotals.slice(1, 19).reduce((a, b) => a + b, 0);
+
+    return {
+      teamHoleTotals,
+      teamTotal,
+      playerContributionTotals,
+      boxedBlueByHole,
+      zeroByHole,
+    };
+  }, [players, roundPlayers, ptsByPlayerHole, teamRule.bestY]);
+
+  const playerRoundStablefordTotals = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const p of players) totals.set(p.id, 0);
+
+    for (const p of players) {
+      const rp = roundPlayers.get(p.id);
+      if (!rp?.playing) continue;
+
+      let sum = 0;
+      for (let h = 1; h <= 18; h++) {
+        const pts = ptsByPlayerHole.get(`${p.id}|${h}`);
+        if (pts === undefined) continue;
+        sum += pts;
+      }
+      totals.set(p.id, sum);
+    }
+
+    return totals;
+  }, [players, roundPlayers, ptsByPlayerHole]);
+
+  const cutoffByHole = useMemo(() => {
+    const m = new Map<number, number | null>();
+
+    for (let h = 1; h <= 18; h++) {
+      const blueSet = computed.boxedBlueByHole.get(h);
+      if (!blueSet || blueSet.size === 0) {
+        m.set(h, null);
+        continue;
+      }
+
+      let min: number | null = null;
+      for (const playerId of blueSet) {
+        const pts = ptsByPlayerHole.get(`${playerId}|${h}`);
+        if (pts === undefined) continue;
+        if (min === null || pts < min) min = pts;
+      }
+
+      m.set(h, min);
+    }
+
+    return m;
+  }, [computed.boxedBlueByHole, ptsByPlayerHole]);
+
+  const N = clampInt(teamRule.bestY, 1, 99);
+
+  const qualifiesByHole = useMemo(() => {
+    const m = new Map<number, Set<string>>();
+
+    for (let h = 1; h <= 18; h++) {
+      const cutoff = cutoffByHole.get(h) ?? null;
+      const set = new Set<string>();
+
+      if (cutoff === null) {
+        m.set(h, set);
+        continue;
+      }
+
+      for (const p of players) {
+        const rp = roundPlayers.get(p.id);
+        if (!rp?.playing) continue;
+
+        const val = ptsByPlayerHole.get(`${p.id}|${h}`);
+        if (val === undefined) continue;
+
+        const isBlue = computed.boxedBlueByHole.get(h)?.has(p.id) ?? false;
+        const isZero = computed.zeroByHole.get(h)?.has(p.id) ?? false;
+
+        if (!isBlue && !isZero && val === cutoff) {
+          set.add(p.id);
+        }
+      }
+
+      m.set(h, set);
+    }
+
+    return m;
+  }, [players, roundPlayers, ptsByPlayerHole, computed.boxedBlueByHole, computed.zeroByHole, cutoffByHole]);
+
+  const playerContributionByBoxes = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const p of players) totals.set(p.id, 0);
+
+    for (const p of players) {
+      const rp = roundPlayers.get(p.id);
+      if (!rp?.playing) continue;
+
+      let sum = 0;
+
+      for (let h = 1; h <= 18; h++) {
+        const val = ptsByPlayerHole.get(`${p.id}|${h}`);
+        if (val === undefined) continue;
+
+        const isBlue = computed.boxedBlueByHole.get(h)?.has(p.id) ?? false;
+        const isQualifies = qualifiesByHole.get(h)?.has(p.id) ?? false;
+        const isZero = computed.zeroByHole.get(h)?.has(p.id) ?? false;
+
+        if (isZero) {
+          sum -= 0.5;
+        } else if (isBlue || isQualifies) {
+          sum += val;
+        }
+      }
+
+      totals.set(p.id, sum);
+    }
+
+    return totals;
+  }, [players, roundPlayers, ptsByPlayerHole, computed.boxedBlueByHole, computed.zeroByHole, qualifiesByHole]);
+
+  if (loading) {
+    return (
+      <div className="min-h-dvh bg-white text-gray-900">
+        <div className="mx-auto w-full max-w-md px-4 py-6">
+          <div className="rounded-2xl border p-4 text-sm">Loading…</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-dvh bg-white text-gray-900">
+        <div className="mx-auto w-full max-w-md px-4 py-6">
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{error}</div>
+          <div className="mt-4">
+            <Link className="underline text-sm" href={`/m/tours/${tourId}/leaderboards`}>
+              Back to Leaderboards
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function Cell({
+    pts,
+    boxedBlue,
+    boxedZero,
+    boxedQualifies,
+  }: {
+    pts: number | null;
+    boxedBlue: boolean;
+    boxedZero: boolean;
+    boxedQualifies: boolean;
+  }) {
+    const base = "inline-flex min-w-[24px] justify-center rounded-sm px-1 py-0.5";
+
+    if (boxedZero) return <span className={`${base} border-2 border-red-500`}>{pts === null ? "" : pts}</span>;
+    if (boxedBlue) return <span className={`${base} border-2 border-blue-500`}>{pts === null ? "" : pts}</span>;
+    if (boxedQualifies) return <span className={`${base} border-2 border-sky-300`}>{pts === null ? "" : pts}</span>;
+
+    return <span className="inline-flex min-w-[24px] justify-center">{pts === null ? "" : pts}</span>;
+  }
+
+  return (
+    <div className="min-h-dvh bg-white text-gray-900 pb-10">
+      <div className="mx-auto w-full max-w-md px-4 py-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-lg font-extrabold leading-tight">{teamName}</div>
+            <div className="mt-1 text-xs text-gray-600">
+              Round detail · Team total: <span className="font-semibold">{computed.teamTotal}</span>
+            </div>
+
+            <div className="mt-2 text-[11px] text-gray-600">
+              <span className="inline-flex items-center gap-2">
+                <span className="inline-block h-3 w-3 rounded-sm border-2 border-blue-500" /> Counted (top {N})
+                <span className="inline-block h-3 w-3 rounded-sm border-2 border-sky-300 ml-3" /> Qualifies for top {N}{" "}
+                scores
+                <span className="inline-block h-3 w-3 rounded-sm border-2 border-red-500 ml-3" /> Zero
+              </span>
+            </div>
+          </div>
+
+          <Link
+            className="shrink-0 rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-gray-50"
+            href={`/m/tours/${tourId}/leaderboards`}
+          >
+            Back
+          </Link>
+        </div>
+
+        <div className="mt-4 overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
+          <table className="min-w-max border-collapse">
+            <thead>
+              <tr className="bg-gray-50">
+                <th className="sticky left-0 z-10 bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
+                  Player
+                </th>
+
+                {Array.from({ length: 18 }).map((_, i) => (
+                  <th
+                    key={i + 1}
+                    className="border-b border-gray-200 px-2 py-2 text-center text-[11px] font-semibold text-gray-700"
+                  >
+                    {i + 1}
+                  </th>
+                ))}
+
+                <th className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700">
+                  Total
+                </th>
+
+                <th className="border-b border-gray-200 px-3 py-2 text-center text-xs font-semibold text-gray-700">
+                  Contribution
+                </th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {players.map((p) => {
+                const contribution = playerContributionByBoxes.get(p.id) ?? 0;
+                const roundTotal = playerRoundStablefordTotals.get(p.id) ?? 0;
+
+                return (
+                  <tr key={p.id} className="border-b last:border-b-0">
+                    <td className="sticky left-0 z-10 bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                      {p.name}
+                    </td>
+
+                    {Array.from({ length: 18 }).map((_, idx) => {
+                      const hole = idx + 1;
+                      const pts = ptsByPlayerHole.get(`${p.id}|${hole}`);
+                      const val = pts === undefined ? null : pts;
+
+                      const boxedBlue = computed.boxedBlueByHole.get(hole)?.has(p.id) ?? false;
+                      const boxedZero = computed.zeroByHole.get(hole)?.has(p.id) ?? false;
+                      const boxedQualifies = qualifiesByHole.get(hole)?.has(p.id) ?? false;
+
+                      return (
+                        <td key={hole} className="px-2 py-2 text-center text-sm text-gray-900">
+                          <Cell pts={val} boxedBlue={boxedBlue} boxedZero={boxedZero} boxedQualifies={boxedQualifies} />
+                        </td>
+                      );
+                    })}
+
+                    <td className="px-3 py-2 text-center text-sm font-semibold text-gray-900">
+                      <span className="inline-flex min-w-[36px] justify-center rounded-md bg-gray-100 px-2 py-1">
+                        {roundTotal}
+                      </span>
+                    </td>
+
+                    <td className="px-3 py-2 text-center text-sm font-extrabold text-gray-900">
+                      <span className="inline-flex min-w-[36px] justify-center rounded-md bg-yellow-100 px-2 py-1">
+                        {contribution}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              <tr className="bg-gray-50">
+                <td className="sticky left-0 z-10 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-700">Team</td>
+
+                {Array.from({ length: 18 }).map((_, idx) => {
+                  const hole = idx + 1;
+                  const v = computed.teamHoleTotals[hole] ?? 0;
+                  return (
+                    <td key={hole} className="px-2 py-2 text-center text-sm font-semibold text-gray-900">
+                      {v}
+                    </td>
+                  );
+                })}
+
+                <td className="px-3 py-2 text-center text-sm font-semibold text-gray-600">—</td>
+
+                <td className="px-3 py-2 text-center text-sm font-extrabold text-gray-900">
+                  <span className="inline-flex min-w-[36px] justify-center rounded-md bg-yellow-100 px-2 py-1">
+                    {computed.teamTotal}
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div className="mt-3 text-xs text-gray-600">
+          Rule: only the top {N} positive scores are counted (ties are resolved by table order). Blue boxes show exactly{" "}
+          {N} counted positives (or fewer if fewer positives exist). Light-blue boxes show players who qualify for top {N}{" "}
+          scores by tying the cutoff value. Zeros are always boxed red and count as −0.5. Contribution is the sum of all
+          boxed blue + boxed light-blue scores minus 0.5 per red zero.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+provide git instruction block to deploy in main
+
+git checkout main; git pull origin main; git add 'app/m/tours/[id]/leaderboards/page.tsx' 'app/m/tours/[id]/leaderboards/teams/[roundId]/[teamId]/page.tsx'; git commit -m "Change team zero deduction from 1 to 0.5"; git push origin main
+
+
+Pasted code(77).ts
+TypeScript
+for the tour landing page for the swing in spring tour, every button needs to have an access code of 0612 entered so that the click funcition works, otherwise it should say access denied. here is the file . Please summarise what is required and provide full repplacement code  
+
+I’ll make this tour-specific: only the Swing in Spring landing page will require code 0612; other tours will behave normally. I’ll keep existing “results hidden” and matchplay inactive behaviour intact.
+
+Thought for 50s
+Required change:
+
+Only Swing in Spring Tour requires access code 0612.
+
+Add an access-code input on the landing page.
+
+Every landing-page tile button checks the code before running its click action.
+
+If the code is wrong or missing, the tile shows access denied.
+
+Other tours are unchanged.
+
+Full replacement file:
+
+Download replacement page.tsx
+
+
+provide git instruction block to deplouy in main
+
+git checkout main; git pull origin main; git add 'app/m/tours/[id]/page.tsx'; git commit -m "Add access code protection to Swing in Spring landing page"; git push origin main
+DEVELOPER MODE
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
 "use client";
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
@@ -35,1219 +1023,6 @@ const DEFAULT_HERO = "/tours/tour-landing-hero-cartoon.webp";
 const SPACE_TOUR_ID = "1786d88f-0f50-460a-ad0c-ed0173b7aa1c";
 const SPACE_TOUR_HERO = "/tours/golf_space_scene.webp";
 
-const JAPAN_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
-const JAPAN_HERO = "/tours/japan-poster_mobile_1080w.webp";
-const JAPAN_ITINERARY_URL = "https://cgegolfs.tkgplatform.com.au/proposal/80/CGE";
+typescript
 
-const SUND_TOUR_ID = "544f1602-17b1-4446-9cb3-da2fffd2e4eb";
-const SUND_TOUR_HERO = "/tours/sund_golf_tour_logo_v2.webp";
-
-const PORTUGAL_TOUR_ID = "b5e5b90d-0ae5-4be5-a3cd-3ef1c73cb6b5";
-const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
-
-const SCOTLAND_TOUR_ID = "207a93c7-70fb-4969-9ef1-6ad844e556c5";
-const SCOTLAND_HERO = "/tours/scotland_golf_trip_mobile.webp";
-
-const KIWI_MADNESS_TOUR_NAME = "Kiwi Madness Tour";
-const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
-
-const NZ_TOUR_2026_ID = "5a80b049-396f-46ec-965e-810e738471b6";
-const NZ_TOUR_2026_HERO = "/tours/NZ26-logo.webp";
-
-// Only this tour has PDFs for now
-const PDF_TOUR_ID = NZ_TOUR_2026_ID;
-const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
-const PDF_FILES = ["itinerary.pdf", "accommodation.pdf", "dining.pdf", "profiles.pdf", "comps.pdf"] as const;
-
-const MATCHPLAY_INACTIVE_MESSAGE = "Matchplay events not active on this tour";
-const ACCESS_DENIED_MESSAGE = "access denied";
-const JAPAN_ACCESS_CODE = "0612";
-
-// Interaction
-const MIN_SCALE = 0.6;
-const MAX_SCALE = 6.0;
-
-// Debounced refine
-const RERENDER_DEBOUNCE_MS = 140;
-const RERENDER_THRESHOLD_RATIO = 1.20;
-
-// Inertia
-const INERTIA_FRICTION = 0.92;
-const INERTIA_STOP_SPEED = 18;
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
-
-function parseDate(value: string | null): Date | null {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function fmtDate(d: Date) {
-  return d.toLocaleDateString(undefined, {
-    weekday: "short",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-function formatTourDates(start: Date | null, end: Date | null) {
-  if (start && end) {
-    if (start.toDateString() === end.toDateString()) return fmtDate(start);
-    return `${fmtDate(start)} – ${fmtDate(end)}`;
-  }
-  if (start) return fmtDate(start);
-  if (end) return fmtDate(end);
-  return "";
-}
-
-function titleFromFilename(filename: string) {
-  return filename.replace(/\.pdf$/i, "").replace(/[-_]+/g, " ").trim();
-}
-
-function normalizePath(p: string) {
-  return String(p ?? "").trim().replace(/\\/g, "/").toLowerCase();
-}
-
-type Pt = { x: number; y: number };
-
-type TileButtonProps = {
-  className: string;
-  onClick: () => void;
-  children: React.ReactNode;
-  blocked?: boolean;
-  blockedKey?: string;
-  accessAllowed?: boolean;
-  deniedKey: string | null;
-  showDenied: (key: string) => void;
-};
-
-function TileButton({
-  className,
-  onClick,
-  children,
-  blocked = false,
-  blockedKey,
-  accessAllowed = true,
-  deniedKey,
-  showDenied,
-}: TileButtonProps) {
-  const isDeniedShowing = (blocked || !accessAllowed) && blockedKey != null && deniedKey === blockedKey;
-
-  return (
-    <div className="relative h-20 w-full">
-      <button
-        type="button"
-        className={`${className} h-full w-full`}
-        onClick={() => {
-          if (blockedKey && !accessAllowed) {
-            showDenied(blockedKey);
-            return;
-          }
-          if (blocked && blockedKey) {
-            showDenied(blockedKey);
-            return;
-          }
-          onClick();
-        }}
-      >
-        {children}
-      </button>
-
-      {isDeniedShowing ? (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl bg-black/70 px-2">
-          <div className="rounded-lg bg-white/95 px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-gray-900 shadow">
-            {ACCESS_DENIED_MESSAGE}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-export default function MobileTourLandingPage() {
-  const params = useParams<{ id: string }>();
-  const router = useRouter();
-  const tourId = (params?.id ?? "").trim();
-
-  const [tour, setTour] = useState<TourRow | null>(null);
-  const [rounds, setRounds] = useState<RoundRow[]>([]);
-  const [docs, setDocs] = useState<TourDocRow[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // lightweight toast
-  const [toastMsg, setToastMsg] = useState<string>("");
-  const toastTimerRef = useRef<number | null>(null);
-
-  // access denied overlay
-  const [deniedButtonKey, setDeniedButtonKey] = useState<string | null>(null);
-  const deniedTimerRef = useRef<number | null>(null);
-
-  const [accessCode, setAccessCode] = useState("");
-
-  const showToast = useCallback((msg: string) => {
-    setToastMsg(msg);
-    if (toastTimerRef.current != null) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => {
-      toastTimerRef.current = null;
-      setToastMsg("");
-    }, 1800);
-  }, []);
-
-  const showDenied = useCallback((key: string) => {
-    setDeniedButtonKey(key);
-    if (deniedTimerRef.current != null) window.clearTimeout(deniedTimerRef.current);
-    deniedTimerRef.current = window.setTimeout(() => {
-      deniedTimerRef.current = null;
-      setDeniedButtonKey(null);
-    }, 1400);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (toastTimerRef.current != null) window.clearTimeout(toastTimerRef.current);
-      if (deniedTimerRef.current != null) window.clearTimeout(deniedTimerRef.current);
-    };
-  }, []);
-
-  // PDF overlay state
-  const [openingDocIdx, setOpeningDocIdx] = useState<number | null>(null);
-  const [viewerTitle, setViewerTitle] = useState<string>("Document");
-  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
-  const [rendering, setRendering] = useState<boolean>(false);
-
-  // PDF.js
-  const pdfjsRef = useRef<any>(null);
-  const [pdfjsReady, setPdfjsReady] = useState(false);
-
-  // DOM refs
-  const viewportRef = useRef<HTMLDivElement | null>(null);
-  const contentRef = useRef<HTMLDivElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  // PDF refs
-  const pdfDocRef = useRef<any>(null);
-  const pdfPageRef = useRef<any>(null);
-
-  // Transform refs
-  const scaleRef = useRef<number>(1);
-  const txRef = useRef<number>(0);
-  const tyRef = useRef<number>(0);
-
-  // World size in CSS px
-  const worldWRef = useRef<number>(0);
-  const worldHRef = useRef<number>(0);
-
-  // Base CSS fit scale
-  const baseCssScaleRef = useRef<number>(1);
-
-  // Last quality render multiplier
-  const lastQualityRef = useRef<number>(1);
-
-  // Debounce timer
-  const rerenderTimerRef = useRef<number | null>(null);
-
-  // Pointers & gesture tracking
-  const pointersRef = useRef<Map<number, Pt>>(new Map());
-  const gestureRef = useRef<{
-    mode: "none" | "pan" | "pinch";
-    startScale: number;
-    startTx: number;
-    startTy: number;
-    startDist: number;
-    anchorWorld: Pt;
-    vx: number;
-    vy: number;
-    lastMoveT: number;
-    lastMid: Pt;
-  }>({
-    mode: "none",
-    startScale: 1,
-    startTx: 0,
-    startTy: 0,
-    startDist: 1,
-    anchorWorld: { x: 0, y: 0 },
-    vx: 0,
-    vy: 0,
-    lastMoveT: 0,
-    lastMid: { x: 0, y: 0 },
-  });
-
-  const inertiaRafRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    async function loadPdfJs() {
-      try {
-        if (typeof window === "undefined") return;
-        const mod: any = await import("pdfjs-dist");
-        const lib = mod?.default ?? mod;
-        lib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-        pdfjsRef.current = lib;
-        if (alive) setPdfjsReady(true);
-      } catch {
-        if (alive) setPdfjsReady(false);
-      }
-    }
-    loadPdfJs();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-
-    async function loadAll() {
-      setLoading(true);
-
-      const [{ data: t }, { data: r }, { data: d }] = await Promise.all([
-        supabase
-          .from("tours")
-          .select("id,name,start_date,end_date,image_url,matchplay_active,hide_results")
-          .eq("id", tourId)
-          .single(),
-        supabase.from("rounds").select("id,tour_id,played_on").eq("tour_id", tourId),
-        supabase
-          .from("tour_documents")
-          .select("id,tour_id,title,storage_bucket,storage_path,sort_order")
-          .eq("tour_id", tourId)
-          .order("sort_order", { ascending: true }),
-      ]);
-
-      if (!alive) return;
-
-      setTour(t as TourRow);
-      setRounds((r ?? []) as RoundRow[]);
-      setDocs((d ?? []) as TourDocRow[]);
-      setLoading(false);
-    }
-
-    if (tourId) loadAll();
-    return () => {
-      alive = false;
-    };
-  }, [tourId]);
-
-  const heroImage = useMemo(() => {
-    if (tourId === SPACE_TOUR_ID) return SPACE_TOUR_HERO;
-    if (tourId === SUND_TOUR_ID) return SUND_TOUR_HERO;
-    if (tourId === NZ_TOUR_2026_ID) return NZ_TOUR_2026_HERO;
-    if (tourId === SCOTLAND_TOUR_ID) return SCOTLAND_HERO;
-    if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
-    if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
-    if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
-    return tour?.image_url?.trim() || DEFAULT_HERO;
-  }, [tourId, tour?.image_url, tour?.name]);
-
-  const derivedDates = useMemo(() => {
-    const played = rounds.map((r) => r.played_on).filter(Boolean) as string[];
-    if (!played.length) return { start: null, end: null };
-    played.sort();
-    return { start: played[0], end: played[played.length - 1] };
-  }, [rounds]);
-
-  const start = parseDate(tour?.start_date || derivedDates.start);
-  const end = parseDate(tour?.end_date || derivedDates.end);
-  const dateLabel = formatTourDates(start, end);
-
-  const matchplayIsActive = tour?.matchplay_active === false ? false : true;
-  const resultsHidden = tour?.hide_results === true;
-  const requiresJapanAccess = tourId === JAPAN_TOUR_ID;
-  const japanAccessAllowed = !requiresJapanAccess || accessCode.trim() === JAPAN_ACCESS_CODE;
-
-  const stopInertia = useCallback(() => {
-    if (inertiaRafRef.current != null) {
-      cancelAnimationFrame(inertiaRafRef.current);
-      inertiaRafRef.current = null;
-    }
-  }, []);
-
-  const clearRerenderTimer = useCallback(() => {
-    if (rerenderTimerRef.current != null) {
-      window.clearTimeout(rerenderTimerRef.current);
-      rerenderTimerRef.current = null;
-    }
-  }, []);
-
-  const applyTransform = useCallback(() => {
-    const el = contentRef.current;
-    if (!el) return;
-    el.style.transform = `translate3d(${txRef.current}px, ${tyRef.current}px, 0) scale(${scaleRef.current})`;
-  }, []);
-
-  const getViewportRect = useCallback(() => {
-    const vp = viewportRef.current;
-    if (!vp) return null;
-    return vp.getBoundingClientRect();
-  }, []);
-
-  const clampToBounds = useCallback((nextTx: number, nextTy: number, nextScale: number) => {
-    const vp = viewportRef.current;
-    if (!vp) return { tx: nextTx, ty: nextTy };
-
-    const vw = vp.clientWidth;
-    const vh = vp.clientHeight;
-
-    const worldW = worldWRef.current;
-    const worldH = worldHRef.current;
-
-    const scaledW = worldW * nextScale;
-    const scaledH = worldH * nextScale;
-
-    let minTx: number, maxTx: number, minTy: number, maxTy: number;
-
-    if (scaledW <= vw) {
-      minTx = maxTx = (vw - scaledW) / 2;
-    } else {
-      minTx = vw - scaledW;
-      maxTx = 0;
-    }
-
-    if (scaledH <= vh) {
-      minTy = maxTy = (vh - scaledH) / 2;
-    } else {
-      minTy = vh - scaledH;
-      maxTy = 0;
-    }
-
-    return {
-      tx: clamp(nextTx, minTx, maxTx),
-      ty: clamp(nextTy, minTy, maxTy),
-    };
-  }, []);
-
-  const worldFromScreen = useCallback((screenPt: Pt) => {
-    const s = scaleRef.current;
-    return {
-      x: (screenPt.x - txRef.current) / s,
-      y: (screenPt.y - tyRef.current) / s,
-    };
-  }, []);
-
-  const renderPageAtQuality = useCallback(
-    async (quality: number) => {
-      const page = pdfPageRef.current;
-      const canvas = canvasRef.current;
-      if (!page || !canvas) return;
-
-      const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-      const baseCssScale = baseCssScaleRef.current;
-      const renderScale = baseCssScale * quality * dpr;
-
-      setRendering(true);
-      try {
-        const viewport = page.getViewport({ scale: renderScale });
-        const ctx = canvas.getContext("2d")!;
-
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-
-        const cssW = worldWRef.current;
-        const cssH = worldHRef.current;
-        canvas.style.width = `${cssW}px`;
-        canvas.style.height = `${cssH}px`;
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        await page.render({ canvasContext: ctx, viewport }).promise;
-
-        lastQualityRef.current = quality;
-
-        const clamped = clampToBounds(txRef.current, tyRef.current, scaleRef.current);
-        txRef.current = clamped.tx;
-        tyRef.current = clamped.ty;
-        applyTransform();
-      } finally {
-        setRendering(false);
-      }
-    },
-    [applyTransform, clampToBounds]
-  );
-
-  const scheduleRefine = useCallback(() => {
-    clearRerenderTimer();
-
-    rerenderTimerRef.current = window.setTimeout(async () => {
-      rerenderTimerRef.current = null;
-
-      const desired = clamp(scaleRef.current, 1, 3);
-
-      const last = lastQualityRef.current;
-      const ratio = desired > last ? desired / last : last / desired;
-      if (ratio < RERENDER_THRESHOLD_RATIO) return;
-
-      try {
-        await renderPageAtQuality(desired);
-      } catch {
-        // ignore
-      }
-    }, RERENDER_DEBOUNCE_MS);
-  }, [clearRerenderTimer, renderPageAtQuality]);
-
-  const closeViewer = useCallback(() => {
-    stopInertia();
-    clearRerenderTimer();
-
-    setViewerSrc(null);
-    setRendering(false);
-
-    pointersRef.current.clear();
-    gestureRef.current.mode = "none";
-
-    scaleRef.current = 1;
-    txRef.current = 0;
-    tyRef.current = 0;
-
-    worldWRef.current = 0;
-    worldHRef.current = 0;
-    baseCssScaleRef.current = 1;
-    lastQualityRef.current = 1;
-
-    pdfDocRef.current = null;
-    pdfPageRef.current = null;
-
-    if (canvasRef.current) {
-      const ctx = canvasRef.current.getContext("2d");
-      if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    }
-  }, [clearRerenderTimer, stopInertia]);
-
-  const renderPdfFirstPage = useCallback(
-    async (src: string) => {
-      const pdfjsLib = pdfjsRef.current;
-      const canvas = canvasRef.current;
-      if (!pdfjsLib || !canvas) return;
-
-      setRendering(true);
-      try {
-        const loadingTask = pdfjsLib.getDocument(src);
-        const pdf = await loadingTask.promise;
-        pdfDocRef.current = pdf;
-
-        const page = await pdf.getPage(1);
-        pdfPageRef.current = page;
-
-        const vp = viewportRef.current;
-        const vpW = vp?.clientWidth ?? 360;
-
-        const raw = page.getViewport({ scale: 1 });
-        const baseCssScale = clamp((vpW - 24) / raw.width, 0.7, 1.6);
-        baseCssScaleRef.current = baseCssScale;
-
-        const cssVp = page.getViewport({ scale: baseCssScale });
-        worldWRef.current = cssVp.width;
-        worldHRef.current = cssVp.height;
-
-        lastQualityRef.current = 1;
-        await renderPageAtQuality(1);
-
-        if (vp) {
-          const vw = vp.clientWidth;
-          const vh = vp.clientHeight;
-
-          scaleRef.current = 1;
-
-          const scaledW = worldWRef.current;
-          const scaledH = worldHRef.current;
-
-          txRef.current = scaledW <= vw ? (vw - scaledW) / 2 : 0;
-          tyRef.current = scaledH <= vh ? (vh - scaledH) / 2 : 0;
-
-          applyTransform();
-        }
-      } catch {
-        showToast(NOT_AVAILABLE_MESSAGE);
-        closeViewer();
-      } finally {
-        setRendering(false);
-      }
-    },
-    [applyTransform, closeViewer, renderPageAtQuality, showToast]
-  );
-
-  useEffect(() => {
-    if (!viewerSrc) return;
-    requestAnimationFrame(() => {
-      void renderPdfFirstPage(viewerSrc);
-    });
-  }, [viewerSrc, renderPdfFirstPage]);
-
-  const openDocByIndex = useCallback(
-    async (idx: number) => {
-      if (tourId !== PDF_TOUR_ID) {
-        showToast(NOT_AVAILABLE_MESSAGE);
-        return;
-      }
-      if (!pdfjsRef.current) {
-        showToast("PDF viewer not ready yet. Please try again.");
-        return;
-      }
-
-      const filename = PDF_FILES[idx];
-      if (!filename) {
-        showToast(NOT_AVAILABLE_MESSAGE);
-        return;
-      }
-
-      setOpeningDocIdx(idx);
-      try {
-        const routeUrl = `/m/tours/${tourId}/pdf/${encodeURIComponent(filename)}`;
-        const head = await fetch(routeUrl, { method: "HEAD", cache: "no-store" });
-        if (!head.ok) {
-          showToast(NOT_AVAILABLE_MESSAGE);
-          return;
-        }
-
-        const filenameKey = String(filename).toLowerCase();
-        const match = docs.find(
-          (d) => normalizePath(d.storage_path).endsWith(`/${filenameKey}`) || normalizePath(d.storage_path).endsWith(filenameKey)
-        );
-        const title = (match?.title ?? "").trim() || titleFromFilename(filename);
-
-        stopInertia();
-        clearRerenderTimer();
-
-        setViewerTitle(title);
-        setViewerSrc(routeUrl);
-      } catch {
-        showToast(NOT_AVAILABLE_MESSAGE);
-      } finally {
-        setOpeningDocIdx(null);
-      }
-    },
-    [tourId, docs, stopInertia, clearRerenderTimer, showToast]
-  );
-
-  const openItinerary = useCallback(() => {
-    if (tourId === JAPAN_TOUR_ID) {
-      window.open(JAPAN_ITINERARY_URL, "_blank", "noopener,noreferrer");
-      return;
-    }
-
-    void openDocByIndex(0);
-  }, [tourId, openDocByIndex]);
-
-  const midpoint = (a: Pt, b: Pt): Pt => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
-  const distance = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
-
-  const startInertia = useCallback(() => {
-    const g = gestureRef.current;
-
-    stopInertia();
-    let lastT = performance.now();
-
-    const tick = (t: number) => {
-      const dt = Math.max(0.001, (t - lastT) / 1000);
-      lastT = t;
-
-      const speed = Math.hypot(g.vx, g.vy);
-      if (speed < INERTIA_STOP_SPEED) {
-        inertiaRafRef.current = null;
-        return;
-      }
-
-      const nextTx = txRef.current + g.vx * dt;
-      const nextTy = tyRef.current + g.vy * dt;
-
-      const clamped = clampToBounds(nextTx, nextTy, scaleRef.current);
-      txRef.current = clamped.tx;
-      tyRef.current = clamped.ty;
-      applyTransform();
-
-      g.vx *= INERTIA_FRICTION;
-      g.vy *= INERTIA_FRICTION;
-
-      inertiaRafRef.current = requestAnimationFrame(tick);
-    };
-
-    inertiaRafRef.current = requestAnimationFrame(tick);
-  }, [applyTransform, clampToBounds, stopInertia]);
-
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!viewerSrc) return;
-
-      stopInertia();
-      clearRerenderTimer();
-
-      const rect = getViewportRect();
-      if (!rect) return;
-
-      const p: Pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-      pointersRef.current.set(e.pointerId, p);
-
-      try {
-        (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-      } catch {}
-
-      const pts = Array.from(pointersRef.current.values());
-      const g = gestureRef.current;
-
-      if (pts.length === 1) {
-        g.mode = "pan";
-        g.startScale = scaleRef.current;
-        g.startTx = txRef.current;
-        g.startTy = tyRef.current;
-        g.lastMoveT = performance.now();
-        g.lastMid = pts[0];
-        g.vx = 0;
-        g.vy = 0;
-      } else if (pts.length === 2) {
-        g.mode = "pinch";
-        g.startScale = scaleRef.current;
-        g.startTx = txRef.current;
-        g.startTy = tyRef.current;
-
-        const mid = midpoint(pts[0], pts[1]);
-        g.startDist = Math.max(1, distance(pts[0], pts[1]));
-        g.anchorWorld = worldFromScreen(mid);
-
-        g.lastMoveT = performance.now();
-        g.lastMid = mid;
-        g.vx = 0;
-        g.vy = 0;
-      }
-
-      e.preventDefault();
-    },
-    [viewerSrc, stopInertia, clearRerenderTimer, getViewportRect, worldFromScreen]
-  );
-
-  const onPointerMove = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!viewerSrc) return;
-
-      const rect = getViewportRect();
-      if (!rect) return;
-
-      const p: Pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-      if (!pointersRef.current.has(e.pointerId)) return;
-      pointersRef.current.set(e.pointerId, p);
-
-      const pts = Array.from(pointersRef.current.values());
-      const g = gestureRef.current;
-      const now = performance.now();
-
-      if (pts.length === 1 && g.mode === "pan") {
-        const cur = pts[0];
-        const dx = cur.x - g.lastMid.x;
-        const dy = cur.y - g.lastMid.y;
-
-        const nextTx = txRef.current + dx;
-        const nextTy = tyRef.current + dy;
-
-        const clamped = clampToBounds(nextTx, nextTy, scaleRef.current);
-        txRef.current = clamped.tx;
-        tyRef.current = clamped.ty;
-
-        const dtMs = Math.max(1, now - g.lastMoveT);
-        g.vx = (dx * 1000) / dtMs;
-        g.vy = (dy * 1000) / dtMs;
-
-        g.lastMoveT = now;
-        g.lastMid = cur;
-
-        applyTransform();
-      } else if (pts.length === 2) {
-        if (g.mode !== "pinch") {
-          g.mode = "pinch";
-          g.startScale = scaleRef.current;
-          g.startTx = txRef.current;
-          g.startTy = tyRef.current;
-
-          const mid = midpoint(pts[0], pts[1]);
-          g.startDist = Math.max(1, distance(pts[0], pts[1]));
-          g.anchorWorld = worldFromScreen(mid);
-
-          g.lastMoveT = now;
-          g.lastMid = mid;
-          g.vx = 0;
-          g.vy = 0;
-        }
-
-        const mid = midpoint(pts[0], pts[1]);
-        const dist = Math.max(1, distance(pts[0], pts[1]));
-
-        const raw = g.startScale * (dist / g.startDist);
-        const nextScale = clamp(raw, MIN_SCALE, MAX_SCALE);
-
-        let nextTx = mid.x - nextScale * g.anchorWorld.x;
-        let nextTy = mid.y - nextScale * g.anchorWorld.y;
-
-        const clamped = clampToBounds(nextTx, nextTy, nextScale);
-        txRef.current = clamped.tx;
-        tyRef.current = clamped.ty;
-        scaleRef.current = nextScale;
-
-        const dx = mid.x - g.lastMid.x;
-        const dy = mid.y - g.lastMid.y;
-        const dtMs = Math.max(1, now - g.lastMoveT);
-        g.vx = (dx * 1000) / dtMs;
-        g.vy = (dy * 1000) / dtMs;
-
-        g.lastMoveT = now;
-        g.lastMid = mid;
-
-        applyTransform();
-      }
-
-      e.preventDefault();
-    },
-    [viewerSrc, getViewportRect, clampToBounds, applyTransform, worldFromScreen]
-  );
-
-  const endPointer = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!viewerSrc) return;
-
-      pointersRef.current.delete(e.pointerId);
-      try {
-        (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
-      } catch {}
-
-      const pts = Array.from(pointersRef.current.values());
-      const g = gestureRef.current;
-
-      if (pts.length === 0) {
-        const speed = Math.hypot(g.vx, g.vy);
-        if (speed >= INERTIA_STOP_SPEED) startInertia();
-
-        scheduleRefine();
-      } else if (pts.length === 1) {
-        g.mode = "pan";
-        g.lastMoveT = performance.now();
-        g.lastMid = pts[0];
-        g.vx = 0;
-        g.vy = 0;
-      }
-
-      e.preventDefault();
-    },
-    [viewerSrc, scheduleRefine, startInertia]
-  );
-
-  const zoomBy = useCallback(
-    (factor: number) => {
-      const vp = viewportRef.current;
-      if (!vp) return;
-
-      stopInertia();
-      clearRerenderTimer();
-
-      const mid: Pt = { x: vp.clientWidth / 2, y: vp.clientHeight / 2 };
-      const anchor = worldFromScreen(mid);
-
-      const nextScale = clamp(scaleRef.current * factor, MIN_SCALE, MAX_SCALE);
-      let nextTx = mid.x - nextScale * anchor.x;
-      let nextTy = mid.y - nextScale * anchor.y;
-
-      const clamped = clampToBounds(nextTx, nextTy, nextScale);
-      txRef.current = clamped.tx;
-      tyRef.current = clamped.ty;
-      scaleRef.current = nextScale;
-
-      applyTransform();
-      scheduleRefine();
-    },
-    [applyTransform, clampToBounds, clearRerenderTimer, stopInertia, scheduleRefine, worldFromScreen]
-  );
-
-  const zoomOut = useCallback(() => zoomBy(1 / 1.6), [zoomBy]);
-  const zoomIn = useCallback(() => zoomBy(1.6), [zoomBy]);
-
-  const baseBtn =
-    "rounded-xl px-2 text-sm font-semibold flex items-center justify-center text-center leading-tight";
-  const rowColors = [
-    "bg-blue-100 text-gray-900",
-    "bg-blue-200 text-gray-900",
-    "bg-blue-300 text-gray-900",
-    "bg-blue-400 text-white",
-    "bg-blue-500 text-white",
-    "bg-blue-600 text-white",
-  ];
-
-  const goMatchplay = useCallback(
-    (path: string) => {
-      if (!matchplayIsActive) {
-        showToast(MATCHPLAY_INACTIVE_MESSAGE);
-        return;
-      }
-      router.push(path);
-    },
-    [matchplayIsActive, router, showToast]
-  );
-
-  const goProtected = useCallback(
-    (buttonKey: string, path: string) => {
-      if (resultsHidden) {
-        showDenied(buttonKey);
-        return;
-      }
-      router.push(path);
-    },
-    [resultsHidden, router, showDenied]
-  );
-
-  const goProtectedMatchplay = useCallback(
-    (buttonKey: string, path: string) => {
-      if (resultsHidden) {
-        showDenied(buttonKey);
-        return;
-      }
-      if (!matchplayIsActive) {
-        showToast(MATCHPLAY_INACTIVE_MESSAGE);
-        return;
-      }
-      router.push(path);
-    },
-    [resultsHidden, matchplayIsActive, router, showDenied, showToast]
-  );
-
-  return (
-    <div className="min-h-dvh bg-black text-white">
-      <div className="px-4 pt-4 pb-3 max-w-md mx-auto">
-        {loading ? (
-          <div className="h-6 w-48 bg-white/30 rounded" />
-        ) : (
-          <>
-            <div className="text-2xl font-extrabold">{tour?.name || "Tour"}</div>
-            <div className="text-sm text-white/80">{dateLabel || "Dates TBD"}</div>
-          </>
-        )}
-      </div>
-
-      <div className="relative h-[26vh] bg-black">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={heroImage} alt="" className="h-full w-full object-cover" />
-      </div>
-
-      <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
-        {requiresJapanAccess ? (
-          <div className="rounded-xl border border-white/20 bg-white/10 px-3 py-3">
-            <label className="block text-xs font-semibold uppercase tracking-wide text-white/70" htmlFor="tour-access-code">
-              Access code
-            </label>
-            <input
-              id="tour-access-code"
-              type="password"
-              inputMode="numeric"
-              autoComplete="off"
-              value={accessCode}
-              onChange={(e) => setAccessCode(e.target.value)}
-              placeholder="Enter access code"
-              className="mt-2 w-full rounded-lg border border-white/20 bg-white px-3 py-2 text-base font-semibold text-gray-900 outline-none focus:ring-2 focus:ring-blue-300"
-            />
-          </div>
-        ) : null}
-
-        <div className="grid grid-cols-3 gap-2">
-          <TileButton
-            className={`${baseBtn} ${rowColors[0]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}
-            blockedKey="daily-tee-times"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>
-              Daily
-              <br />
-              Tee times
-            </>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[0]}`}
-            onClick={() => goProtected("daily-results", `/m/tours/${tourId}/rounds?mode=results`)}
-            blocked={resultsHidden}
-            blockedKey="daily-results"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>
-              Daily
-              <br />
-              Results
-            </>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[0]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}
-            blockedKey="score-entry"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>
-              Score
-              <br />
-              Entry
-            </>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[1]}`}
-            onClick={() => goProtected("leaderboards", `/m/tours/${tourId}/leaderboards`)}
-            blocked={resultsHidden}
-            blockedKey="leaderboards"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>Leaderboards</>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[1]}`}
-            onClick={() => goProtected("competitions", `/m/tours/${tourId}/competitions`)}
-            blocked={resultsHidden}
-            blockedKey="competitions"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>Competitions</>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[1]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/stats`)}
-            blockedKey="stats"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>Stats</>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[2]}`}
-            onClick={() => goMatchplay(`/m/tours/${tourId}/matches/format`)}
-            blockedKey="matchplay-format"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>
-              Matchplay
-              <br />
-              Format
-            </>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[2]}`}
-            onClick={() => goProtectedMatchplay("matchplay-results", `/m/tours/${tourId}/matches/results`)}
-            blocked={resultsHidden}
-            blockedKey="matchplay-results"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>
-              Matchplay
-              <br />
-              Results
-            </>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[2]}`}
-            onClick={() => goProtectedMatchplay("matchplay-leaderboard", `/m/tours/${tourId}/matches/leaderboard`)}
-            blocked={resultsHidden}
-            blockedKey="matchplay-leaderboard"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>
-              Matchplay
-              <br />
-              Leaderboard
-            </>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[3]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/details`)}
-            blockedKey="tour-details"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>
-              Tour
-              <br />
-              Details
-            </>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[3]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}
-            blockedKey="tour-admin"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>
-              Tour
-              <br />
-              Admin
-            </>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[3]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}
-            blockedKey="rehandicapping"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>Rehandicapping</>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`}
-            onClick={openItinerary}
-            blockedKey="itinerary"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>{openingDocIdx === 0 ? "Opening…" : "Itinerary"}</>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(1)}
-            blockedKey="accommodation"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>{openingDocIdx === 1 ? "Opening…" : "Accommodation"}</>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(2)}
-            blockedKey="dining"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>{openingDocIdx === 2 ? "Opening…" : "Dining"}</>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(3)}
-            blockedKey="player-profiles"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>
-              {openingDocIdx === 3 ? (
-                "Opening…"
-              ) : (
-                <>
-                  Player
-                  <br />
-                  Profiles
-                </>
-              )}
-            </>
-          </TileButton>
-
-          <TileButton
-            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(4)}
-            blockedKey="comps-etc"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>{openingDocIdx === 4 ? "Opening…" : "Comps etc"}</>
-          </TileButton>
-
-          <TileButton
-            className="rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
-            onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
-            blockedKey="app-user-guide"
-            accessAllowed={japanAccessAllowed}
-            deniedKey={deniedButtonKey}
-            showDenied={showDenied}
-          >
-            <>
-              App
-              <br />
-              User Guide
-            </>
-          </TileButton>
-        </div>
-
-        <div className="pt-6 text-center">
-          <div className="text-sm font-semibold text-gray-300">Built by GAC Ventures</div>
-          <div className="text-xs italic tracking-wide text-gray-400">Golf · Analytics · Competition</div>
-        </div>
-      </div>
-
-      {viewerSrc && (
-        <div className="fixed inset-0 z-50 bg-black">
-          <div className="flex items-center justify-between px-4 py-3 bg-black/90">
-            <div className="text-white text-sm font-semibold truncate">{viewerTitle}</div>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={zoomOut} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20" disabled={rendering}>
-                −
-              </button>
-              <button type="button" onClick={zoomIn} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20" disabled={rendering}>
-                +
-              </button>
-              <button type="button" onClick={closeViewer} className="text-white text-sm px-3 py-2 rounded-lg border border-white/20">
-                Close
-              </button>
-            </div>
-          </div>
-
-          <div
-            ref={viewportRef}
-            className="relative w-full h-[calc(100dvh-52px)] bg-white overflow-hidden"
-            style={{ touchAction: "none" }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={endPointer}
-            onPointerCancel={endPointer}
-          >
-            <div
-              ref={contentRef}
-              style={{
-                transformOrigin: "0 0",
-                willChange: "transform",
-              }}
-            >
-              <canvas ref={canvasRef} className="block" />
-            </div>
-
-            {rendering ? <div className="absolute right-3 bottom-3 bg-black/70 text-white text-xs px-2 py-1 rounded">Rendering…</div> : null}
-          </div>
-        </div>
-      )}
-
-      {toastMsg ? (
-        <div className="fixed left-0 right-0 bottom-5 z-[60] flex items-center justify-center px-4">
-          <div className="max-w-md w-full bg-white text-gray-900 border border-black/10 rounded-xl px-4 py-3 shadow-lg text-sm font-semibold">
-            {toastMsg}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
+Close
