@@ -61,7 +61,6 @@ const PDF_FILES = ["itinerary.pdf", "accommodation.pdf", "dining.pdf", "profiles
 
 const MATCHPLAY_INACTIVE_MESSAGE = "Matchplay events not active on this tour";
 const ACCESS_DENIED_MESSAGE = "access denied";
-const JAPAN_ACCESS_CODE = "0612";
 
 // Interaction
 const MIN_SCALE = 0.6;
@@ -120,7 +119,6 @@ type TileButtonProps = {
   children: React.ReactNode;
   blocked?: boolean;
   blockedKey?: string;
-  accessAllowed?: boolean;
   deniedKey: string | null;
   showDenied: (key: string) => void;
 };
@@ -131,11 +129,10 @@ function TileButton({
   children,
   blocked = false,
   blockedKey,
-  accessAllowed = true,
   deniedKey,
   showDenied,
 }: TileButtonProps) {
-  const isDeniedShowing = (blocked || !accessAllowed) && blockedKey != null && deniedKey === blockedKey;
+  const isDeniedShowing = blocked && blockedKey != null && deniedKey === blockedKey;
 
   return (
     <div className="relative h-20 w-full">
@@ -143,10 +140,6 @@ function TileButton({
         type="button"
         className={`${className} h-full w-full`}
         onClick={() => {
-          if (blockedKey && !accessAllowed) {
-            showDenied(blockedKey);
-            return;
-          }
           if (blocked && blockedKey) {
             showDenied(blockedKey);
             return;
@@ -185,8 +178,6 @@ export default function MobileTourLandingPage() {
   // access denied overlay
   const [deniedButtonKey, setDeniedButtonKey] = useState<string | null>(null);
   const deniedTimerRef = useRef<number | null>(null);
-
-  const [accessCode, setAccessCode] = useState("");
 
   const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
@@ -356,8 +347,6 @@ export default function MobileTourLandingPage() {
 
   const matchplayIsActive = tour?.matchplay_active === false ? false : true;
   const resultsHidden = tour?.hide_results === true;
-  const requiresJapanAccess = tourId === JAPAN_TOUR_ID;
-  const japanAccessAllowed = !requiresJapanAccess || accessCode.trim() === JAPAN_ACCESS_CODE;
 
   const stopInertia = useCallback(() => {
     if (inertiaRafRef.current != null) {
@@ -925,30 +914,10 @@ export default function MobileTourLandingPage() {
       </div>
 
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
-        {requiresJapanAccess ? (
-          <div className="rounded-xl border border-white/20 bg-white/10 px-3 py-3">
-            <label className="block text-xs font-semibold uppercase tracking-wide text-white/70" htmlFor="tour-access-code">
-              Access code
-            </label>
-            <input
-              id="tour-access-code"
-              type="password"
-              inputMode="numeric"
-              autoComplete="off"
-              value={accessCode}
-              onChange={(e) => setAccessCode(e.target.value)}
-              placeholder="Enter access code"
-              className="mt-2 w-full rounded-lg border border-white/20 bg-white px-3 py-2 text-base font-semibold text-gray-900 outline-none focus:ring-2 focus:ring-blue-300"
-            />
-          </div>
-        ) : null}
-
         <div className="grid grid-cols-3 gap-2">
           <TileButton
             className={`${baseBtn} ${rowColors[0]}`}
             onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=tee-times`)}
-            blockedKey="daily-tee-times"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -964,7 +933,6 @@ export default function MobileTourLandingPage() {
             onClick={() => goProtected("daily-results", `/m/tours/${tourId}/rounds?mode=results`)}
             blocked={resultsHidden}
             blockedKey="daily-results"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -978,8 +946,6 @@ export default function MobileTourLandingPage() {
           <TileButton
             className={`${baseBtn} ${rowColors[0]}`}
             onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}
-            blockedKey="score-entry"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -995,7 +961,6 @@ export default function MobileTourLandingPage() {
             onClick={() => goProtected("leaderboards", `/m/tours/${tourId}/leaderboards`)}
             blocked={resultsHidden}
             blockedKey="leaderboards"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1007,7 +972,6 @@ export default function MobileTourLandingPage() {
             onClick={() => goProtected("competitions", `/m/tours/${tourId}/competitions`)}
             blocked={resultsHidden}
             blockedKey="competitions"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1017,8 +981,6 @@ export default function MobileTourLandingPage() {
           <TileButton
             className={`${baseBtn} ${rowColors[1]}`}
             onClick={() => router.push(`/m/tours/${tourId}/stats`)}
-            blockedKey="stats"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1028,8 +990,6 @@ export default function MobileTourLandingPage() {
           <TileButton
             className={`${baseBtn} ${rowColors[2]}`}
             onClick={() => goMatchplay(`/m/tours/${tourId}/matches/format`)}
-            blockedKey="matchplay-format"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1045,7 +1005,6 @@ export default function MobileTourLandingPage() {
             onClick={() => goProtectedMatchplay("matchplay-results", `/m/tours/${tourId}/matches/results`)}
             blocked={resultsHidden}
             blockedKey="matchplay-results"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1061,7 +1020,6 @@ export default function MobileTourLandingPage() {
             onClick={() => goProtectedMatchplay("matchplay-leaderboard", `/m/tours/${tourId}/matches/leaderboard`)}
             blocked={resultsHidden}
             blockedKey="matchplay-leaderboard"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1075,8 +1033,6 @@ export default function MobileTourLandingPage() {
           <TileButton
             className={`${baseBtn} ${rowColors[3]}`}
             onClick={() => router.push(`/m/tours/${tourId}/details`)}
-            blockedKey="tour-details"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1090,8 +1046,6 @@ export default function MobileTourLandingPage() {
           <TileButton
             className={`${baseBtn} ${rowColors[3]}`}
             onClick={() => router.push(`/m/tours/${tourId}/more/admin`)}
-            blockedKey="tour-admin"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1105,8 +1059,6 @@ export default function MobileTourLandingPage() {
           <TileButton
             className={`${baseBtn} ${rowColors[3]}`}
             onClick={() => router.push(`/m/tours/${tourId}/more/rehandicapping`)}
-            blockedKey="rehandicapping"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1116,8 +1068,6 @@ export default function MobileTourLandingPage() {
           <TileButton
             className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 0 ? "opacity-70" : ""}`}
             onClick={openItinerary}
-            blockedKey="itinerary"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1127,8 +1077,6 @@ export default function MobileTourLandingPage() {
           <TileButton
             className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 1 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(1)}
-            blockedKey="accommodation"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1138,8 +1086,6 @@ export default function MobileTourLandingPage() {
           <TileButton
             className={`${baseBtn} ${rowColors[4]} ${openingDocIdx === 2 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(2)}
-            blockedKey="dining"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1149,8 +1095,6 @@ export default function MobileTourLandingPage() {
           <TileButton
             className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 3 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(3)}
-            blockedKey="player-profiles"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1170,8 +1114,6 @@ export default function MobileTourLandingPage() {
           <TileButton
             className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`}
             onClick={() => openDocByIndex(4)}
-            blockedKey="comps-etc"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
@@ -1181,8 +1123,6 @@ export default function MobileTourLandingPage() {
           <TileButton
             className="rounded-xl bg-gray-200 text-gray-800 text-sm font-semibold flex items-center justify-center text-center"
             onClick={() => router.push(`/m/tours/${tourId}/more/user-guide`)}
-            blockedKey="app-user-guide"
-            accessAllowed={japanAccessAllowed}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
