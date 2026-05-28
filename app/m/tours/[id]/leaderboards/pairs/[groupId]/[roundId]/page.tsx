@@ -56,6 +56,34 @@ type Shade = "ace" | "eagle" | "birdie" | "par" | "bogey" | "dbogey" | "none";
 const SWING_IN_SPRING_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
 const SWING_IN_SPRING_SPECIAL_PAIRS_ROUND_NO = 3;
 
+const SCOTLAND_TOUR_2026_ID = "207a93c7-70fb-4969-9ef1-6ad844e556c5";
+const SCOTLAND_S_MCCURDY_PLAYER_ID = "10ec8991-8795-437e-87e9-ad06b115b0a3";
+
+const SCOTLAND_SCORE_SUBSTITUTE_BY_ROUND_NO: Record<number, string> = {
+  1: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
+  6: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
+  11: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
+  2: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
+  7: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
+  12: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
+  3: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
+  8: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
+  13: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
+  4: "64d4f7ff-9ce4-4c81-b5f4-9eab02248b97", // A Lennon
+  9: "64d4f7ff-9ce4-4c81-b5f4-9eab02248b97", // A Lennon
+  5: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
+  10: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
+};
+
+function effectiveScorePlayerId(params: { tourId: string; roundNo: number | null | undefined; playerId: string }) {
+  const { tourId, roundNo, playerId } = params;
+  if (tourId !== SCOTLAND_TOUR_2026_ID) return playerId;
+  if (playerId !== SCOTLAND_S_MCCURDY_PLAYER_ID) return playerId;
+  const rn = Number(roundNo);
+  if (!Number.isFinite(rn)) return playerId;
+  return SCOTLAND_SCORE_SUBSTITUTE_BY_ROUND_NO[rn] ?? playerId;
+}
+
 /* ----------------------------------
    Colour helpers (same as individual)
 ----------------------------------- */
@@ -169,6 +197,7 @@ export default function MobilePairsRoundDetailPage() {
 
   const [round, setRound] = useState<RoundRow | null>(null);
   const [members, setMembers] = useState<PlayerLite[]>([]);
+  const [playersById, setPlayersById] = useState<Record<string, PlayerLite>>({});
   const [pars, setPars] = useState<ParRow[]>([]);
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
@@ -227,20 +256,44 @@ export default function MobilePairsRoundDetailPage() {
 
         const p1 = players[0];
         const p2 = players[1];
+        const roundNo = Number((rData as any)?.round_no);
+        const scoringPlayerIds = Array.from(
+          new Set(
+            [p1.id, p2.id].map((playerId) =>
+              effectiveScorePlayerId({
+                tourId,
+                roundNo,
+                playerId,
+              })
+            ).concat([p1.id, p2.id])
+          )
+        );
 
         const { data: rpData, error: rpErr } = await supabase
           .from("round_players")
           .select("round_id,player_id,playing,playing_handicap")
           .eq("round_id", roundId)
-          .in("player_id", [p1.id, p2.id]);
+          .in("player_id", scoringPlayerIds);
         if (rpErr) throw rpErr;
 
         const { data: sData, error: sErr } = await supabase
           .from("scores")
           .select("round_id,player_id,hole_number,strokes,pickup")
           .eq("round_id", roundId)
-          .in("player_id", [p1.id, p2.id]);
+          .in("player_id", scoringPlayerIds);
         if (sErr) throw sErr;
+
+        const { data: pData, error: pErr } = await supabase.from("players").select("id,name,gender").in("id", scoringPlayerIds);
+        if (pErr) throw pErr;
+        const playerMap: Record<string, PlayerLite> = {};
+        for (const p of pData ?? []) {
+          playerMap[String((p as any).id)] = {
+            id: String((p as any).id),
+            name: String((p as any).name ?? "(player)"),
+            gender: (p as any).gender ?? null,
+          };
+        }
+        for (const p of players) playerMap[p.id] = playerMap[p.id] ?? p;
 
         const ps = await loadParsForCourse(courseId);
 
@@ -248,6 +301,7 @@ export default function MobilePairsRoundDetailPage() {
 
         setRound(rData as any);
         setMembers(players.slice(0, 2));
+        setPlayersById(playerMap);
         setRoundPlayers((rpData ?? []) as any);
         setScores((sData ?? []) as any);
         setPars(ps);
@@ -297,15 +351,17 @@ export default function MobilePairsRoundDetailPage() {
   }, [scores]);
 
   function getPlayerHoleCell(player: PlayerLite, hole: number) {
-    const tee = normalizeTee(player.gender);
+    const effectivePlayerId = effectiveScorePlayerId({ tourId, roundNo: round?.round_no, playerId: player.id });
+    const effectivePlayer = playersById[effectivePlayerId] ?? player;
+    const tee = normalizeTee(effectivePlayer.gender);
     const parsForTee = parByTeeHole.get(tee);
     const pr = parsForTee?.get(hole) ?? { par: 0, si: 0 };
 
-    const sc = scoreByPlayerHole.get(`${player.id}|${hole}`);
+    const sc = scoreByPlayerHole.get(`${effectivePlayerId}|${hole}`);
     const pickup = sc?.pickup === true;
     const gross = Number.isFinite(Number(sc?.strokes)) ? Number(sc?.strokes) : null;
     const raw = rawScoreFor(gross, pickup);
-    const hcp = hcpByPlayer.get(player.id) ?? 0;
+    const hcp = hcpByPlayer.get(effectivePlayerId) ?? 0;
 
     const net =
       raw && pr.par > 0 && pr.si > 0
@@ -332,22 +388,27 @@ export default function MobilePairsRoundDetailPage() {
   const rows = useMemo(() => {
     if (!p1 || !p2) return [];
 
-    const p1tee = normalizeTee(p1.gender);
-    const p2tee = normalizeTee(p2.gender);
+    const p1EffectiveId = effectiveScorePlayerId({ tourId, roundNo: round?.round_no, playerId: p1.id });
+    const p2EffectiveId = effectiveScorePlayerId({ tourId, roundNo: round?.round_no, playerId: p2.id });
+    const p1Effective = playersById[p1EffectiveId] ?? p1;
+    const p2Effective = playersById[p2EffectiveId] ?? p2;
+
+    const p1tee = normalizeTee(p1Effective.gender);
+    const p2tee = normalizeTee(p2Effective.gender);
 
     const p1pars = parByTeeHole.get(p1tee);
     const p2pars = parByTeeHole.get(p2tee);
 
-    const p1hcp = hcpByPlayer.get(p1.id) ?? 0;
-    const p2hcp = hcpByPlayer.get(p2.id) ?? 0;
+    const p1hcp = hcpByPlayer.get(p1EffectiveId) ?? 0;
+    const p2hcp = hcpByPlayer.get(p2EffectiveId) ?? 0;
 
     const out: any[] = [];
     for (let hole = 1; hole <= 18; hole++) {
       const p1pr = p1pars?.get(hole) ?? { par: 0, si: 0 };
       const p2pr = p2pars?.get(hole) ?? { par: 0, si: 0 };
 
-      const s1 = scoreByPlayerHole.get(`${p1.id}|${hole}`);
-      const s2 = scoreByPlayerHole.get(`${p2.id}|${hole}`);
+      const s1 = scoreByPlayerHole.get(`${p1EffectiveId}|${hole}`);
+      const s2 = scoreByPlayerHole.get(`${p2EffectiveId}|${hole}`);
 
       const p1pickup = s1?.pickup === true;
       const p2pickup = s2?.pickup === true;
@@ -409,7 +470,7 @@ export default function MobilePairsRoundDetailPage() {
       });
     }
     return out;
-  }, [p1, p2, parByTeeHole, hcpByPlayer, scoreByPlayerHole]);
+  }, [p1, p2, parByTeeHole, hcpByPlayer, scoreByPlayerHole, playersById, tourId, round?.round_no]);
 
   const specialRows = useMemo(() => {
     if (!p1 || !p2) return [];
@@ -442,7 +503,7 @@ export default function MobilePairsRoundDetailPage() {
     }
 
     return out;
-  }, [p1, p2, parByTeeHole, hcpByPlayer, scoreByPlayerHole]);
+  }, [p1, p2, parByTeeHole, hcpByPlayer, scoreByPlayerHole, playersById, tourId, round?.round_no]);
 
   const totals = useMemo(() => {
     const sum = (arr: typeof rows) => {

@@ -104,7 +104,7 @@ const SWING_IN_SPRING_REQUIRED_ROUND_NOS = [3, 7];
 const SWING_IN_SPRING_PAIRS_NINE_HOLE_ROUND_NO = 3;
 
 // Scotland Tour 2026: S McCurdy is no longer playing.
-// For leaderboard scoring only, use the nominated substitute player's official score rows by round.
+// For leaderboard scoring only, use the nominated substitute player's official score rows, handicap, and tee by round.
 const SCOTLAND_TOUR_2026_ID = "207a93c7-70fb-4969-9ef1-6ad844e556c5";
 const SCOTLAND_S_MCCURDY_PLAYER_ID = "10ec8991-8795-437e-87e9-ad06b115b0a3";
 
@@ -817,7 +817,13 @@ export default function MobileLeaderboardsPage() {
       const perRound: Record<string, number> = {};
 
       for (const r of sortedRounds) {
-        const rp = rpByRoundPlayer.get(`${r.id}|${p.id}`);
+        const effectivePlayerId = effectiveScorePlayerIdForLeaderboard({
+          tourId,
+          roundNo: r.round_no,
+          playerId: p.id,
+        });
+
+        const rp = rpByRoundPlayer.get(`${r.id}|${effectivePlayerId}`);
         if (!rp?.playing) {
           perRound[r.id] = 0;
           continue;
@@ -829,7 +835,8 @@ export default function MobileLeaderboardsPage() {
           continue;
         }
 
-        const tee: Tee = normalizeTee(p.gender);
+        const effectivePlayer = playerById.get(effectivePlayerId) ?? p;
+        const tee: Tee = normalizeTee(effectivePlayer.gender);
         const parsMap = parsByCourseTeeHole.get(courseId)?.get(tee);
         if (!parsMap) {
           perRound[r.id] = 0;
@@ -843,12 +850,7 @@ export default function MobileLeaderboardsPage() {
           const pr = parsMap.get(h);
           if (!pr) continue;
 
-          const scorePlayerId = effectiveScorePlayerIdForLeaderboard({
-            tourId,
-            roundNo: r.round_no,
-            playerId: p.id,
-          });
-          const sc = scoreByRoundPlayerHole.get(`${r.id}|${scorePlayerId}|${h}`);
+          const sc = scoreByRoundPlayerHole.get(`${r.id}|${effectivePlayerId}|${h}`);
           if (!sc) continue;
 
           const raw = normalizeRawScore(sc.strokes, sc.pickup);
@@ -899,6 +901,7 @@ export default function MobileLeaderboardsPage() {
     parsByCourseTeeHole,
     rpByRoundPlayer,
     scoreByRoundPlayerHole,
+    playerById,
     individualRule,
     finalRoundId,
     isSwingInSpringTour,
@@ -928,21 +931,22 @@ export default function MobileLeaderboardsPage() {
     }) {
       const { round, playerId, holeNumber } = params;
 
-      const rp = rpByRoundPlayer.get(`${round.id}|${playerId}`);
+      const effectivePlayerId = effectiveScorePlayerIdForLeaderboard({
+        tourId,
+        roundNo: round.round_no,
+        playerId,
+      });
+
+      const rp = rpByRoundPlayer.get(`${round.id}|${effectivePlayerId}`);
       if (!rp?.playing) return 0;
 
       const courseId = round.course_id;
       if (!courseId) return 0;
 
-      const scorePlayerId = effectiveScorePlayerIdForLeaderboard({
-        tourId,
-        roundNo: round.round_no,
-        playerId,
-      });
-      const sc = scoreByRoundPlayerHole.get(`${round.id}|${scorePlayerId}|${holeNumber}`);
+      const sc = scoreByRoundPlayerHole.get(`${round.id}|${effectivePlayerId}|${holeNumber}`);
       if (!sc) return 0;
 
-      const pl = playerById.get(playerId);
+      const pl = playerById.get(effectivePlayerId);
       const tee: Tee = normalizeTee(pl?.gender);
 
       const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(holeNumber);
@@ -1088,18 +1092,19 @@ export default function MobileLeaderboardsPage() {
           let zeroCount = 0;
 
           for (const pid of memberIds) {
-            const rp = rpByRoundPlayer.get(`${r.id}|${pid}`);
-            if (!rp?.playing) continue;
-
-            const scorePlayerId = effectiveScorePlayerIdForLeaderboard({
+            const effectivePlayerId = effectiveScorePlayerIdForLeaderboard({
               tourId,
               roundNo: r.round_no,
               playerId: pid,
             });
-            const sc = scoreByRoundPlayerHole.get(`${r.id}|${scorePlayerId}|${h}`);
+
+            const rp = rpByRoundPlayer.get(`${r.id}|${effectivePlayerId}`);
+            if (!rp?.playing) continue;
+
+            const sc = scoreByRoundPlayerHole.get(`${r.id}|${effectivePlayerId}|${h}`);
             if (!sc) continue;
 
-            const pl = playerById.get(pid);
+            const pl = playerById.get(effectivePlayerId);
             const tee: Tee = normalizeTee(pl?.gender);
 
             const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(h);
