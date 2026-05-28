@@ -43,18 +43,21 @@ const SCOTLAND_S_MCCURDY_PLAYER_ID = "10ec8991-8795-437e-87e9-ad06b115b0a3";
 
 const SCOTLAND_SCORE_SUBSTITUTE_BY_ROUND_NO: Record<number, string> = {
   1: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
-  6: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
-  11: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
+  5: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
+  9: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
+  13: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
+
   2: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
-  7: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
-  12: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
+  6: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
+  10: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
+
   3: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
-  8: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
-  13: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
-  4: "64d4f7ff-9ce4-4c81-b5f4-9eab02248b97", // A Lennon
-  9: "64d4f7ff-9ce4-4c81-b5f4-9eab02248b97", // A Lennon
-  5: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
-  10: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
+  7: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
+  11: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
+
+  4: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
+  8: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
+  12: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
 };
 
 function effectiveScorePlayerId(params: { tourId: string; roundNo: number | null | undefined; playerId: string }) {
