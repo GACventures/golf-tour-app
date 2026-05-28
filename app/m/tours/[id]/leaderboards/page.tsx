@@ -1073,7 +1073,7 @@ export default function MobileLeaderboardsPage() {
 
           let holeSum = 0;
           for (const pts of selected) holeSum += pts;
-          holeSum -= zeroCount * 0.5;
+          holeSum -= zeroCount * 1.0;
 
           roundSum += holeSum;
         }
