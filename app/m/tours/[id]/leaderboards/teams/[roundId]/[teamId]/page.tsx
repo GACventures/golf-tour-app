@@ -18,7 +18,6 @@ type Player = {
 type RoundRow = {
   id: string;
   course_id: string | null;
-  round_no: number | null;
 };
 
 type RoundPlayer = {
@@ -37,37 +36,6 @@ type ScoreRow = {
 type TeamRule = {
   bestY: number;
 };
-
-const SCOTLAND_TOUR_2026_ID = "207a93c7-70fb-4969-9ef1-6ad844e556c5";
-const SCOTLAND_S_MCCURDY_PLAYER_ID = "10ec8991-8795-437e-87e9-ad06b115b0a3";
-
-const SCOTLAND_SCORE_SUBSTITUTE_BY_ROUND_NO: Record<number, string> = {
-  1: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
-  5: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
-  9: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
-  13: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
-
-  2: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
-  6: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
-  10: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
-
-  3: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
-  7: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
-  11: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
-
-  4: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
-  8: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
-  12: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
-};
-
-function effectiveScorePlayerId(params: { tourId: string; roundNo: number | null | undefined; playerId: string }) {
-  const { tourId, roundNo, playerId } = params;
-  if (tourId !== SCOTLAND_TOUR_2026_ID) return playerId;
-  if (playerId !== SCOTLAND_S_MCCURDY_PLAYER_ID) return playerId;
-  const rn = Number(roundNo);
-  if (!Number.isFinite(rn)) return playerId;
-  return SCOTLAND_SCORE_SUBSTITUTE_BY_ROUND_NO[rn] ?? playerId;
-}
 
 /* ---------------- Helpers ---------------- */
 
@@ -154,7 +122,6 @@ export default function TeamRoundDetailPage() {
 
   const [teamName, setTeamName] = useState<string>("Team");
   const [players, setPlayers] = useState<Player[]>([]);
-  const [playersById, setPlayersById] = useState<Map<string, Player>>(new Map());
   const [round, setRound] = useState<RoundRow | null>(null);
   const [roundPlayers, setRoundPlayers] = useState<Map<string, RoundPlayer>>(new Map());
   const [scores, setScores] = useState<ScoreRow[]>([]);
@@ -194,41 +161,13 @@ export default function TeamRoundDetailPage() {
 
         const { data: rRow, error: rErr } = await supabase
           .from("rounds")
-          .select("id,course_id,round_no")
+          .select("id,course_id")
           .eq("id", roundId)
           .single();
         if (rErr) throw rErr;
         const rr = rRow as RoundRow;
 
-        const displayPlayerIds = ps.map((p) => p.id);
-        const playerIds = Array.from(
-          new Set(
-            displayPlayerIds
-              .map((playerId) =>
-                effectiveScorePlayerId({
-                  tourId,
-                  roundNo: rr.round_no,
-                  playerId,
-                })
-              )
-              .concat(displayPlayerIds)
-          )
-        );
-
-        const playerMap = new Map<string, Player>();
-        for (const p of ps) playerMap.set(p.id, p);
-        if (playerIds.length > 0) {
-          const { data: pRows, error: pErr } = await supabase.from("players").select("id,name,gender").in("id", playerIds);
-          if (pErr) throw pErr;
-          for (const p of pRows ?? []) {
-            const row = p as any;
-            playerMap.set(String(row.id), {
-              id: String(row.id),
-              name: safeName(row.name, "(unnamed)"),
-              gender: row.gender ? normalizeTee(row.gender) : null,
-            });
-          }
-        }
+        const playerIds = ps.map((p) => p.id);
 
         let rpMap = new Map<string, RoundPlayer>();
         if (playerIds.length > 0) {
@@ -305,7 +244,6 @@ export default function TeamRoundDetailPage() {
         const nm = String((teamRow as any)?.name ?? "").trim();
         setTeamName(nm || "Team");
         setPlayers(ps);
-        setPlayersById(playerMap);
         setRound(rr);
         setRoundPlayers(rpMap);
         setScores(scRows);
@@ -342,14 +280,11 @@ export default function TeamRoundDetailPage() {
     if (!round?.course_id) return m;
 
     for (const p of players) {
-      const effectivePlayerId = effectiveScorePlayerId({ tourId, roundNo: round.round_no, playerId: p.id });
-      const effectivePlayer = playersById.get(effectivePlayerId) ?? p;
-
-      const tee: Tee = effectivePlayer.gender ? normalizeTee(effectivePlayer.gender) : "M";
+      const tee: Tee = p.gender ? normalizeTee(p.gender) : "M";
       const pars = parsByTeeHole.get(tee) || parsByTeeHole.get("M") || parsByTeeHole.get("F") || null;
       if (!pars) continue;
 
-      const rp = roundPlayers.get(effectivePlayerId);
+      const rp = roundPlayers.get(p.id);
       if (!rp?.playing) continue;
 
       const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
@@ -358,7 +293,7 @@ export default function TeamRoundDetailPage() {
         const pr = pars.get(h);
         if (!pr) continue;
 
-        const sc = scoreByPlayerHole.get(`${effectivePlayerId}|${h}`);
+        const sc = scoreByPlayerHole.get(`${p.id}|${h}`);
         if (!sc) continue;
 
         const raw = normalizeRawScore(sc.strokes, sc.pickup);
@@ -374,7 +309,7 @@ export default function TeamRoundDetailPage() {
     }
 
     return m;
-  }, [players, playersById, round, roundPlayers, parsByTeeHole, scoreByPlayerHole, tourId]);
+  }, [players, round, roundPlayers, parsByTeeHole, scoreByPlayerHole]);
 
   const computed = useMemo(() => {
     const N = clampInt(teamRule.bestY, 1, 99);

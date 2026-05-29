@@ -103,41 +103,6 @@ const SWING_IN_SPRING_BEST_N = 5;
 const SWING_IN_SPRING_REQUIRED_ROUND_NOS = [3, 7];
 const SWING_IN_SPRING_PAIRS_NINE_HOLE_ROUND_NO = 3;
 
-// Scotland Tour 2026: S McCurdy is no longer playing.
-// For leaderboard scoring only, use the nominated substitute player's official score rows, handicap, and tee by round.
-const SCOTLAND_TOUR_2026_ID = "207a93c7-70fb-4969-9ef1-6ad844e556c5";
-const SCOTLAND_S_MCCURDY_PLAYER_ID = "10ec8991-8795-437e-87e9-ad06b115b0a3";
-
-const SCOTLAND_SCORE_SUBSTITUTE_BY_ROUND_NO: Record<number, string> = {
-  1: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
-  5: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
-  9: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
-  13: "0d3b3fce-41ce-44e5-8603-cb27bc734eb4", // L Warwick
-
-  2: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
-  6: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
-  10: "1f2b1df0-8c63-4cfe-a786-68291f7f42db", // T Baum
-
-  3: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
-  7: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
-  11: "593d6f38-cce6-45cc-a8ae-e9a9d7e426b8", // J Gray
-
-  4: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
-  8: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
-  12: "9600eebc-7cdd-42f5-bd38-77f920dc41de", // P Creswell
-};
-
-function effectiveScorePlayerIdForLeaderboard(params: { tourId: string; roundNo: number | null | undefined; playerId: string }) {
-  const { tourId, roundNo, playerId } = params;
-  if (tourId !== SCOTLAND_TOUR_2026_ID) return playerId;
-  if (playerId !== SCOTLAND_S_MCCURDY_PLAYER_ID) return playerId;
-
-  const rn = Number(roundNo);
-  if (!Number.isFinite(rn)) return playerId;
-
-  return SCOTLAND_SCORE_SUBSTITUTE_BY_ROUND_NO[rn] ?? playerId;
-}
-
 // -----------------------------
 // Helpers
 // -----------------------------
@@ -816,13 +781,7 @@ export default function MobileLeaderboardsPage() {
       const perRound: Record<string, number> = {};
 
       for (const r of sortedRounds) {
-        const effectivePlayerId = effectiveScorePlayerIdForLeaderboard({
-          tourId,
-          roundNo: r.round_no,
-          playerId: p.id,
-        });
-
-        const rp = rpByRoundPlayer.get(`${r.id}|${effectivePlayerId}`);
+        const rp = rpByRoundPlayer.get(`${r.id}|${p.id}`);
         if (!rp?.playing) {
           perRound[r.id] = 0;
           continue;
@@ -834,8 +793,7 @@ export default function MobileLeaderboardsPage() {
           continue;
         }
 
-        const effectivePlayer = playerById.get(effectivePlayerId) ?? p;
-        const tee: Tee = normalizeTee(effectivePlayer.gender);
+        const tee: Tee = normalizeTee(p.gender);
         const parsMap = parsByCourseTeeHole.get(courseId)?.get(tee);
         if (!parsMap) {
           perRound[r.id] = 0;
@@ -849,7 +807,7 @@ export default function MobileLeaderboardsPage() {
           const pr = parsMap.get(h);
           if (!pr) continue;
 
-          const sc = scoreByRoundPlayerHole.get(`${r.id}|${effectivePlayerId}|${h}`);
+          const sc = scoreByRoundPlayerHole.get(`${r.id}|${p.id}|${h}`);
           if (!sc) continue;
 
           const raw = normalizeRawScore(sc.strokes, sc.pickup);
@@ -900,7 +858,6 @@ export default function MobileLeaderboardsPage() {
     parsByCourseTeeHole,
     rpByRoundPlayer,
     scoreByRoundPlayerHole,
-    playerById,
     individualRule,
     finalRoundId,
     isSwingInSpringTour,
@@ -930,22 +887,16 @@ export default function MobileLeaderboardsPage() {
     }) {
       const { round, playerId, holeNumber } = params;
 
-      const effectivePlayerId = effectiveScorePlayerIdForLeaderboard({
-        tourId,
-        roundNo: round.round_no,
-        playerId,
-      });
-
-      const rp = rpByRoundPlayer.get(`${round.id}|${effectivePlayerId}`);
+      const rp = rpByRoundPlayer.get(`${round.id}|${playerId}`);
       if (!rp?.playing) return 0;
 
       const courseId = round.course_id;
       if (!courseId) return 0;
 
-      const sc = scoreByRoundPlayerHole.get(`${round.id}|${effectivePlayerId}|${holeNumber}`);
+      const sc = scoreByRoundPlayerHole.get(`${round.id}|${playerId}|${holeNumber}`);
       if (!sc) return 0;
 
-      const pl = playerById.get(effectivePlayerId);
+      const pl = playerById.get(playerId);
       const tee: Tee = normalizeTee(pl?.gender);
 
       const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(holeNumber);
@@ -1091,19 +1042,13 @@ export default function MobileLeaderboardsPage() {
           let zeroCount = 0;
 
           for (const pid of memberIds) {
-            const effectivePlayerId = effectiveScorePlayerIdForLeaderboard({
-              tourId,
-              roundNo: r.round_no,
-              playerId: pid,
-            });
-
-            const rp = rpByRoundPlayer.get(`${r.id}|${effectivePlayerId}`);
+            const rp = rpByRoundPlayer.get(`${r.id}|${pid}`);
             if (!rp?.playing) continue;
 
-            const sc = scoreByRoundPlayerHole.get(`${r.id}|${effectivePlayerId}|${h}`);
+            const sc = scoreByRoundPlayerHole.get(`${r.id}|${pid}|${h}`);
             if (!sc) continue;
 
-            const pl = playerById.get(effectivePlayerId);
+            const pl = playerById.get(pid);
             const tee: Tee = normalizeTee(pl?.gender);
 
             const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(h);
