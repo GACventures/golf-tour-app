@@ -1,3 +1,4 @@
+// app/m/tours/[id]/more/rehandicapping/page.tsx
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -14,7 +15,7 @@ type Tour = {
   id: string;
   name: string;
   rehandicapping_enabled: boolean | null;
-  rehandicapping_rules_summary: string | null; // kept in type (DB), but intentionally NOT used for display
+  rehandicapping_rules_summary: string | null;
   rehandicapping_rule_key: string | null;
 };
 
@@ -101,7 +102,6 @@ function roundLabel(r: RoundOption) {
   return `R${rn}${nm ? ` • ${nm}` : ""}${date ? ` • ${date}` : ""}`;
 }
 
-// ✅ half-up rounding so decimal start handicaps (e.g. 12.6) reset to 13, not 12.
 function roundHalfUp(x: number): number {
   return x >= 0 ? Math.floor(x + 0.5) : Math.ceil(x - 0.5);
 }
@@ -117,16 +117,16 @@ const PLAIN_ENGLISH_RULE_V1 =
   "The resulting Playing Handicap cannot exceed Starting Handicap + 3, and cannot be lower than half the Starting Handicap, rounded up if the Starting Handicap is odd.\n\n" +
   "If a player does not play a round, their Playing Handicap carries forward unchanged to the next round.";
 
-// ✅ Only show Appleby for New Zealand Tour 2026
 const NZ_TOUR_2026_ID = "5a80b049-396f-46ec-965e-810e738471b6";
+const SCOTLAND_TOUR_2026_ID = "207a93c7-70fb-4969-9ef1-6ad844e556c5";
 
 export default function MobileTourMoreRehandicappingPage() {
   const params = useParams<{ id?: string }>();
   const tourId = String(params?.id ?? "").trim();
 
   const showAppleby = tourId === NZ_TOUR_2026_ID;
+  const denyAutomaticRehandicapping = tourId === SCOTLAND_TOUR_2026_ID;
 
-  // ✅ top chooser state (default = nothing open)
   const [activeSection, setActiveSection] = useState<Section>(null);
 
   const [loading, setLoading] = useState(true);
@@ -137,23 +137,19 @@ export default function MobileTourMoreRehandicappingPage() {
   const [tourPlayers, setTourPlayers] = useState<TourPlayerJoinRow[]>([]);
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
 
-  // Automatic toggle UI state
   const [autoSaving, setAutoSaving] = useState(false);
   const [autoError, setAutoError] = useState("");
   const [autoMsg, setAutoMsg] = useState("");
   const [autoEnabledInput, setAutoEnabledInput] = useState<boolean | null>(null);
 
-  // Manual toggle (only when automatic = OFF)
   const [manualEnabled, setManualEnabled] = useState(false);
 
-  // Manual editor state
   const [manSelectedRoundId, setManSelectedRoundId] = useState<string>("");
   const [manInputs, setManInputs] = useState<Record<string, string>>({});
   const [manSaving, setManSaving] = useState(false);
   const [manError, setManError] = useState("");
   const [manMsg, setManMsg] = useState("");
 
-  // Prevent bursts of duplicate refetches (focus/visibility can fire in quick succession)
   const inFlightRef = useRef(false);
   const lastRunMsRef = useRef(0);
 
@@ -171,7 +167,6 @@ export default function MobileTourMoreRehandicappingPage() {
     setErrorMsg("");
 
     try {
-      // Tour
       const { data: tData, error: tErr } = await supabase
         .from("tours")
         .select("id,name,rehandicapping_enabled,rehandicapping_rules_summary,rehandicapping_rule_key")
@@ -183,7 +178,6 @@ export default function MobileTourMoreRehandicappingPage() {
       setTour(t);
       setAutoEnabledInput(t.rehandicapping_enabled === true);
 
-      // Rounds
       const { data: rData, error: rErr } = await supabase
         .from("rounds")
         .select("id,tour_id,name,round_no,created_at,played_on")
@@ -195,7 +189,6 @@ export default function MobileTourMoreRehandicappingPage() {
       const rr = (rData ?? []) as RoundRow[];
       setRounds(rr);
 
-      // Players in this tour
       const { data: tpData, error: tpErr } = await supabase
         .from("tour_players")
         .select("tour_id,player_id,starting_handicap, players(id,name,start_handicap,gender)")
@@ -209,7 +202,6 @@ export default function MobileTourMoreRehandicappingPage() {
       const roundIds = rr.map((r) => r.id);
       const playerIds = tps.map((x) => String(x.player_id)).filter(Boolean);
 
-      // round_players: per-round handicap display + needed fields for manual apply
       if (roundIds.length > 0 && playerIds.length > 0) {
         const { data: rpData, error: rpErr } = await supabase
           .from("round_players")
@@ -240,12 +232,10 @@ export default function MobileTourMoreRehandicappingPage() {
     }
   }, [tourId]);
 
-  // Initial load
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
 
-  // Auto-refresh when returning to this page (no button)
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
@@ -327,6 +317,10 @@ export default function MobileTourMoreRehandicappingPage() {
 
   async function saveAutomaticToggle() {
     if (!tour) return;
+    if (denyAutomaticRehandicapping) {
+      setAutoError("Access denied. Automatic rehandicapping is not available for Scotland Tour 2026.");
+      return;
+    }
 
     setAutoSaving(true);
     setAutoError("");
@@ -340,14 +334,12 @@ export default function MobileTourMoreRehandicappingPage() {
       const { error } = await supabase.from("tours").update({ rehandicapping_enabled: nextEnabled }).eq("id", tour.id);
       if (error) throw error;
 
-      // Keep automatic logic unchanged; run it so the table reflects the new mode.
       const recalcRes = await recalcAndSaveTourHandicaps({ supabase, tourId: tour.id });
       if (!recalcRes.ok) throw new Error(recalcRes.error);
 
       setTour((prev) => (prev ? { ...prev, rehandicapping_enabled: nextEnabled } : prev));
       setAutoMsg(`Saved. Automatic rehandicapping is now ${nextEnabled ? "enabled" : "disabled"}.`);
 
-      // When turning automatic ON, manual UI becomes irrelevant.
       if (nextEnabled) {
         setManualEnabled(false);
         setManSelectedRoundId("");
@@ -391,13 +383,12 @@ export default function MobileTourMoreRehandicappingPage() {
     try {
       const ph = Math.max(0, Math.floor(nextPH));
 
-      // Apply from selected round forward (inclusive)
       const payload = manTargetRoundIds.map((rid) => {
         const existing = rpByRoundPlayer[rid]?.[playerId];
         const tee = existing?.tee
           ? normalizeTee(existing.tee)
           : normalizeTee(players.find((p) => p.id === playerId)?.gender ?? "M");
-        const playing = existing?.playing === true;
+        const playing = existing ? existing.playing === true : true;
 
         return {
           round_id: rid,
@@ -441,7 +432,7 @@ export default function MobileTourMoreRehandicappingPage() {
         const tee = existing?.tee
           ? normalizeTee(existing.tee)
           : normalizeTee(players.find((p) => p.id === playerId)?.gender ?? "M");
-        const playing = existing?.playing === true;
+        const playing = existing ? existing.playing === true : true;
 
         return {
           round_id: rid,
@@ -483,12 +474,10 @@ export default function MobileTourMoreRehandicappingPage() {
     );
   }
 
-  // ✅ match Tour Admin chooser button styling
   const chooserBtnBase = "h-11 rounded-xl border text-xs font-semibold flex items-center justify-center px-2";
   const chooserBtnActive = "border-gray-900 bg-gray-900 text-white";
   const chooserBtnIdle = "border-gray-200 bg-white text-gray-900";
 
-  // Existing pill buttons (inside sections)
   const pillBase = "flex-1 h-10 rounded-xl border text-sm font-semibold flex items-center justify-center";
   const pillActive = "border-gray-900 bg-gray-900 text-white";
   const pillIdle = "border-gray-200 bg-white text-gray-900";
@@ -503,23 +492,32 @@ export default function MobileTourMoreRehandicappingPage() {
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      {/* Header */}
       <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-md px-4 py-3">
           <div className="text-base font-semibold text-gray-900">Rehandicapping</div>
-
-          {/* ✅ CHANGE #1: remove tour name/details under Rehandicapping (tour name is already shown elsewhere in your UI) */}
-          {/* {tour?.name ? <div className="mt-0.5 text-xs text-gray-600 truncate">{tour.name}</div> : null} */}
         </div>
       </div>
 
       <main className="mx-auto w-full max-w-md px-4 py-4 space-y-4">
-        {/* ✅ Top chooser row (always visible) */}
         <div className="grid grid-cols-3 gap-2">
           <button
             type="button"
-            onClick={() => toggleSection("auto")}
-            className={`${chooserBtnBase} ${activeSection === "auto" ? chooserBtnActive : chooserBtnIdle}`}
+            onClick={() => {
+              if (denyAutomaticRehandicapping) {
+                setAutoError("Access denied. Automatic rehandicapping is not available for Scotland Tour 2026.");
+                setAutoMsg("");
+                setManMsg("");
+                setManError("");
+                setActiveSection(null);
+                return;
+              }
+
+              toggleSection("auto");
+            }}
+            className={`${chooserBtnBase} ${
+              activeSection === "auto" ? chooserBtnActive : chooserBtnIdle
+            } ${denyAutomaticRehandicapping ? "opacity-50 cursor-not-allowed" : ""}`}
+            aria-disabled={denyAutomaticRehandicapping}
           >
             Automatic rehandicapping
           </button>
@@ -541,7 +539,6 @@ export default function MobileTourMoreRehandicappingPage() {
           </button>
         </div>
 
-        {/* ✅ CHANGE #2: Appleby button text visibility fixed by using a clear dark background + white text */}
         {showAppleby ? (
           <div className="grid grid-cols-3 gap-2">
             <Link
@@ -555,26 +552,23 @@ export default function MobileTourMoreRehandicappingPage() {
           </div>
         ) : null}
 
-        {/* Error (always visible if present) */}
+        {denyAutomaticRehandicapping && autoError ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{autoError}</div>
+        ) : null}
+
         {errorMsg ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
         ) : null}
 
-        {/* ✅ Nothing else shown until a button is clicked */}
         {activeSection === null ? null : loading ? (
-          // Only show loading skeleton once a section is opened (so initial page looks like “buttons only”)
           <div className="space-y-3">
             <div className="h-24 rounded-2xl border bg-white" />
             <div className="h-64 rounded-2xl border bg-white" />
           </div>
         ) : (
           <>
-            {/* ========================= */}
-            {/* Automatic section */}
-            {/* ========================= */}
             {activeSection === "auto" ? (
               <>
-                {/* 1) Automatic rehandicapping toggle */}
                 <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                   <div className="p-4 border-b">
                     <div className="text-sm font-semibold text-gray-900">Automatic rehandicapping</div>
@@ -633,7 +627,6 @@ export default function MobileTourMoreRehandicappingPage() {
                   </div>
                 </section>
 
-                {/* 2) Rule */}
                 <section className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
                   <div className="text-sm font-semibold text-gray-900">Rehandicapping rule</div>
                   <div className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{ruleText}</div>
@@ -647,9 +640,6 @@ export default function MobileTourMoreRehandicappingPage() {
               </>
             ) : null}
 
-            {/* ========================= */}
-            {/* Manual section */}
-            {/* ========================= */}
             {activeSection === "manual" ? (
               <>
                 {autoEnabled ? (
@@ -659,7 +649,6 @@ export default function MobileTourMoreRehandicappingPage() {
                   </div>
                 ) : null}
 
-                {/* 3) Manual rehandicapping (only when automatic is OFF) */}
                 {!autoEnabled ? (
                   <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                     <div className="p-4 border-b">
@@ -836,9 +825,6 @@ export default function MobileTourMoreRehandicappingPage() {
               </>
             ) : null}
 
-            {/* ========================= */}
-            {/* Handicaps by round section */}
-            {/* ========================= */}
             {activeSection === "byRound" ? (
               <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
                 <div className="p-4 border-b">
@@ -858,7 +844,6 @@ export default function MobileTourMoreRehandicappingPage() {
                             Player
                           </th>
 
-                          {/* 2nd column = exact starting handicap (1dp) */}
                           <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700 whitespace-nowrap">
                             Starting Handicap (exact)
                           </th>
