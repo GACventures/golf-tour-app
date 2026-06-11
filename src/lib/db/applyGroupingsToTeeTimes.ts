@@ -1,4 +1,4 @@
-import { supabase } from "@lib/supabase";
+import { supabase } from "@/lib/supabaseClient";
 
 /**
  * Applies daily groupings to the round_groups and round_group_players tables
