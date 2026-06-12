@@ -34,6 +34,7 @@ type RoundPlayerRow = {
   playing: boolean;
   playing_handicap: number | null;
   tee: Tee;
+  manual_handicap: boolean;
 };
 
 type PlayerJoin = {
@@ -157,7 +158,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
   const { data: tourRow, error: tourErr } = await supabase
     .from("tours")
-    .select("id,rehandicapping_enabled")
+    .select("id,rehandicapping_enabled,manual_rehandicapping_enabled")
     .eq("id", tourId)
     .maybeSingle();
 
@@ -249,7 +250,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
   const { data: rpData, error: rpErr } = await supabase
     .from("round_players")
-    .select("round_id,player_id,playing,playing_handicap,tee")
+    .select("round_id,player_id,playing,playing_handicap,tee,manual_handicap")
     .in("round_id", roundIds)
     .in("player_id", playerIds);
 
@@ -263,6 +264,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
       playing: x.playing === true,
       playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
       tee,
+      manual_handicap: x.manual_handicap === true,
     } as RoundPlayerRow;
   });
 
@@ -289,6 +291,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
       playing: boolean;
       playing_handicap: number;
       tee: Tee;
+      manual_handicap: boolean;
     }> = [];
 
     for (const r of targetRounds) {
@@ -298,12 +301,25 @@ export async function recalcAndSaveTourHandicaps(opts: {
         const tee = existing?.tee ? normalizeTee(existing.tee) : defaultTeeByPlayer[p.id] ?? "M";
         const sh = startIntByPlayer[p.id];
 
+        if (existing?.manual_handicap === true && Number.isFinite(Number(existing.playing_handicap))) {
+          payload.push({
+            round_id: r.id,
+            player_id: p.id,
+            playing,
+            playing_handicap: Number(existing.playing_handicap),
+            tee,
+            manual_handicap: true,
+          });
+          continue;
+        }
+
         payload.push({
           round_id: r.id,
           player_id: p.id,
           playing,
           playing_handicap: sh,
           tee,
+          manual_handicap: false,
         });
       }
     }
@@ -395,6 +411,14 @@ export async function recalcAndSaveTourHandicaps(opts: {
     return defaultTeeByPlayer[playerId] ?? "M";
   };
 
+  const manualPHForRoundPlayer = (roundId: string, playerId: string): number | null => {
+    const existing = rpByKey.get(rpKey(roundId, playerId));
+    if (existing?.manual_handicap === true && Number.isFinite(Number(existing.playing_handicap))) {
+      return Number(existing.playing_handicap);
+    }
+    return null;
+  };
+
   const isSwingInSpringRound3 = (r: Round): boolean => {
     return (
       String(r.tour_id) === SWING_IN_SPRING_TOUR_ID &&
@@ -453,7 +477,10 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
   const r1 = rounds[0];
   phByRoundPlayer[r1.id] = {};
-  for (const p of players) phByRoundPlayer[r1.id][p.id] = startIntByPlayer[p.id];
+  for (const p of players) {
+    const manual = manualPHForRoundPlayer(r1.id, p.id);
+    phByRoundPlayer[r1.id][p.id] = manual ?? startIntByPlayer[p.id];
+  }
 
   for (let i = 0; i < rounds.length; i++) {
     const r = rounds[i];
@@ -462,8 +489,15 @@ export async function recalcAndSaveTourHandicaps(opts: {
     if (!phByRoundPlayer[r.id]) {
       phByRoundPlayer[r.id] = {};
       const prev = rounds[i - 1];
+
       for (const p of players) {
-        phByRoundPlayer[r.id][p.id] = phByRoundPlayer[prev.id]?.[p.id] ?? startIntByPlayer[p.id];
+        const manual = manualPHForRoundPlayer(r.id, p.id);
+        phByRoundPlayer[r.id][p.id] = manual ?? phByRoundPlayer[prev.id]?.[p.id] ?? startIntByPlayer[p.id];
+      }
+    } else {
+      for (const p of players) {
+        const manual = manualPHForRoundPlayer(r.id, p.id);
+        if (manual !== null) phByRoundPlayer[r.id][p.id] = manual;
       }
     }
 
@@ -492,7 +526,10 @@ export async function recalcAndSaveTourHandicaps(opts: {
 
       if (next) {
         phByRoundPlayer[next.id] = {};
-        for (const p of players) phByRoundPlayer[next.id][p.id] = phByRoundPlayer[r.id][p.id];
+        for (const p of players) {
+          const manualNext = manualPHForRoundPlayer(next.id, p.id);
+          phByRoundPlayer[next.id][p.id] = manualNext ?? phByRoundPlayer[r.id][p.id];
+        }
       }
       continue;
     }
@@ -564,6 +601,12 @@ export async function recalcAndSaveTourHandicaps(opts: {
     if (next) {
       phByRoundPlayer[next.id] = {};
       for (const p of players) {
+        const manualNext = manualPHForRoundPlayer(next.id, p.id);
+        if (manualNext !== null) {
+          phByRoundPlayer[next.id][p.id] = manualNext;
+          continue;
+        }
+
         const prevPH = phByRoundPlayer[r.id][p.id];
 
         const isPlaying = playingMap[r.id]?.[p.id] === true;
@@ -603,6 +646,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
     playing: boolean;
     playing_handicap: number | null;
     tee: Tee;
+    manual_handicap: boolean;
   }> = [];
 
   for (const r of targetRounds) {
@@ -610,9 +654,22 @@ export async function recalcAndSaveTourHandicaps(opts: {
       const existing = rpByKey.get(rpKey(r.id, p.id));
       const playing = existing?.playing === true;
 
+      const tee = existing?.tee ? normalizeTee(existing.tee) : defaultTeeByPlayer[p.id] ?? "M";
+
+      if (existing?.manual_handicap === true && Number.isFinite(Number(existing.playing_handicap))) {
+        payload.push({
+          round_id: r.id,
+          player_id: p.id,
+          playing,
+          playing_handicap: Number(existing.playing_handicap),
+          tee,
+          manual_handicap: true,
+        });
+        continue;
+      }
+
       const computed = phByRoundPlayer[r.id]?.[p.id];
       const fallback = existing?.playing_handicap ?? startIntByPlayer[p.id];
-      const tee = existing?.tee ? normalizeTee(existing.tee) : defaultTeeByPlayer[p.id] ?? "M";
 
       payload.push({
         round_id: r.id,
@@ -620,6 +677,7 @@ export async function recalcAndSaveTourHandicaps(opts: {
         playing,
         playing_handicap: Number.isFinite(Number(computed)) ? Number(computed) : fallback,
         tee,
+        manual_handicap: false,
       });
     }
   }

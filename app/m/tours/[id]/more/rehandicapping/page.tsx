@@ -15,6 +15,7 @@ type Tour = {
   id: string;
   name: string;
   rehandicapping_enabled: boolean | null;
+  manual_rehandicapping_enabled: boolean | null;
   rehandicapping_rules_summary: string | null;
   rehandicapping_rule_key: string | null;
 };
@@ -49,6 +50,7 @@ type RoundPlayerRow = {
   playing_handicap: number | null;
   tee: Tee | string | null;
   base_playing_handicap?: number | null;
+  manual_handicap?: boolean | null;
 };
 
 type RoundOption = {
@@ -169,7 +171,7 @@ export default function MobileTourMoreRehandicappingPage() {
     try {
       const { data: tData, error: tErr } = await supabase
         .from("tours")
-        .select("id,name,rehandicapping_enabled,rehandicapping_rules_summary,rehandicapping_rule_key")
+        .select("id,name,rehandicapping_enabled,manual_rehandicapping_enabled,rehandicapping_rules_summary,rehandicapping_rule_key")
         .eq("id", tourId)
         .single();
       if (tErr) throw tErr;
@@ -177,6 +179,7 @@ export default function MobileTourMoreRehandicappingPage() {
       const t = tData as Tour;
       setTour(t);
       setAutoEnabledInput(t.rehandicapping_enabled === true);
+      setManualEnabled(t.manual_rehandicapping_enabled === true);
 
       const { data: rData, error: rErr } = await supabase
         .from("rounds")
@@ -205,7 +208,7 @@ export default function MobileTourMoreRehandicappingPage() {
       if (roundIds.length > 0 && playerIds.length > 0) {
         const { data: rpData, error: rpErr } = await supabase
           .from("round_players")
-          .select("round_id,player_id,playing,playing_handicap,tee,base_playing_handicap")
+          .select("round_id,player_id,playing,playing_handicap,tee,base_playing_handicap,manual_handicap")
           .in("round_id", roundIds)
           .in("player_id", playerIds);
 
@@ -218,6 +221,7 @@ export default function MobileTourMoreRehandicappingPage() {
           playing_handicap: Number.isFinite(Number(x.playing_handicap)) ? Number(x.playing_handicap) : null,
           tee: x.tee == null ? null : String(x.tee),
           base_playing_handicap: x.base_playing_handicap == null ? null : Number(x.base_playing_handicap),
+          manual_handicap: x.manual_handicap === true,
         }));
 
         setRoundPlayers(rps);
@@ -397,6 +401,7 @@ export default function MobileTourMoreRehandicappingPage() {
           tee,
           playing_handicap: ph,
           base_playing_handicap: null,
+          manual_handicap: true,
         };
       });
 
@@ -441,6 +446,7 @@ export default function MobileTourMoreRehandicappingPage() {
           tee,
           playing_handicap: ph,
           base_playing_handicap: null,
+          manual_handicap: true,
         };
       });
 
@@ -663,10 +669,24 @@ export default function MobileTourMoreRehandicappingPage() {
                         <button
                           type="button"
                           className={`${pillBase} ${manualEnabled ? pillActive : pillIdle}`}
-                          onClick={() => {
+                          onClick={async () => {
+                            if (!tour) return;
+
                             setManMsg("");
                             setManError("");
+
+                            const { error } = await supabase
+                              .from("tours")
+                              .update({ manual_rehandicapping_enabled: true })
+                              .eq("id", tour.id);
+
+                            if (error) {
+                              setManError(error.message);
+                              return;
+                            }
+
                             setManualEnabled(true);
+                            setTour((prev) => (prev ? { ...prev, manual_rehandicapping_enabled: true } : prev));
                           }}
                           aria-pressed={manualEnabled === true}
                         >
@@ -676,12 +696,26 @@ export default function MobileTourMoreRehandicappingPage() {
                         <button
                           type="button"
                           className={`${pillBase} ${!manualEnabled ? pillActive : pillIdle}`}
-                          onClick={() => {
+                          onClick={async () => {
+                            if (!tour) return;
+
                             setManMsg("");
                             setManError("");
+
+                            const { error } = await supabase
+                              .from("tours")
+                              .update({ manual_rehandicapping_enabled: false })
+                              .eq("id", tour.id);
+
+                            if (error) {
+                              setManError(error.message);
+                              return;
+                            }
+
                             setManualEnabled(false);
                             setManSelectedRoundId("");
                             setManInputs({});
+                            setTour((prev) => (prev ? { ...prev, manual_rehandicapping_enabled: false } : prev));
                           }}
                           aria-pressed={manualEnabled === false}
                         >
