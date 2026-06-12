@@ -319,6 +319,28 @@ export default function MobileTourMoreRehandicappingPage() {
 
   const ruleText = autoEnabled ? PLAIN_ENGLISH_RULE_V1 : "No automatic rehandicapping.";
 
+  async function saveManualMode(nextEnabled: boolean): Promise<boolean> {
+    if (!tour) {
+      setManError("Tour has not loaded yet. Please try again.");
+      return false;
+    }
+
+    const { error } = await supabase
+      .from("tours")
+      .update({ manual_rehandicapping_enabled: nextEnabled })
+      .eq("id", tour.id);
+
+    if (error) {
+      setManError(error.message);
+      return false;
+    }
+
+    setManualEnabled(nextEnabled);
+    setTour((prev) => (prev ? { ...prev, manual_rehandicapping_enabled: nextEnabled } : prev));
+
+    return true;
+  }
+
   async function saveAutomaticToggle() {
     if (!tour) return;
     if (denyAutomaticRehandicapping) {
@@ -345,7 +367,7 @@ export default function MobileTourMoreRehandicappingPage() {
       setAutoMsg(`Saved. Automatic rehandicapping is now ${nextEnabled ? "enabled" : "disabled"}.`);
 
       if (nextEnabled) {
-        setManualEnabled(false);
+        await saveManualMode(false);
         setManSelectedRoundId("");
         setManInputs({});
       }
@@ -370,21 +392,42 @@ export default function MobileTourMoreRehandicappingPage() {
   }, [manSelectedRoundId, roundsSorted]);
 
   async function applyManualForward(playerId: string) {
-    if (!manualEnabled || autoEnabled) return;
-    if (!manSelectedRoundId || !isLikelyUuid(manSelectedRoundId)) return;
-    if (manTargetRoundIds.length === 0) return;
-
-    const raw = String(manInputs[playerId] ?? "").trim();
-    if (!raw) return;
-
-    const nextPH = Number(raw);
-    if (!Number.isFinite(nextPH)) return;
-
-    setManSaving(true);
     setManError("");
     setManMsg("");
 
+    if (autoEnabled) {
+      setManError("Manual rehandicapping is not available while Automatic is set to Yes.");
+      return;
+    }
+
+    if (!manSelectedRoundId || !isLikelyUuid(manSelectedRoundId)) {
+      setManError("Select a starting round before applying a manual handicap.");
+      return;
+    }
+
+    if (manTargetRoundIds.length === 0) {
+      setManError("No future rounds were found to update.");
+      return;
+    }
+
+    const raw = String(manInputs[playerId] ?? "").trim();
+    if (!raw) {
+      setManError("Enter a playing handicap before pressing Apply forward.");
+      return;
+    }
+
+    const nextPH = Number(raw);
+    if (!Number.isFinite(nextPH)) {
+      setManError("Enter a valid number for the playing handicap.");
+      return;
+    }
+
+    setManSaving(true);
+
     try {
+      const manualModeSaved = await saveManualMode(true);
+      if (!manualModeSaved) return;
+
       const ph = Math.max(0, Math.floor(nextPH));
 
       const payload = manTargetRoundIds.map((rid) => {
@@ -418,18 +461,36 @@ export default function MobileTourMoreRehandicappingPage() {
   }
 
   async function resetManualForward(playerId: string) {
-    if (!manualEnabled || autoEnabled) return;
-    if (!manSelectedRoundId || !isLikelyUuid(manSelectedRoundId)) return;
-    if (manTargetRoundIds.length === 0) return;
-
-    const start = fallbackStartByPlayerId[playerId];
-    if (start == null) return;
-
-    setManSaving(true);
     setManError("");
     setManMsg("");
 
+    if (autoEnabled) {
+      setManError("Manual rehandicapping is not available while Automatic is set to Yes.");
+      return;
+    }
+
+    if (!manSelectedRoundId || !isLikelyUuid(manSelectedRoundId)) {
+      setManError("Select a starting round before resetting a manual handicap.");
+      return;
+    }
+
+    if (manTargetRoundIds.length === 0) {
+      setManError("No future rounds were found to update.");
+      return;
+    }
+
+    const start = fallbackStartByPlayerId[playerId];
+    if (start == null) {
+      setManError("No starting handicap was found for this player.");
+      return;
+    }
+
+    setManSaving(true);
+
     try {
+      const manualModeSaved = await saveManualMode(true);
+      if (!manualModeSaved) return;
+
       const ph = Math.max(0, roundHalfUp(Number(start)));
 
       const payload = manTargetRoundIds.map((rid) => {
@@ -670,25 +731,12 @@ export default function MobileTourMoreRehandicappingPage() {
                           type="button"
                           className={`${pillBase} ${manualEnabled ? pillActive : pillIdle}`}
                           onClick={async () => {
-                            if (!tour) return;
-
                             setManMsg("");
                             setManError("");
-
-                            const { error } = await supabase
-                              .from("tours")
-                              .update({ manual_rehandicapping_enabled: true })
-                              .eq("id", tour.id);
-
-                            if (error) {
-                              setManError(error.message);
-                              return;
-                            }
-
-                            setManualEnabled(true);
-                            setTour((prev) => (prev ? { ...prev, manual_rehandicapping_enabled: true } : prev));
+                            await saveManualMode(true);
                           }}
                           aria-pressed={manualEnabled === true}
+                          disabled={manSaving}
                         >
                           Yes
                         </button>
@@ -697,27 +745,17 @@ export default function MobileTourMoreRehandicappingPage() {
                           type="button"
                           className={`${pillBase} ${!manualEnabled ? pillActive : pillIdle}`}
                           onClick={async () => {
-                            if (!tour) return;
-
                             setManMsg("");
                             setManError("");
 
-                            const { error } = await supabase
-                              .from("tours")
-                              .update({ manual_rehandicapping_enabled: false })
-                              .eq("id", tour.id);
+                            const ok = await saveManualMode(false);
+                            if (!ok) return;
 
-                            if (error) {
-                              setManError(error.message);
-                              return;
-                            }
-
-                            setManualEnabled(false);
                             setManSelectedRoundId("");
                             setManInputs({});
-                            setTour((prev) => (prev ? { ...prev, manual_rehandicapping_enabled: false } : prev));
                           }}
                           aria-pressed={manualEnabled === false}
+                          disabled={manSaving}
                         >
                           No
                         </button>
