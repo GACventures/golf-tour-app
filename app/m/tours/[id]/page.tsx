@@ -1112,12 +1112,16 @@ export default function MobileTourLandingPage() {
           </TileButton>
 
           <TileButton
-            className={`${baseBtn} ${rowColors[5]} ${openingDocIdx === 4 ? "opacity-70" : ""}`}
-            onClick={() => openDocByIndex(4)}
+            className={`${baseBtn} ${rowColors[5]}`}
+            onClick={() => router.push(`/m/tours/${tourId}/records`)}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
-            <>{openingDocIdx === 4 ? "Opening…" : "Comps etc"}</>
+            <>
+              Tour
+              <br />
+              Records
+            </>
           </TileButton>
 
           <TileButton
