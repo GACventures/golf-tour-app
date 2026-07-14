@@ -43,7 +43,7 @@ const SUND_TOUR_ID = "544f1602-17b1-4446-9cb3-da2fffd2e4eb";
 const SUND_TOUR_HERO = "/tours/sund_golf_tour_logo_v2.webp";
 
 const HDT5_TOUR_ID = "3cdeb1ea-381e-41e0-8b91-aaadb5a4d0c3";
-const HDT5_HERO = "/tours/hdt5-logo.png";
+const HDT5_HERO = "/tours/hdt5-logo.webp";
 
 const PORTUGAL_TOUR_ID = "b5e5b90d-0ae5-4be5-a3cd-3ef1c73cb6b5";
 const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
