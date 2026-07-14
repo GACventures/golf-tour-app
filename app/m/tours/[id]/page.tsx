@@ -42,6 +42,9 @@ const JAPAN_ITINERARY_URL = "https://cgegolfs.tkgplatform.com.au/proposal/80/CGE
 const SUND_TOUR_ID = "544f1602-17b1-4446-9cb3-da2fffd2e4eb";
 const SUND_TOUR_HERO = "/tours/sund_golf_tour_logo_v2.webp";
 
+const HDT5_TOUR_ID = "3cdeb1ea-381e-41e0-8b91-aaadb5a4d0c3";
+const HDT5_HERO = "/tours/hdt5-logo.png";
+
 const PORTUGAL_TOUR_ID = "b5e5b90d-0ae5-4be5-a3cd-3ef1c73cb6b5";
 const PORTUGAL_HERO = "/tours/portugal_poster_hero.png";
 
@@ -326,6 +329,7 @@ export default function MobileTourLandingPage() {
   const heroImage = useMemo(() => {
     if (tourId === SPACE_TOUR_ID) return SPACE_TOUR_HERO;
     if (tourId === SUND_TOUR_ID) return SUND_TOUR_HERO;
+    if (tourId === HDT5_TOUR_ID) return HDT5_HERO;
     if (tourId === NZ_TOUR_2026_ID) return NZ_TOUR_2026_HERO;
     if (tourId === SCOTLAND_TOUR_ID) return SCOTLAND_HERO;
     if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
