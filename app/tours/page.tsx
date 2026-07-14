@@ -84,12 +84,16 @@ export default function ToursPage() {
       if (error) throw new Error(error.message);
 
       const id = String((data as any)?.id ?? "");
+
       setName("");
-      await loadTours();
 
       if (id) {
-        window.location.href = `/admin/tours/${id}`;
+        // The desktop tour configuration page is /tours/[id].
+        window.location.href = `/tours/${id}`;
+        return;
       }
+
+      await loadTours();
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Failed to add tour.");
     } finally {
@@ -124,7 +128,9 @@ export default function ToursPage() {
             onChange={(e) => setName(e.target.value)}
             disabled={saving}
           />
+
           <button
+            type="button"
             className="rounded-xl bg-black px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
             disabled={!canAdd}
             onClick={() => void addTour()}
@@ -137,7 +143,9 @@ export default function ToursPage() {
       <section className="rounded-2xl border bg-white shadow-sm overflow-hidden">
         <div className="p-5 flex items-center justify-between gap-3 border-b">
           <div className="text-xl font-semibold text-gray-900">Tours</div>
+
           <button
+            type="button"
             className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
             onClick={() => void loadTours()}
             disabled={loading || saving}
@@ -158,6 +166,7 @@ export default function ToursPage() {
               <li key={t.id} className="p-5 flex items-center justify-between gap-4">
                 <div className="min-w-0">
                   <div className="font-semibold text-gray-900 truncate">{t.name}</div>
+
                   <div className="text-sm text-gray-600 mt-1">
                     {t.start_date || t.end_date ? (
                       <>
@@ -189,7 +198,7 @@ export default function ToursPage() {
 
                   <Link
                     className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800"
-                    href={`/admin/tours/${t.id}`}
+                    href={`/tours/${t.id}`}
                   >
                     Configure
                   </Link>
