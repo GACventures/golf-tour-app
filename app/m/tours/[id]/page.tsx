@@ -620,6 +620,11 @@ export default function MobileTourLandingPage() {
       return;
     }
 
+    if (tourId === HDT5_TOUR_ID) {
+      window.location.href = "/tours/hdt5-itinerary.pdf";
+      return;
+    }
+
     void openDocByIndex(0);
   }, [tourId, openDocByIndex]);
 
@@ -912,13 +917,9 @@ export default function MobileTourLandingPage() {
         )}
       </div>
 
-      <div className={`relative h-[26vh] ${tourId === HDT5_TOUR_ID ? "bg-white" : "bg-black"}`}>
+      <div className="relative h-[26vh] bg-black">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={heroImage}
-          alt={tourId === HDT5_TOUR_ID ? "HDT5 tour logo" : ""}
-          className={tourId === HDT5_TOUR_ID ? "h-full w-full object-contain" : "h-full w-full object-cover"}
-        />
+        <img src={heroImage} alt="" className="h-full w-full object-cover" />
       </div>
 
       <div className="mx-auto max-w-md px-4 pt-4 pb-6 space-y-3">
