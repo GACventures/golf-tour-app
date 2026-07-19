@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { getZeroStablefordDeduction } from "@/lib/teamScoring";
 
 type Tour = {
   id: string;
@@ -106,9 +107,9 @@ function fmtRulePairs(s: TourGroupingSettings | null) {
   return fr ? "Best Q rounds (Final required)" : "Best Q rounds";
 }
 
-function fmtRuleTeams(s: TourGroupingSettings | null) {
+function fmtRuleTeams(s: TourGroupingSettings | null, zeroDeduction: number) {
   const m = Number.isFinite(Number(s?.default_team_best_m)) ? Number(s?.default_team_best_m) : 1;
-  return `Best ${m} per hole, −1 per zero (all rounds)`;
+  return `Best ${m} per hole, −${zeroDeduction} per zero (all rounds)`;
 }
 
 function normalizePlayerJoin(val: any): PlayerRow | null {
@@ -282,6 +283,8 @@ export default function MobileTourDetailsPage() {
     return ids.map((pid) => playerNameById.get(pid) ?? pid).join(" / ");
   };
 
+  const zeroStablefordDeduction = getZeroStablefordDeduction(tourId);
+
   const rehandicapEnabled = tour?.rehandicapping_enabled === true;
   const rehandicapSummary = (tour?.rehandicapping_rules_summary ?? "").trim();
   const rehandicapHeading = `Rehandicapping – ${rehandicapEnabled ? "Yes" : "No"}`;
@@ -367,7 +370,7 @@ export default function MobileTourDetailsPage() {
                 </div>
                 <div>
                   <div className="font-semibold">Teams</div>
-                  <div className="text-gray-600">{fmtRuleTeams(eventSettings)}</div>
+                  <div className="text-gray-600">{fmtRuleTeams(eventSettings, zeroStablefordDeduction)}</div>
                 </div>
               </div>
             </section>
