@@ -50,16 +50,66 @@ type ParRow = {
   stroke_index: number;
 };
 
+type RoundStats = {
+  roundId: string;
+  roundNo: number | null;
+  courseName: string;
+  highestScore: number;
+  highestPlayers: string[];
+  lowestScore: number;
+  lowestPlayers: string[];
+  averageScore: number;
+  playerCount: number;
+};
+
+type PlayerRoundScore = {
+  playerId: string;
+  playerName: string;
+  roundId: string;
+  score: number;
+  holesCompleted: number;
+};
+
+type DailyRecordEntry = {
+  value: number;
+  course: string;
+  roundLabel: string;
+  playerNames?: string[];
+};
+
+type MarginRecordEntry = {
+  course: string;
+  roundLabel: string;
+  playerNames: string[];
+};
+
+type MarginRecord = {
+  gap: number;
+  entries: MarginRecordEntry[];
+};
+
+type PlayerValueRecord = {
+  value: number;
+  playerNames: string[];
+};
+
+type PlayerCountRecord = {
+  count: number;
+  playerNames: string[];
+};
+
+const EPSILON = 0.000000001;
+
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
-function safeName(v: any, fallback: string) {
+function safeName(v: unknown, fallback: string) {
   const s = String(v ?? "").trim();
   return s ? s : fallback;
 }
 
-function normalizeTee(v: any): Tee {
+function normalizeTee(v: unknown): Tee {
   const s = String(v ?? "").trim().toUpperCase();
   return s === "F" ? "F" : "M";
 }
@@ -83,25 +133,67 @@ function stdDev(nums: number[]): number | null {
   return Math.sqrt(variance);
 }
 
-type RoundStats = {
-  roundId: string;
-  roundNo: number | null;
-  courseName: string;
-  highestScore: number;
-  highestPlayer: string;
-  lowestScore: number;
-  lowestPlayer: string;
-  averageScore: number;
-  playerCount: number;
-};
+function nearlyEqual(a: number, b: number) {
+  return Math.abs(a - b) <= EPSILON;
+}
 
-type PlayerRoundScore = {
-  playerId: string;
-  playerName: string;
-  roundId: string;
-  score: number;
-  holesCompleted: number;
-};
+function roundLabel(roundNo: number | null) {
+  return `Round ${roundNo ?? "?"}`;
+}
+
+function joinNames(names: string[]) {
+  return names.length ? names.join(", ") : "—";
+}
+
+function uniqueSortedNames(names: string[]) {
+  return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+}
+
+function maxEntries(entries: DailyRecordEntry[]): DailyRecordEntry[] {
+  if (!entries.length) return [];
+  const maxValue = Math.max(...entries.map((entry) => entry.value));
+  return entries.filter((entry) => nearlyEqual(entry.value, maxValue));
+}
+
+function minEntries(entries: DailyRecordEntry[]): DailyRecordEntry[] {
+  if (!entries.length) return [];
+  const minValue = Math.min(...entries.map((entry) => entry.value));
+  return entries.filter((entry) => nearlyEqual(entry.value, minValue));
+}
+
+function buildPlayerValueRecord(
+  values: Array<{ playerName: string; value: number }>,
+  mode: "max" | "min",
+): PlayerValueRecord | null {
+  if (!values.length) return null;
+
+  const recordValue =
+    mode === "max"
+      ? Math.max(...values.map((item) => item.value))
+      : Math.min(...values.map((item) => item.value));
+
+  return {
+    value: recordValue,
+    playerNames: uniqueSortedNames(
+      values.filter((item) => nearlyEqual(item.value, recordValue)).map((item) => item.playerName),
+    ),
+  };
+}
+
+function buildPlayerCountRecord(
+  values: Array<{ playerName: string; count: number }>,
+): PlayerCountRecord | null {
+  if (!values.length) return null;
+
+  const recordCount = Math.max(...values.map((item) => item.count));
+
+  return {
+    count: recordCount,
+    playerNames: uniqueSortedNames(
+      values.filter((item) => item.count === recordCount).map((item) => item.playerName),
+    ),
+  };
+}
 
 export default function TourRecordsPage() {
   const params = useParams<{ id?: string }>();
@@ -128,7 +220,6 @@ export default function TourRecordsPage() {
       setErrorMsg("");
 
       try {
-        // Fetch rounds
         const { data: rData, error: rErr } = await supabase
           .from("rounds")
           .select("id,tour_id,name,round_no,course_id,played_on")
@@ -141,20 +232,21 @@ export default function TourRecordsPage() {
         if (!alive) return;
         setRounds(rr);
 
-        // Fetch courses
         const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length) {
           const { data: cData, error: cErr } = await supabase.from("courses").select("id,name").in("id", courseIds);
           if (cErr) throw cErr;
           if (!alive) return;
+
           const map: Record<string, string> = {};
-          for (const c of (cData ?? []) as CourseRow[]) map[String(c.id)] = safeName(c.name, "(course)");
+          for (const c of (cData ?? []) as CourseRow[]) {
+            map[String(c.id)] = safeName(c.name, "(course)");
+          }
           setCoursesById(map);
         } else {
           setCoursesById({});
         }
 
-        // Fetch players
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
@@ -178,7 +270,6 @@ export default function TourRecordsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
-        // Fetch round_players
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
@@ -201,7 +292,6 @@ export default function TourRecordsPage() {
           setRoundPlayers([]);
         }
 
-        // Fetch scores
         if (roundIds.length > 0 && playerIds.length > 0) {
           const allScores: ScoreRow[] = [];
 
@@ -224,7 +314,6 @@ export default function TourRecordsPage() {
           setScores([]);
         }
 
-        // Fetch pars
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
             .from("pars")
@@ -265,19 +354,23 @@ export default function TourRecordsPage() {
     };
   }, [tourId]);
 
-  // Calculate player scores for each round
   const playerRoundScores = useMemo((): PlayerRoundScore[] => {
     const results: PlayerRoundScore[] = [];
 
     const parByCourseHoleTee = new Map<string, { par: number; si: number }>();
     for (const p of pars) {
-      parByCourseHoleTee.set(`${p.course_id}:${p.hole_number}:${p.tee}`, { par: p.par, si: p.stroke_index });
+      parByCourseHoleTee.set(`${p.course_id}:${p.hole_number}:${p.tee}`, {
+        par: p.par,
+        si: p.stroke_index,
+      });
     }
 
     const scoresByRoundPlayer = new Map<string, Map<number, ScoreRow>>();
     for (const s of scores) {
       const key = `${s.round_id}:${s.player_id}`;
-      if (!scoresByRoundPlayer.has(key)) scoresByRoundPlayer.set(key, new Map());
+      if (!scoresByRoundPlayer.has(key)) {
+        scoresByRoundPlayer.set(key, new Map());
+      }
       scoresByRoundPlayer.get(key)!.set(s.hole_number, s);
     }
 
@@ -285,9 +378,6 @@ export default function TourRecordsPage() {
     for (const rp of roundPlayers) {
       rpByRoundPlayer.set(`${rp.round_id}:${rp.player_id}`, rp);
     }
-
-    const playersById = new Map<string, PlayerRow>();
-    for (const p of players) playersById.set(p.id, p);
 
     for (const round of rounds) {
       if (!round.course_id) continue;
@@ -300,7 +390,7 @@ export default function TourRecordsPage() {
         const tee = normalizeTee(player.gender);
         const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
 
-        const scoreMap = scoresByRoundPlayer.get(rpKey) ?? new Map();
+        const scoreMap = scoresByRoundPlayer.get(rpKey) ?? new Map<number, ScoreRow>();
         let total = 0;
         let holesCompleted = 0;
 
@@ -339,7 +429,6 @@ export default function TourRecordsPage() {
     return results;
   }, [rounds, players, roundPlayers, scores, pars]);
 
-  // Calculate round statistics
   const roundStats = useMemo((): RoundStats[] => {
     const stats: RoundStats[] = [];
 
@@ -347,22 +436,23 @@ export default function TourRecordsPage() {
       const roundScores = playerRoundScores.filter((prs) => prs.roundId === round.id);
       if (roundScores.length === 0) continue;
 
-      const scores = roundScores.map((rs) => rs.score);
-      const highest = Math.max(...scores);
-      const lowest = Math.min(...scores);
-      const avg = mean(scores) ?? 0;
-
-      const highestPlayer = roundScores.find((rs) => rs.score === highest)?.playerName ?? "";
-      const lowestPlayer = roundScores.find((rs) => rs.score === lowest)?.playerName ?? "";
+      const scoreValues = roundScores.map((rs) => rs.score);
+      const highest = Math.max(...scoreValues);
+      const lowest = Math.min(...scoreValues);
+      const avg = mean(scoreValues) ?? 0;
 
       stats.push({
         roundId: round.id,
         roundNo: round.round_no,
         courseName: round.course_id ? (coursesById[round.course_id] ?? "(course)") : "(course)",
         highestScore: highest,
-        highestPlayer,
+        highestPlayers: uniqueSortedNames(
+          roundScores.filter((rs) => rs.score === highest).map((rs) => rs.playerName),
+        ),
         lowestScore: lowest,
-        lowestPlayer,
+        lowestPlayers: uniqueSortedNames(
+          roundScores.filter((rs) => rs.score === lowest).map((rs) => rs.playerName),
+        ),
         averageScore: avg,
         playerCount: roundScores.length,
       });
@@ -371,91 +461,121 @@ export default function TourRecordsPage() {
     return stats;
   }, [rounds, playerRoundScores, coursesById]);
 
-  // Daily score records
   const dailyScoreRecords = useMemo(() => {
     if (roundStats.length === 0) {
       return {
-        highestMax: null,
-        highestMin: null,
-        highestAvg: null,
-        lowestMax: null,
-        lowestMin: null,
-        lowestAvg: null,
-        averageMax: null,
-        averageMin: null,
-        averageAvg: null,
+        highestMax: [] as DailyRecordEntry[],
+        highestMin: [] as DailyRecordEntry[],
+        highestAvg: null as number | null,
+        lowestMax: [] as DailyRecordEntry[],
+        lowestMin: [] as DailyRecordEntry[],
+        lowestAvg: null as number | null,
+        averageMax: [] as DailyRecordEntry[],
+        averageMin: [] as DailyRecordEntry[],
+        averageAvg: null as number | null,
       };
     }
 
-    const highs = roundStats.map((rs) => ({ value: rs.highestScore, course: rs.courseName }));
-    const lows = roundStats.map((rs) => ({ value: rs.lowestScore, course: rs.courseName }));
-    const avgs = roundStats.map((rs) => ({ value: rs.averageScore, course: rs.courseName }));
+    const highs: DailyRecordEntry[] = roundStats.map((rs) => ({
+      value: rs.highestScore,
+      course: rs.courseName,
+      roundLabel: roundLabel(rs.roundNo),
+      playerNames: rs.highestPlayers,
+    }));
 
-    const highestMax = highs.reduce((max, h) => (h.value > max.value ? h : max));
-    const highestMin = highs.reduce((min, h) => (h.value < min.value ? h : min));
-    const highestAvg = mean(highs.map((h) => h.value));
+    const lows: DailyRecordEntry[] = roundStats.map((rs) => ({
+      value: rs.lowestScore,
+      course: rs.courseName,
+      roundLabel: roundLabel(rs.roundNo),
+      playerNames: rs.lowestPlayers,
+    }));
 
-    const lowestMax = lows.reduce((max, l) => (l.value > max.value ? l : max));
-    const lowestMin = lows.reduce((min, l) => (l.value < min.value ? l : min));
-    const lowestAvg = mean(lows.map((l) => l.value));
-
-    const averageMax = avgs.reduce((max, a) => (a.value > max.value ? a : max));
-    const averageMin = avgs.reduce((min, a) => (a.value < min.value ? a : min));
-    const averageAvg = mean(avgs.map((a) => a.value));
+    const avgs: DailyRecordEntry[] = roundStats.map((rs) => ({
+      value: rs.averageScore,
+      course: rs.courseName,
+      roundLabel: roundLabel(rs.roundNo),
+    }));
 
     return {
-      highestMax,
-      highestMin,
-      highestAvg,
-      lowestMax,
-      lowestMin,
-      lowestAvg,
-      averageMax,
-      averageMin,
-      averageAvg,
+      highestMax: maxEntries(highs),
+      highestMin: minEntries(highs),
+      highestAvg: mean(highs.map((h) => h.value)),
+      lowestMax: maxEntries(lows),
+      lowestMin: minEntries(lows),
+      lowestAvg: mean(lows.map((l) => l.value)),
+      averageMax: maxEntries(avgs),
+      averageMin: minEntries(avgs),
+      averageAvg: mean(avgs.map((a) => a.value)),
     };
   }, [roundStats]);
 
-  // Margin records
   const marginRecords = useMemo(() => {
-    let maxFirstSecondGap = { gap: 0, course: "", winner: "", round: "" };
-    let maxLastSecondLastGap = { gap: 0, course: "", lastPlace: "", round: "" };
+    const firstSecondCandidates: Array<{ gap: number; entry: MarginRecordEntry }> = [];
+    const lastSecondLastCandidates: Array<{ gap: number; entry: MarginRecordEntry }> = [];
 
     for (const round of rounds) {
       const roundScores = playerRoundScores.filter((prs) => prs.roundId === round.id);
       if (roundScores.length < 2) continue;
 
       const sorted = [...roundScores].sort((a, b) => b.score - a.score);
+      const course = round.course_id ? (coursesById[round.course_id] ?? "(course)") : "(course)";
+      const label = roundLabel(round.round_no);
 
-      // First vs second
-      const firstSecondGap = sorted[0].score - sorted[1].score;
-      if (firstSecondGap > maxFirstSecondGap.gap) {
-        maxFirstSecondGap = {
-          gap: firstSecondGap,
-          course: round.course_id ? (coursesById[round.course_id] ?? "(course)") : "(course)",
-          winner: sorted[0].playerName,
-          round: `Round ${round.round_no ?? "?"}`,
-        };
-      }
+      const firstScore = sorted[0].score;
+      const firstPlayers = uniqueSortedNames(
+        sorted.filter((item) => item.score === firstScore).map((item) => item.playerName),
+      );
+      const nextLowerScore = sorted.find((item) => item.score < firstScore)?.score ?? firstScore;
 
-      // Last vs second last
-      if (sorted.length >= 2) {
-        const lastSecondLastGap = sorted[sorted.length - 2].score - sorted[sorted.length - 1].score;
-        if (lastSecondLastGap > maxLastSecondLastGap.gap) {
-          maxLastSecondLastGap = {
-            gap: lastSecondLastGap,
-            course: round.course_id ? (coursesById[round.course_id] ?? "(course)") : "(course)",
-            lastPlace: sorted[sorted.length - 1].playerName,
-            round: `Round ${round.round_no ?? "?"}`,
-          };
-        }
-      }
+      firstSecondCandidates.push({
+        gap: firstScore - nextLowerScore,
+        entry: {
+          course,
+          roundLabel: label,
+          playerNames: firstPlayers,
+        },
+      });
+
+      const lastScore = sorted[sorted.length - 1].score;
+      const lastPlayers = uniqueSortedNames(
+        sorted.filter((item) => item.score === lastScore).map((item) => item.playerName),
+      );
+      const nextHigherScore =
+        [...sorted].reverse().find((item) => item.score > lastScore)?.score ?? lastScore;
+
+      lastSecondLastCandidates.push({
+        gap: nextHigherScore - lastScore,
+        entry: {
+          course,
+          roundLabel: label,
+          playerNames: lastPlayers,
+        },
+      });
     }
 
-    return { maxFirstSecondGap, maxLastSecondLastGap };
+    function buildMarginRecord(
+      candidates: Array<{ gap: number; entry: MarginRecordEntry }>,
+    ): MarginRecord {
+      if (!candidates.length) {
+        return { gap: 0, entries: [] };
+      }
+
+      const maxGap = Math.max(...candidates.map((candidate) => candidate.gap));
+
+      return {
+        gap: maxGap,
+        entries: candidates
+          .filter((candidate) => nearlyEqual(candidate.gap, maxGap))
+          .map((candidate) => candidate.entry),
+      };
+    }
+
+    return {
+      maxFirstSecondGap: buildMarginRecord(firstSecondCandidates),
+      maxLastSecondLastGap: buildMarginRecord(lastSecondLastCandidates),
+    };
   }, [rounds, playerRoundScores, coursesById]);
 
-  // Player records
   const playerRecords = useMemo(() => {
     const playerScoresByPlayer = new Map<string, number[]>();
     const firstPlaceCount = new Map<string, number>();
@@ -469,19 +589,16 @@ export default function TourRecordsPage() {
       lastPlaceCount.set(player.id, 0);
     }
 
-    // Collect scores and placements
     for (const round of rounds) {
       const roundScores = playerRoundScores.filter((prs) => prs.roundId === round.id);
       if (roundScores.length === 0) continue;
 
       const sorted = [...roundScores].sort((a, b) => b.score - a.score);
 
-      // Add scores to player arrays
       for (const rs of roundScores) {
         playerScoresByPlayer.get(rs.playerId)?.push(rs.score);
       }
 
-      // Count first place (including ties)
       const firstScore = sorted[0].score;
       for (const rs of sorted) {
         if (rs.score === firstScore) {
@@ -491,7 +608,6 @@ export default function TourRecordsPage() {
         }
       }
 
-      // Count top 3 (including ties for 3rd)
       if (sorted.length >= 3) {
         const thirdScore = sorted[2].score;
         for (const rs of sorted) {
@@ -502,13 +618,11 @@ export default function TourRecordsPage() {
           }
         }
       } else {
-        // If fewer than 3 players, all are in top 3
         for (const rs of sorted) {
           top3Count.set(rs.playerId, (top3Count.get(rs.playerId) ?? 0) + 1);
         }
       }
 
-      // Count last place
       const lastScore = sorted[sorted.length - 1].score;
       for (let i = sorted.length - 1; i >= 0; i--) {
         if (sorted[i].score === lastScore) {
@@ -519,67 +633,46 @@ export default function TourRecordsPage() {
       }
     }
 
-    // Calculate averages and std devs
-    const playerAvgs = new Map<string, number>();
-    const playerStdDevs = new Map<string, number>();
+    const eligiblePlayers = players.filter(
+      (player) => (playerScoresByPlayer.get(player.id)?.length ?? 0) > 0,
+    );
 
-    for (const player of players) {
-      const scores = playerScoresByPlayer.get(player.id) ?? [];
-      if (scores.length > 0) {
-        const avg = mean(scores);
-        if (avg !== null) playerAvgs.set(player.id, avg);
+    const playerAverages = eligiblePlayers
+      .map((player) => {
+        const avg = mean(playerScoresByPlayer.get(player.id) ?? []);
+        return avg === null ? null : { playerName: player.name, value: avg };
+      })
+      .filter((item): item is { playerName: string; value: number } => item !== null);
 
-        const sd = stdDev(scores);
-        if (sd !== null) playerStdDevs.set(player.id, sd);
-      }
-    }
-
-    // Find records
-    let highestAvg = { playerId: "", playerName: "", value: 0 };
-    let mostFirst = { playerId: "", playerName: "", count: 0 };
-    let mostTop3 = { playerId: "", playerName: "", count: 0 };
-    let mostLast = { playerId: "", playerName: "", count: 0 };
-    let mostConsistent = { playerId: "", playerName: "", value: Infinity };
-    let mostVolatile = { playerId: "", playerName: "", value: 0 };
-
-    for (const player of players) {
-      const avg = playerAvgs.get(player.id) ?? 0;
-      if (avg > highestAvg.value) {
-        highestAvg = { playerId: player.id, playerName: player.name, value: avg };
-      }
-
-      const first = firstPlaceCount.get(player.id) ?? 0;
-      if (first > mostFirst.count) {
-        mostFirst = { playerId: player.id, playerName: player.name, count: first };
-      }
-
-      const top3 = top3Count.get(player.id) ?? 0;
-      if (top3 > mostTop3.count) {
-        mostTop3 = { playerId: player.id, playerName: player.name, count: top3 };
-      }
-
-      const last = lastPlaceCount.get(player.id) ?? 0;
-      if (last > mostLast.count) {
-        mostLast = { playerId: player.id, playerName: player.name, count: last };
-      }
-
-      const sd = playerStdDevs.get(player.id);
-      if (sd !== undefined && sd < mostConsistent.value) {
-        mostConsistent = { playerId: player.id, playerName: player.name, value: sd };
-      }
-
-      if (sd !== undefined && sd > mostVolatile.value) {
-        mostVolatile = { playerId: player.id, playerName: player.name, value: sd };
-      }
-    }
+    const playerStdDevs = eligiblePlayers
+      .map((player) => {
+        const sd = stdDev(playerScoresByPlayer.get(player.id) ?? []);
+        return sd === null ? null : { playerName: player.name, value: sd };
+      })
+      .filter((item): item is { playerName: string; value: number } => item !== null);
 
     return {
-      highestAvg,
-      mostFirst,
-      mostTop3,
-      mostLast,
-      mostConsistent: mostConsistent.value !== Infinity ? mostConsistent : null,
-      mostVolatile: mostVolatile.value > 0 ? mostVolatile : null,
+      highestAvg: buildPlayerValueRecord(playerAverages, "max"),
+      mostFirst: buildPlayerCountRecord(
+        eligiblePlayers.map((player) => ({
+          playerName: player.name,
+          count: firstPlaceCount.get(player.id) ?? 0,
+        })),
+      ),
+      mostTop3: buildPlayerCountRecord(
+        eligiblePlayers.map((player) => ({
+          playerName: player.name,
+          count: top3Count.get(player.id) ?? 0,
+        })),
+      ),
+      mostLast: buildPlayerCountRecord(
+        eligiblePlayers.map((player) => ({
+          playerName: player.name,
+          count: lastPlaceCount.get(player.id) ?? 0,
+        })),
+      ),
+      mostConsistent: buildPlayerValueRecord(playerStdDevs, "min"),
+      mostVolatile: buildPlayerValueRecord(playerStdDevs, "max"),
     };
   }, [players, rounds, playerRoundScores]);
 
@@ -594,6 +687,47 @@ export default function TourRecordsPage() {
       </div>
     );
   }
+
+  const renderDailyEntries = (entries: DailyRecordEntry[], decimals = 0) => {
+    if (!entries.length) {
+      return <span className="font-semibold">—</span>;
+    }
+
+    return (
+      <div className="space-y-1 text-right">
+        {entries.map((entry, index) => (
+          <div key={`${entry.roundLabel}-${entry.course}-${index}`}>
+            <div className="font-semibold">
+              {entry.value.toFixed(decimals)} points
+            </div>
+            <div className="text-xs text-gray-500">
+              {entry.roundLabel} · {entry.course}
+              {entry.playerNames?.length ? ` · ${joinNames(entry.playerNames)}` : ""}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const renderMarginEntries = (
+    record: MarginRecord,
+    placeLabel: string,
+  ) => {
+    if (!record.entries.length) {
+      return <div className="text-xs text-gray-500">—</div>;
+    }
+
+    return (
+      <div className="space-y-1">
+        {record.entries.map((entry, index) => (
+          <div className="text-xs text-gray-500" key={`${entry.roundLabel}-${entry.course}-${index}`}>
+            {entry.roundLabel} · {entry.course} · {joinNames(entry.playerNames)} ({placeLabel})
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
@@ -619,166 +753,198 @@ export default function TourRecordsPage() {
             <div className="h-64 rounded-2xl border bg-white" />
           </div>
         ) : errorMsg ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+            {errorMsg}
+          </div>
         ) : !hasEnoughData ? (
           <div className="rounded-2xl border p-4 text-sm text-gray-700">
             Insufficient data. Tour records require at least 2 completed rounds.
           </div>
         ) : (
           <div className="space-y-6">
-            {/* Daily Score Records */}
             <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="border-b bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-900">Daily Score Records</div>
-              <div className="p-4 space-y-4">
+              <div className="border-b bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-900">
+                Daily Score Records
+              </div>
+
+              <div className="space-y-4 p-4">
                 <div>
-                  <div className="text-xs font-semibold text-gray-600 mb-2">Daily Highest Score</div>
-                  <div className="space-y-1 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Maximum:</span>
-                      <span className="font-semibold">
-                        {dailyScoreRecords.highestMax?.value ?? "—"} points ({dailyScoreRecords.highestMax?.course ?? "—"})
-                      </span>
+                  <div className="mb-2 text-xs font-semibold text-gray-600">
+                    Daily Highest Score
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="shrink-0 text-gray-600">Maximum:</span>
+                      {renderDailyEntries(dailyScoreRecords.highestMax)}
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Minimum:</span>
-                      <span className="font-semibold">
-                        {dailyScoreRecords.highestMin?.value ?? "—"} points ({dailyScoreRecords.highestMin?.course ?? "—"})
-                      </span>
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="shrink-0 text-gray-600">Minimum:</span>
+                      {renderDailyEntries(dailyScoreRecords.highestMin)}
                     </div>
-                    <div className="flex justify-between">
+                    <div className="flex justify-between gap-4">
                       <span className="text-gray-600">Average:</span>
-                      <span className="font-semibold">{dailyScoreRecords.highestAvg?.toFixed(1) ?? "—"} points</span>
+                      <span className="font-semibold">
+                        {dailyScoreRecords.highestAvg?.toFixed(1) ?? "—"} points
+                      </span>
                     </div>
                   </div>
                 </div>
 
                 <div>
-                  <div className="text-xs font-semibold text-gray-600 mb-2">Daily Lowest Score</div>
-                  <div className="space-y-1 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Maximum:</span>
-                      <span className="font-semibold">
-                        {dailyScoreRecords.lowestMax?.value ?? "—"} points ({dailyScoreRecords.lowestMax?.course ?? "—"})
-                      </span>
+                  <div className="mb-2 text-xs font-semibold text-gray-600">
+                    Daily Lowest Score
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="shrink-0 text-gray-600">Maximum:</span>
+                      {renderDailyEntries(dailyScoreRecords.lowestMax)}
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Minimum:</span>
-                      <span className="font-semibold">
-                        {dailyScoreRecords.lowestMin?.value ?? "—"} points ({dailyScoreRecords.lowestMin?.course ?? "—"})
-                      </span>
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="shrink-0 text-gray-600">Minimum:</span>
+                      {renderDailyEntries(dailyScoreRecords.lowestMin)}
                     </div>
-                    <div className="flex justify-between">
+                    <div className="flex justify-between gap-4">
                       <span className="text-gray-600">Average:</span>
-                      <span className="font-semibold">{dailyScoreRecords.lowestAvg?.toFixed(1) ?? "—"} points</span>
+                      <span className="font-semibold">
+                        {dailyScoreRecords.lowestAvg?.toFixed(1) ?? "—"} points
+                      </span>
                     </div>
                   </div>
                 </div>
 
                 <div>
-                  <div className="text-xs font-semibold text-gray-600 mb-2">Daily Average Score</div>
-                  <div className="space-y-1 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Maximum:</span>
-                      <span className="font-semibold">
-                        {dailyScoreRecords.averageMax?.value.toFixed(1) ?? "—"} points ({dailyScoreRecords.averageMax?.course ?? "—"})
-                      </span>
+                  <div className="mb-2 text-xs font-semibold text-gray-600">
+                    Daily Average Score
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="shrink-0 text-gray-600">Maximum:</span>
+                      {renderDailyEntries(dailyScoreRecords.averageMax, 1)}
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Minimum:</span>
-                      <span className="font-semibold">
-                        {dailyScoreRecords.averageMin?.value.toFixed(1) ?? "—"} points ({dailyScoreRecords.averageMin?.course ?? "—"})
-                      </span>
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="shrink-0 text-gray-600">Minimum:</span>
+                      {renderDailyEntries(dailyScoreRecords.averageMin, 1)}
                     </div>
-                    <div className="flex justify-between">
+                    <div className="flex justify-between gap-4">
                       <span className="text-gray-600">Average:</span>
-                      <span className="font-semibold">{dailyScoreRecords.averageAvg?.toFixed(1) ?? "—"} points</span>
+                      <span className="font-semibold">
+                        {dailyScoreRecords.averageAvg?.toFixed(1) ?? "—"} points
+                      </span>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Margin Records */}
             <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="border-b bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-900">Margin Records</div>
-              <div className="p-4 space-y-4">
+              <div className="border-b bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-900">
+                Margin Records
+              </div>
+
+              <div className="space-y-4 p-4">
                 <div>
-                  <div className="text-xs font-semibold text-gray-600 mb-2">Margin between First and Second Place</div>
+                  <div className="mb-2 text-xs font-semibold text-gray-600">
+                    Margin between First and Second Place
+                  </div>
                   <div className="space-y-1 text-sm">
                     <div className="flex justify-between">
                       <span className="text-gray-600">Highest:</span>
-                      <span className="font-semibold">{marginRecords.maxFirstSecondGap.gap} points</span>
+                      <span className="font-semibold">
+                        {marginRecords.maxFirstSecondGap.gap} points
+                      </span>
                     </div>
-                    <div className="text-xs text-gray-500">
-                      {marginRecords.maxFirstSecondGap.course} · {marginRecords.maxFirstSecondGap.winner} (1st place)
-                    </div>
+                    {renderMarginEntries(marginRecords.maxFirstSecondGap, "1st place")}
                   </div>
                 </div>
 
                 <div>
-                  <div className="text-xs font-semibold text-gray-600 mb-2">Margin between Last and Second Last</div>
+                  <div className="mb-2 text-xs font-semibold text-gray-600">
+                    Margin between Last and Second Last
+                  </div>
                   <div className="space-y-1 text-sm">
                     <div className="flex justify-between">
                       <span className="text-gray-600">Highest:</span>
-                      <span className="font-semibold">{marginRecords.maxLastSecondLastGap.gap} points</span>
+                      <span className="font-semibold">
+                        {marginRecords.maxLastSecondLastGap.gap} points
+                      </span>
                     </div>
-                    <div className="text-xs text-gray-500">
-                      {marginRecords.maxLastSecondLastGap.course} · {marginRecords.maxLastSecondLastGap.lastPlace} (last place)
-                    </div>
+                    {renderMarginEntries(marginRecords.maxLastSecondLastGap, "last place")}
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Player Records */}
             <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="border-b bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-900">Player Records</div>
-              <div className="p-4 space-y-3">
-                <div className="flex justify-between text-sm">
+              <div className="border-b bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-900">
+                Player Records
+              </div>
+
+              <div className="space-y-3 p-4">
+                <div className="flex items-start justify-between gap-4 text-sm">
                   <span className="text-gray-600">Highest average across all rounds:</span>
-                  <span className="font-semibold">
-                    {playerRecords.highestAvg.value.toFixed(1)} pts · {playerRecords.highestAvg.playerName}
+                  <span className="text-right font-semibold">
+                    {playerRecords.highestAvg
+                      ? `${playerRecords.highestAvg.value.toFixed(1)} pts · ${joinNames(
+                          playerRecords.highestAvg.playerNames,
+                        )}`
+                      : "—"}
                   </span>
                 </div>
 
-                <div className="flex justify-between text-sm">
+                <div className="flex items-start justify-between gap-4 text-sm">
                   <span className="text-gray-600">Most times first (equal first):</span>
-                  <span className="font-semibold">
-                    {playerRecords.mostFirst.count} times · {playerRecords.mostFirst.playerName}
+                  <span className="text-right font-semibold">
+                    {playerRecords.mostFirst
+                      ? `${playerRecords.mostFirst.count} times · ${joinNames(
+                          playerRecords.mostFirst.playerNames,
+                        )}`
+                      : "—"}
                   </span>
                 </div>
 
-                <div className="flex justify-between text-sm">
+                <div className="flex items-start justify-between gap-4 text-sm">
                   <span className="text-gray-600">Most times in top 3 (incl. equal 3rd):</span>
-                  <span className="font-semibold">
-                    {playerRecords.mostTop3.count} times · {playerRecords.mostTop3.playerName}
+                  <span className="text-right font-semibold">
+                    {playerRecords.mostTop3
+                      ? `${playerRecords.mostTop3.count} times · ${joinNames(
+                          playerRecords.mostTop3.playerNames,
+                        )}`
+                      : "—"}
                   </span>
                 </div>
 
-                <div className="flex justify-between text-sm">
+                <div className="flex items-start justify-between gap-4 text-sm">
                   <span className="text-gray-600">Most times in last place:</span>
-                  <span className="font-semibold">
-                    {playerRecords.mostLast.count} times · {playerRecords.mostLast.playerName}
+                  <span className="text-right font-semibold">
+                    {playerRecords.mostLast
+                      ? `${playerRecords.mostLast.count} times · ${joinNames(
+                          playerRecords.mostLast.playerNames,
+                        )}`
+                      : "—"}
                   </span>
                 </div>
 
-                {playerRecords.mostConsistent ? (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Most consistent (lowest std dev):</span>
-                    <span className="font-semibold">
-                      {playerRecords.mostConsistent.value.toFixed(2)} · {playerRecords.mostConsistent.playerName}
-                    </span>
-                  </div>
-                ) : null}
+                <div className="flex items-start justify-between gap-4 text-sm">
+                  <span className="text-gray-600">Most consistent (lowest std dev):</span>
+                  <span className="text-right font-semibold">
+                    {playerRecords.mostConsistent
+                      ? `${playerRecords.mostConsistent.value.toFixed(2)} · ${joinNames(
+                          playerRecords.mostConsistent.playerNames,
+                        )}`
+                      : "—"}
+                  </span>
+                </div>
 
-                {playerRecords.mostVolatile ? (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Most volatile (highest std dev):</span>
-                    <span className="font-semibold">
-                      {playerRecords.mostVolatile.value.toFixed(2)} · {playerRecords.mostVolatile.playerName}
-                    </span>
-                  </div>
-                ) : null}
+                <div className="flex items-start justify-between gap-4 text-sm">
+                  <span className="text-gray-600">Most volatile (highest std dev):</span>
+                  <span className="text-right font-semibold">
+                    {playerRecords.mostVolatile
+                      ? `${playerRecords.mostVolatile.value.toFixed(2)} · ${joinNames(
+                          playerRecords.mostVolatile.playerNames,
+                        )}`
+                      : "—"}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
