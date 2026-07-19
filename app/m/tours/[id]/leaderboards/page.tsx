@@ -8,6 +8,7 @@ import { useParams, useRouter } from "next/navigation";
 
 import MobileNav from "../_components/MobileNav";
 import { supabase } from "@/lib/supabaseClient";
+import { getZeroStablefordDeduction } from "@/lib/teamScoring";
 
 // -----------------------------
 // Types
@@ -280,6 +281,7 @@ export default function MobileLeaderboardsPage() {
   const router = useRouter();
 
   const tourId = String(params?.id ?? "").trim();
+  const zeroStablefordDeduction = getZeroStablefordDeduction(tourId);
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
@@ -765,8 +767,8 @@ export default function MobileLeaderboardsPage() {
       return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
     }
 
-    return `Teams · Best ${teamRule.bestY} positive scores per hole, minus 1.0 for each zero · All rounds`;
-  }, [kind, individualRule, pairRule, teamRule.bestY, isSwingInSpringTour]);
+    return `Teams · Best ${teamRule.bestY} positive scores per hole, minus ${zeroStablefordDeduction} for each zero · All rounds`;
+  }, [kind, individualRule, pairRule, teamRule.bestY, isSwingInSpringTour, zeroStablefordDeduction]);
 
   const individualRows = useMemo(() => {
     const rows: Array<{
@@ -1073,7 +1075,7 @@ export default function MobileLeaderboardsPage() {
 
           let holeSum = 0;
           for (const pts of selected) holeSum += pts;
-          holeSum -= zeroCount * 1.0;
+          holeSum -= zeroCount * zeroStablefordDeduction;
 
           roundSum += holeSum;
         }
@@ -1087,7 +1089,18 @@ export default function MobileLeaderboardsPage() {
 
     rows.sort((a, b) => b.tourTotal - a.tourTotal || a.title.localeCompare(b.title));
     return rows;
-  }, [teamGroups, teamRule.bestY, teamLabelById, memberIdsByTeam, sortedRounds, rpByRoundPlayer, scoreByRoundPlayerHole, playerById, parsByCourseTeeHole]);
+  }, [
+    teamGroups,
+    teamRule.bestY,
+    teamLabelById,
+    memberIdsByTeam,
+    sortedRounds,
+    rpByRoundPlayer,
+    scoreByRoundPlayerHole,
+    playerById,
+    parsByCourseTeeHole,
+    zeroStablefordDeduction,
+  ]);
 
   function TapCell({
     href,

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { getZeroStablefordDeduction } from "@/lib/teamScoring";
 
 /* ---------------- Types ---------------- */
 
@@ -116,6 +117,7 @@ export default function TeamRoundDetailPage() {
   const tourId = String(params?.id ?? "").trim();
   const roundId = String(params?.roundId ?? "").trim();
   const teamId = String(params?.teamId ?? "").trim();
+  const zeroStablefordDeduction = getZeroStablefordDeduction(tourId);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -336,7 +338,7 @@ export default function TeamRoundDetailPage() {
 
         if (pts === 0) {
           zeroSet.add(p.id);
-          playerContributionTotals.set(p.id, (playerContributionTotals.get(p.id) || 0) - 1);
+          playerContributionTotals.set(p.id, (playerContributionTotals.get(p.id) || 0) - zeroStablefordDeduction);
         } else if (pts > 0) {
           entries.push({ playerId: p.id, pts, orderIndex: idx });
         }
@@ -351,7 +353,7 @@ export default function TeamRoundDetailPage() {
         playerContributionTotals.set(x.playerId, (playerContributionTotals.get(x.playerId) || 0) + x.pts);
       }
 
-      const holeTotal = posSum - zeroSet.size;
+      const holeTotal = posSum - zeroSet.size * zeroStablefordDeduction;
 
       teamHoleTotals[h] = holeTotal;
       boxedBlueByHole.set(h, blueSet);
@@ -367,7 +369,7 @@ export default function TeamRoundDetailPage() {
       boxedBlueByHole,
       zeroByHole,
     };
-  }, [players, roundPlayers, ptsByPlayerHole, teamRule.bestY]);
+  }, [players, roundPlayers, ptsByPlayerHole, teamRule.bestY, zeroStablefordDeduction]);
 
   const playerRoundStablefordTotals = useMemo(() => {
     const totals = new Map<string, number>();
@@ -466,7 +468,7 @@ export default function TeamRoundDetailPage() {
         const isZero = computed.zeroByHole.get(h)?.has(p.id) ?? false;
 
         if (isZero) {
-          sum -= 1;
+          sum -= zeroStablefordDeduction;
         } else if (isBlue || isQualifies) {
           sum += val;
         }
@@ -476,7 +478,15 @@ export default function TeamRoundDetailPage() {
     }
 
     return totals;
-  }, [players, roundPlayers, ptsByPlayerHole, computed.boxedBlueByHole, computed.zeroByHole, qualifiesByHole]);
+  }, [
+    players,
+    roundPlayers,
+    ptsByPlayerHole,
+    computed.boxedBlueByHole,
+    computed.zeroByHole,
+    qualifiesByHole,
+    zeroStablefordDeduction,
+  ]);
 
   if (loading) {
     return (
@@ -648,8 +658,8 @@ export default function TeamRoundDetailPage() {
         <div className="mt-3 text-xs text-gray-600">
           Rule: only the top {N} positive scores are counted (ties are resolved by table order). Blue boxes show exactly{" "}
           {N} counted positives (or fewer if fewer positives exist). Light-blue boxes show players who qualify for top {N}{" "}
-          scores by tying the cutoff value. Zeros are always boxed red and count as −1. Contribution is the sum of all
-          boxed blue + boxed light-blue scores minus 1 per red zero.
+          scores by tying the cutoff value. Zeros are always boxed red and count as −{zeroStablefordDeduction}. Contribution is the sum of all
+          boxed blue + boxed light-blue scores minus {zeroStablefordDeduction} per red zero.
         </div>
       </div>
     </div>
