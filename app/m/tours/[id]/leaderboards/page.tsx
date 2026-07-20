@@ -104,6 +104,18 @@ const SWING_IN_SPRING_BEST_N = 5;
 const SWING_IN_SPRING_REQUIRED_ROUND_NOS = [3, 7];
 const SWING_IN_SPRING_PAIRS_NINE_HOLE_ROUND_NO = 3;
 
+const VIETNAM_PRO_AM_TOUR_ID = "73a62983-3c35-48dc-9650-7d65ff169951";
+const VIETNAM_PRO_AM_INDIVIDUAL_PLAYER_IDS = new Set([
+  "37fef651-edf2-402c-8123-0b8b5ef266e0", // L Deagan
+  "da41f041-c0ac-49ba-b70a-30c0da49d880", // N Dastey
+  "9163c822-5198-449c-9979-470739fc16cf", // J Hooper
+  "8f651648-38bb-475e-a5f4-fad5337ea0b6", // R Lynch
+  "0d698224-50de-4ad5-82a3-e018a3d3d094", // G Beckett
+  "3b697230-9b3d-4872-a2c3-19235f17eac8", // S Montgomerie
+  "9048d4ca-8c6e-4ce6-a640-9c6f2537b33a", // M Griffin
+  "333ef3b0-067c-45bc-b82c-16dac6ff82cf", // A Hall
+]);
+
 // -----------------------------
 // Helpers
 // -----------------------------
@@ -851,8 +863,13 @@ export default function MobileLeaderboardsPage() {
       rows.push({ playerId: p.id, name: p.name, tourTotal, perRound, countedIds });
     }
 
-    rows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
-    return rows;
+    const filteredRows =
+      tourId === VIETNAM_PRO_AM_TOUR_ID
+        ? rows.filter((row) => VIETNAM_PRO_AM_INDIVIDUAL_PLAYER_IDS.has(row.playerId))
+        : rows;
+
+    filteredRows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
+    return filteredRows;
   }, [
     players,
     sortedRounds,
@@ -863,6 +880,7 @@ export default function MobileLeaderboardsPage() {
     individualRule,
     finalRoundId,
     isSwingInSpringTour,
+    tourId,
   ]);
 
   const femaleIndividualRows = useMemo(() => {
