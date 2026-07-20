@@ -6,6 +6,8 @@ import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { getZeroStablefordDeduction } from "@/lib/teamScoring";
 
+const VIETNAM_PRO_AM_TOUR_ID = "73a62983-3c35-48dc-9650-7d65ff169951";
+
 /* ---------------- Types ---------------- */
 
 type Tee = "M" | "F";
