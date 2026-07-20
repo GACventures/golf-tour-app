@@ -57,6 +57,9 @@ const KIWI_MADNESS_HERO = "/tours/golf-hero-celebration.webp";
 const NZ_TOUR_2026_ID = "5a80b049-396f-46ec-965e-810e738471b6";
 const NZ_TOUR_2026_HERO = "/tours/NZ26-logo.webp";
 
+const VIETNAM_PRO_AM_TOUR_ID = "73a62983-3c35-48dc-9650-7d65ff169951";
+const VIETNAM_PRO_AM_HERO = "/tours/vietnamproam.png";
+
 // Only this tour has PDFs for now
 const PDF_TOUR_ID = NZ_TOUR_2026_ID;
 const NOT_AVAILABLE_MESSAGE = "Document not available for this tour.";
@@ -326,17 +329,18 @@ export default function MobileTourLandingPage() {
     };
   }, [tourId]);
 
-  const heroImage = useMemo(() => {
-    if (tourId === SPACE_TOUR_ID) return SPACE_TOUR_HERO;
-    if (tourId === SUND_TOUR_ID) return SUND_TOUR_HERO;
-    if (tourId === HDT5_TOUR_ID) return HDT5_HERO;
-    if (tourId === NZ_TOUR_2026_ID) return NZ_TOUR_2026_HERO;
-    if (tourId === SCOTLAND_TOUR_ID) return SCOTLAND_HERO;
-    if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
-    if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
-    if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
-    return tour?.image_url?.trim() || DEFAULT_HERO;
-  }, [tourId, tour?.image_url, tour?.name]);
+const heroImage = useMemo(() => {
+  if (tourId === SPACE_TOUR_ID) return SPACE_TOUR_HERO;
+  if (tourId === SUND_TOUR_ID) return SUND_TOUR_HERO;
+  if (tourId === HDT5_TOUR_ID) return HDT5_HERO;
+  if (tourId === NZ_TOUR_2026_ID) return NZ_TOUR_2026_HERO;
+  if (tourId === VIETNAM_PRO_AM_TOUR_ID) return VIETNAM_PRO_AM_HERO;
+  if (tourId === SCOTLAND_TOUR_ID) return SCOTLAND_HERO;
+  if ((tour?.name ?? "").trim() === KIWI_MADNESS_TOUR_NAME) return KIWI_MADNESS_HERO;
+  if (tourId === PORTUGAL_TOUR_ID) return PORTUGAL_HERO;
+  if (tourId === JAPAN_TOUR_ID) return JAPAN_HERO;
+  return tour?.image_url?.trim() || DEFAULT_HERO;
+}, [tourId, tour?.image_url, tour?.name]);
 
   const derivedDates = useMemo(() => {
     const played = rounds.map((r) => r.played_on).filter(Boolean) as string[];
