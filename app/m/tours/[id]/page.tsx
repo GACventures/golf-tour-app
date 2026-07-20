@@ -882,6 +882,34 @@ const heroImage = useMemo(() => {
     [matchplayIsActive, router, showToast]
   );
 
+  const goScoreEntry = useCallback(() => {
+    const path = `/m/tours/${tourId}/rounds?mode=score`;
+
+    if (tourId !== VIETNAM_PRO_AM_TOUR_ID) {
+      router.push(path);
+      return;
+    }
+
+    const sessionKey = `score-entry-access:${tourId}`;
+
+    if (window.sessionStorage.getItem(sessionKey) === "granted") {
+      router.push(path);
+      return;
+    }
+
+    const enteredCode = window.prompt("Enter passcode");
+
+    if (enteredCode === null) return;
+
+    if (enteredCode.trim() !== "9565") {
+      showToast("Incorrect passcode");
+      return;
+    }
+
+    window.sessionStorage.setItem(sessionKey, "granted");
+    router.push(path);
+  }, [router, showToast, tourId]);
+
   const goProtected = useCallback(
     (buttonKey: string, path: string) => {
       if (resultsHidden) {
@@ -958,7 +986,7 @@ const heroImage = useMemo(() => {
 
           <TileButton
             className={`${baseBtn} ${rowColors[0]}`}
-            onClick={() => router.push(`/m/tours/${tourId}/rounds?mode=score`)}
+            onClick={goScoreEntry}
             deniedKey={deniedButtonKey}
             showDenied={showDenied}
           >
