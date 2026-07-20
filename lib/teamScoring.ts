@@ -13,6 +13,9 @@ const DEFAULT_ZERO_STABLEFORD_DEDUCTION = 1.0;
 const ZERO_STABLEFORD_DEDUCTION_BY_TOUR: Record<string, number> = {
   // HDT5
   "3cdeb1ea-381e-41e0-8b91-aaadb5a4d0c3": 0.5,
+
+  // Vietnam Pro-Am
+  "73a62983-3c35-48dc-9650-7d65ff169951": 0.0,
 };
 
 export function getZeroStablefordDeduction(tourId: string): number {
