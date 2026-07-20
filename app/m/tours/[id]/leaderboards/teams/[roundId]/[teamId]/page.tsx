@@ -656,10 +656,20 @@ export default function TeamRoundDetailPage() {
         </div>
 
         <div className="mt-3 text-xs text-gray-600">
-          Rule: only the top {N} positive scores are counted (ties are resolved by table order). Blue boxes show exactly{" "}
-          {N} counted positives (or fewer if fewer positives exist). Light-blue boxes show players who qualify for top {N}{" "}
-          scores by tying the cutoff value. Zeros are always boxed red and count as −{zeroStablefordDeduction}. Contribution is the sum of all
-          boxed blue + boxed light-blue scores minus {zeroStablefordDeduction} per red zero.
+          {tourId === VIETNAM_PRO_AM_TOUR_ID ? (
+            <>
+              Rule: only the top {N} positive scores are counted (ties are resolved by table order). Blue boxes show exactly{" "}
+              {N} counted positives (or fewer if fewer positives exist). Light-blue boxes show players who qualify for top {N}{" "}
+              scores by tying the cutoff value.
+            </>
+          ) : (
+            <>
+              Rule: only the top {N} positive scores are counted (ties are resolved by table order). Blue boxes show exactly{" "}
+              {N} counted positives (or fewer if fewer positives exist). Light-blue boxes show players who qualify for top {N}{" "}
+              scores by tying the cutoff value. Zeros are always boxed red and count as −{zeroStablefordDeduction}. Contribution is the sum of all
+              boxed blue + boxed light-blue scores minus {zeroStablefordDeduction} per red zero.
+            </>
+          )}
         </div>
       </div>
     </div>
