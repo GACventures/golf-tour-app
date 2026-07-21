@@ -1,40 +1,40 @@
+// app/m/tours/[id]/leaderboards/page.tsx
+// PRODUCTION
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
-import { supabase } from "@/lib/supabaseClient";
 import MobileNav from "../_components/MobileNav";
+import { supabase } from "@/lib/supabaseClient";
+import { getZeroStablefordDeduction } from "@/lib/teamScoring";
 
-import { competitionCatalog } from "@/lib/competitions/catalog";
-import { runCompetition } from "@/lib/competitions/engine";
-import type { CompetitionDefinition, CompetitionContext } from "@/lib/competitions/types";
-
-import {
-  buildTourCompetitionContext,
-  type Tee,
-  type TourRoundLite,
-  type PlayerLiteForTour,
-  type RoundPlayerLiteForTour,
-  type ScoreLiteForTour,
-  type ParLiteForTour,
-} from "@/lib/competitions/buildTourCompetitionContext";
-
-import { computeH2ZForPlayer, type H2ZLeg } from "@/lib/competitions/h2z";
+// -----------------------------
+// Types
+// -----------------------------
+type Tee = "M" | "F";
+type LeaderboardKind = "individual" | "pairs" | "teams";
 
 type Tour = { id: string; name: string };
+
+type CourseRel = { name: string };
 
 type RoundRow = {
   id: string;
   tour_id: string;
   name: string | null;
   round_no: number | null;
-  created_at: string | null;
-  course_id: string | null;
-};
 
-type CourseRow = { id: string; name: string | null };
+  // Date fields (may not exist in schema yet)
+  round_date?: string | null;
+  played_on?: string | null;
+
+  created_at: string | null;
+
+  course_id: string | null;
+  courses?: CourseRel | CourseRel[] | null;
+};
 
 type PlayerRow = {
   id: string;
@@ -65,23 +65,47 @@ type ParRow = {
   stroke_index: number;
 };
 
-type H2ZLegRow = {
+type IndividualRule = { mode: "ALL" } | { mode: "BEST_N"; n: number; finalRequired: boolean };
+
+type PairRule = { mode: "ALL" } | { mode: "BEST_Q"; q: number; finalRequired: boolean };
+
+type TeamRule = { bestY: number };
+
+type TourGroupingSettingsRow = {
   tour_id: string;
-  leg_no: number;
-  start_round_no: number;
-  end_round_no: number;
+  default_team_best_m: number | null;
+  individual_mode: string;
+  individual_best_n: number | null;
+  individual_final_required: boolean;
+  pair_mode: string;
+  pair_best_q: number | null;
+  pair_final_required: boolean;
 };
 
-type BotBSettingsRow = {
+type TourGroupRow = {
+  id: string;
   tour_id: string;
-  enabled: boolean;
-  round_nos: number[];
-  custom_name: string | null;
+  scope: "tour" | "round";
+  type: "pair" | "team";
+  name: string | null;
+  round_id: string | null;
+  team_index?: number | null;
+  created_at: string;
 };
+
+type TourGroupMemberRow = {
+  group_id: string;
+  player_id: string;
+  position: number | null;
+};
+
+const SWING_IN_SPRING_TOUR_ID = "a2d8ba33-e0e8-48a6-aff4-37a71bf29988";
+const SWING_IN_SPRING_BEST_N = 5;
+const SWING_IN_SPRING_REQUIRED_ROUND_NOS = [3, 7];
+const SWING_IN_SPRING_PAIRS_NINE_HOLE_ROUND_NO = 3;
 
 const VIETNAM_PRO_AM_TOUR_ID = "73a62983-3c35-48dc-9650-7d65ff169951";
-
-const VIETNAM_PRO_AM_PROFESSIONAL_PLAYER_IDS = new Set([
+const VIETNAM_PRO_AM_INDIVIDUAL_PLAYER_IDS = new Set([
   "37fef651-edf2-402c-8123-0b8b5ef266e0", // L Deagan
   "da41f041-c0ac-49ba-b70a-30c0da49d880", // N Dastey
   "9163c822-5198-449c-9979-470739fc16cf", // J Hooper
@@ -92,6 +116,9 @@ const VIETNAM_PRO_AM_PROFESSIONAL_PLAYER_IDS = new Set([
   "333ef3b0-067c-45bc-b82c-16dac6ff82cf", // A Hall
 ]);
 
+// -----------------------------
+// Helpers
+// -----------------------------
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
@@ -106,158 +133,201 @@ function normalizeTee(v: any): Tee {
   return s === "F" ? "F" : "M";
 }
 
-function normalizeBotbName(v: any): string {
-  const s = String(v ?? "").trim();
-  return s || "Best of the Best";
+function asSingle<T>(v: T | T[] | null | undefined): T | null {
+  if (!v) return null;
+  return Array.isArray(v) ? v[0] ?? null : v;
 }
 
-function fmt2(x: number) {
-  if (!Number.isFinite(x)) return "0.00";
-  return x.toFixed(2);
+function roundLabel(round: RoundRow, index: number, isFinal: boolean) {
+  const n = round.round_no ?? index + 1;
+  return isFinal ? `R${n} (F)` : `R${n}`;
 }
 
-function fmtPct0(x: number) {
-  if (!Number.isFinite(x)) return "0.0%";
-  return `${x.toFixed(1)}%`;
+function normalizeRawScore(strokes: number | null, pickup?: boolean | null) {
+  if (pickup) return "P";
+  if (strokes === null || strokes === undefined) return "";
+  const n = Number(strokes);
+  return Number.isFinite(n) ? String(n) : "";
 }
 
-function rankWithTies(entries: Array<{ id: string; value: number }>, lowerIsBetter: boolean) {
-  const sorted = [...entries].sort((a, b) => {
-    const av = Number.isFinite(a.value) ? a.value : 0;
-    const bv = Number.isFinite(b.value) ? b.value : 0;
-    if (av === bv) return a.id.localeCompare(b.id);
-    return lowerIsBetter ? av - bv : bv - av;
-  });
+function isMissingColumnError(msg: string, column: string) {
+  const m = String(msg ?? "").toLowerCase();
+  const c = column.toLowerCase();
+  return m.includes("does not exist") && (m.includes(`.${c}`) || m.includes(`"${c}"`) || m.includes(` ${c} `));
+}
 
-  const rankById = new Map<string, number>();
-  let currentRank = 0;
-  let lastValue: number | null = null;
-  let seen = 0;
+function pickBestRoundDateISO(r: RoundRow): string | null {
+  return (r.round_date ?? null) || (r.played_on ?? null) || (r.created_at ?? null) || null;
+}
 
-  for (const e of sorted) {
-    seen += 1;
-    const v = Number.isFinite(e.value) ? e.value : 0;
+function parseDateForDisplay(s: string | null | undefined): Date | null {
+  if (!s) return null;
+  const raw = String(s).trim();
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+  const iso = isDateOnly ? `${raw}T00:00:00.000Z` : raw;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
-    if (lastValue === null || v !== lastValue) {
-      currentRank = seen;
-      lastValue = v;
-    }
-    rankById.set(e.id, currentRank);
+function formatDateAuMelbourne(iso: string | null | undefined) {
+  const d = parseDateForDisplay(iso);
+  if (!d) return "";
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).formatToParts(d);
+
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`.replace(/\s+/g, " ");
+}
+
+function clampInt(n: number, min: number, max: number) {
+  const x = Math.floor(Number(n));
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
+// Stableford (net) per hole
+function netStablefordPointsForHole(params: {
+  rawScore: string; // "" | "P" | "number"
+  par: number;
+  strokeIndex: number;
+  playingHandicap: number;
+}) {
+  const { rawScore, par, strokeIndex, playingHandicap } = params;
+
+  const raw = String(rawScore ?? "").trim().toUpperCase();
+  if (!raw) return 0;
+  if (raw === "P") return 0;
+
+  const strokes = Number(raw);
+  if (!Number.isFinite(strokes)) return 0;
+
+  const hcp = Math.max(0, Math.floor(Number(playingHandicap) || 0));
+  const base = Math.floor(hcp / 18);
+  const rem = hcp % 18;
+  const extra = strokeIndex <= rem ? 1 : 0;
+  const shotsReceived = base + extra;
+
+  const net = strokes - shotsReceived;
+  const pts = 2 + (par - net);
+  return Math.max(0, Math.min(pts, 10));
+}
+
+// Pick BEST N/Q rounds for a row, optionally forcing the final round to count.
+function pickBestRoundIds(args: {
+  sortedRoundIds: string[];
+  perRoundTotals: Record<string, number>;
+  n: number;
+  finalRoundId: string | null;
+  finalRequired: boolean;
+}) {
+  const { sortedRoundIds, perRoundTotals, n, finalRoundId, finalRequired } = args;
+
+  const N = clampInt(n, 1, 99);
+  const chosen = new Set<string>();
+
+  const mustIncludeFinal = !!finalRequired && !!finalRoundId;
+  if (mustIncludeFinal && finalRoundId) chosen.add(finalRoundId);
+
+  const ranked = sortedRoundIds.map((rid, idx) => ({
+    rid,
+    idx,
+    val: Number.isFinite(Number(perRoundTotals[rid])) ? Number(perRoundTotals[rid]) : 0,
+  }));
+
+  ranked.sort((a, b) => b.val - a.val || a.idx - b.idx);
+
+  for (const r of ranked) {
+    if (chosen.size >= N) break;
+    if (mustIncludeFinal && r.rid === finalRoundId) continue;
+    chosen.add(r.rid);
   }
 
-  return rankById;
+  return chosen;
 }
 
-type FixedCompKey =
-  | "napoleon"
-  | "bigGeorge"
-  | "grandCanyon"
-  | "wizard"
-  | "bagelMan"
-  | "eclectic"
-  | "schumacher"
-  | "closer"
-  | "hotStreak"
-  | "coldStreak";
+// Pick BEST N rounds while always including specific round numbers where those rounds exist.
+function pickBestRoundIdsWithRequiredRoundNos(args: {
+  sortedRounds: RoundRow[];
+  perRoundTotals: Record<string, number>;
+  n: number;
+  requiredRoundNos: number[];
+}) {
+  const { sortedRounds, perRoundTotals, n, requiredRoundNos } = args;
 
-type FixedCompMeta = {
-  key: FixedCompKey;
-  label: string;
-  competitionId: string;
-  lowerIsBetter?: boolean;
-  format: (v: number) => string;
-  detailFromStatsKey?: string;
-  tappable?: boolean;
-};
+  const N = clampInt(n, 1, 99);
+  const required = new Set(requiredRoundNos.map((x) => Number(x)).filter((x) => Number.isFinite(x)));
+  const chosen = new Set<string>();
 
-type MatrixCell = {
-  value: number | null;
-  rank: number | null;
-  detail?: string | null;
-};
+  sortedRounds.forEach((r, idx) => {
+    const roundNo = Number.isFinite(Number(r.round_no)) ? Number(r.round_no) : idx + 1;
+    if (required.has(roundNo)) chosen.add(r.id);
+  });
 
-type H2ZCell = {
-  final: number | null;
-  rank: number | null;
-  best: number | null;
-  bestLen: number | null;
-};
+  const ranked = sortedRounds.map((r, idx) => ({
+    rid: r.id,
+    idx,
+    val: Number.isFinite(Number(perRoundTotals[r.id])) ? Number(perRoundTotals[r.id]) : 0,
+  }));
 
-type BotBCell = { total: number | null; rank: number | null };
+  ranked.sort((a, b) => b.val - a.val || a.idx - b.idx);
 
-function h2zHeading(leg: H2ZLeg) {
-  return `H2Z: R${leg.start_round_no}–R${leg.end_round_no}`;
+  for (const r of ranked) {
+    if (chosen.size >= N) break;
+    if (chosen.has(r.rid)) continue;
+    chosen.add(r.rid);
+  }
+
+  return chosen;
 }
 
-function asInt(v: any, fallback = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.floor(n) : fallback;
-}
-
-export default function MobileCompetitionsPage() {
+// -----------------------------
+// Page
+// -----------------------------
+export default function MobileLeaderboardsPage() {
   const params = useParams<{ id?: string }>();
+  const router = useRouter();
+
   const tourId = String(params?.id ?? "").trim();
+  const zeroStablefordDeduction = getZeroStablefordDeduction(tourId);
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
   const [tour, setTour] = useState<Tour | null>(null);
   const [rounds, setRounds] = useState<RoundRow[]>([]);
-  const [coursesById, setCoursesById] = useState<Record<string, string>>({});
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [roundPlayers, setRoundPlayers] = useState<RoundPlayerRow[]>([]);
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [pars, setPars] = useState<ParRow[]>([]);
-  const [h2zLegs, setH2zLegs] = useState<H2ZLegRow[]>([]);
 
-  const [botb, setBotb] = useState<BotBSettingsRow | null>(null);
+  // Pairs + Teams (tour scope)
+  const [pairGroups, setPairGroups] = useState<TourGroupRow[]>([]);
+  const [pairMembers, setPairMembers] = useState<TourGroupMemberRow[]>([]);
+  const [teamGroups, setTeamGroups] = useState<TourGroupRow[]>([]);
+  const [teamMembers, setTeamMembers] = useState<TourGroupMemberRow[]>([]);
 
-  const [openDetail, setOpenDetail] = useState<
-    | { kind: "fixed"; playerId: string; key: FixedCompKey }
-    | { kind: "h2z"; playerId: string; legNo: number }
-    | null
-  >(null);
+  // UI selection
+  const [kind, setKind] = useState<LeaderboardKind>("individual");
 
-  const fixedComps: FixedCompMeta[] = useMemo(
-    () => [
-      { key: "napoleon", label: "Napoleon", competitionId: "tour_napoleon_par3_avg", format: (v) => fmt2(v) },
-      { key: "bigGeorge", label: "Big George", competitionId: "tour_big_george_par4_avg", format: (v) => fmt2(v) },
-      { key: "grandCanyon", label: "Grand Canyon", competitionId: "tour_grand_canyon_par5_avg", format: (v) => fmt2(v) },
-      { key: "wizard", label: "Wizard", competitionId: "tour_wizard_four_plus_pct", format: (v) => fmtPct0(v) },
-      {
-        key: "bagelMan",
-        label: "Bagel Man",
-        competitionId: "tour_bagel_man_zero_pct",
-        format: (v) => fmtPct0(v),
-      },
-      {
-        key: "eclectic",
-        label: "Eclectic",
-        competitionId: "tour_eclectic_total",
-        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
-      },
-      { key: "schumacher", label: "Schumacher", competitionId: "tour_schumacher_first3_avg", format: (v) => fmt2(v) },
-      { key: "closer", label: "Closer", competitionId: "tour_closer_last3_avg", format: (v) => fmt2(v) },
-      {
-        key: "hotStreak",
-        label: "Hot Streak",
-        competitionId: "tour_hot_streak_best_run",
-        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
-        tappable: true,
-        detailFromStatsKey: "streak_where",
-      },
-      {
-        key: "coldStreak",
-        label: "Cold Streak",
-        competitionId: "tour_cold_streak_best_run",
-        format: (v) => String(Math.round(Number.isFinite(v) ? v : 0)),
-        tappable: true,
-        detailFromStatsKey: "streak_where",
-      },
-    ],
-    []
-  );
+  // ✅ separate genders toggle (individual only)
+  const [separateGender, setSeparateGender] = useState(false);
 
+  // ✅ diagnostics toggle (kept for future use, UI removed)
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+
+  // Rules (mobile read-only, loaded from DB)
+  const [individualRule, setIndividualRule] = useState<IndividualRule>({ mode: "ALL" });
+  const [pairRule, setPairRule] = useState<PairRule>({ mode: "ALL" });
+  const [teamRule, setTeamRule] = useState<TeamRule>({ bestY: 1 });
+
+  // -----------------------------
+  // Load
+  // -----------------------------
   useEffect(() => {
     if (!tourId || !isLikelyUuid(tourId)) return;
 
@@ -273,56 +343,103 @@ export default function MobileCompetitionsPage() {
         if (!alive) return;
         setTour(tData as Tour);
 
+        // Settings
+        const { data: sData, error: sErr } = await supabase
+          .from("tour_grouping_settings")
+          .select(
+            "tour_id, default_team_best_m, individual_mode, individual_best_n, individual_final_required, pair_mode, pair_best_q, pair_final_required"
+          )
+          .eq("tour_id", tourId)
+          .maybeSingle();
+        if (sErr) throw sErr;
+
+        const settings = (sData ?? null) as TourGroupingSettingsRow | null;
+
+        // Individual rule
         {
-          const { data: bData, error: bErr } = await supabase
-            .from("tour_botb_settings")
-            .select("tour_id,enabled,round_nos,custom_name")
-            .eq("tour_id", tourId)
-            .maybeSingle();
+          const mode = String(settings?.individual_mode ?? "ALL").toUpperCase();
+          const finalRequired = settings?.individual_final_required === true;
+          const n = Number.isFinite(Number(settings?.individual_best_n)) ? Number(settings?.individual_best_n) : 0;
 
-          if (bErr) throw bErr;
-          if (!alive) return;
-
-          if (bData) {
-            const row = bData as any;
-            const round_nos = Array.isArray(row.round_nos)
-              ? row.round_nos.map((x: any) => asInt(x, 0)).filter((n: number) => n > 0)
-              : [];
-            setBotb({
-              tour_id: String(row.tour_id),
-              enabled: row.enabled === true,
-              round_nos,
-              custom_name: row.custom_name == null ? null : String(row.custom_name),
-            });
+          if (mode === "BEST_N" && n > 0) {
+            setIndividualRule({ mode: "BEST_N", n: clampInt(n, 1, 99), finalRequired });
           } else {
-            setBotb(null);
+            setIndividualRule({ mode: "ALL" });
           }
         }
 
-        const { data: rData, error: rErr } = await supabase
+        // Pair rule
+        {
+          const mode = String(settings?.pair_mode ?? "ALL").toUpperCase();
+          const finalRequired = settings?.pair_final_required === true;
+          const q = Number.isFinite(Number(settings?.pair_best_q)) ? Number(settings?.pair_best_q) : 0;
+
+          if (mode === "BEST_Q" && q > 0) {
+            setPairRule({ mode: "BEST_Q", q: clampInt(q, 1, 99), finalRequired });
+          } else {
+            setPairRule({ mode: "ALL" });
+          }
+        }
+
+        // Team Y
+        {
+          const y = Number.isFinite(Number(settings?.default_team_best_m)) ? Number(settings?.default_team_best_m) : 1;
+          setTeamRule({ bestY: clampInt(y, 1, 99) });
+        }
+
+        // Rounds
+        const baseRoundCols = "id,tour_id,name,round_no,created_at,course_id,courses(name)";
+        const cols1 = `${baseRoundCols},round_date,played_on`;
+        const cols2 = `${baseRoundCols},played_on`;
+
+        let rr: RoundRow[] = [];
+
+        const r1 = await supabase
           .from("rounds")
-          .select("id,tour_id,name,round_no,created_at,course_id")
+          .select(cols1)
           .eq("tour_id", tourId)
           .order("round_no", { ascending: true, nullsFirst: false })
           .order("created_at", { ascending: true });
-        if (rErr) throw rErr;
 
-        const rr = (rData ?? []) as RoundRow[];
+        if (!alive) return;
+
+        if (!r1.error) {
+          rr = (r1.data ?? []) as unknown as RoundRow[];
+        } else if (isMissingColumnError(r1.error.message, "round_date")) {
+          const r2 = await supabase
+            .from("rounds")
+            .select(cols2)
+            .eq("tour_id", tourId)
+            .order("round_no", { ascending: true, nullsFirst: false })
+            .order("created_at", { ascending: true });
+
+          if (!alive) return;
+
+          if (!r2.error) {
+            rr = (r2.data ?? []) as unknown as RoundRow[];
+          } else if (isMissingColumnError(r2.error.message, "played_on")) {
+            const r3 = await supabase
+              .from("rounds")
+              .select(baseRoundCols)
+              .eq("tour_id", tourId)
+              .order("round_no", { ascending: true, nullsFirst: false })
+              .order("created_at", { ascending: true });
+
+            if (!alive) return;
+
+            if (r3.error) throw r3.error;
+            rr = (r3.data ?? []) as unknown as RoundRow[];
+          } else {
+            throw r2.error;
+          }
+        } else {
+          throw r1.error;
+        }
+
         if (!alive) return;
         setRounds(rr);
 
-        const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
-        if (courseIds.length) {
-          const { data: cData, error: cErr } = await supabase.from("courses").select("id,name").in("id", courseIds);
-          if (cErr) throw cErr;
-          if (!alive) return;
-          const map: Record<string, string> = {};
-          for (const c of (cData ?? []) as CourseRow[]) map[String(c.id)] = safeName(c.name, "(course)");
-          setCoursesById(map);
-        } else {
-          setCoursesById({});
-        }
-
+        // Players in tour
         const { data: tpData, error: tpErr } = await supabase
           .from("tour_players")
           .select("tour_id,player_id,starting_handicap,players(id,name,gender)")
@@ -345,6 +462,7 @@ export default function MobileCompetitionsPage() {
         const roundIds = rr.map((r) => r.id);
         const playerIds = ps.map((p) => p.id);
 
+        // round_players
         if (roundIds.length > 0 && playerIds.length > 0) {
           const { data: rpData, error: rpErr } = await supabase
             .from("round_players")
@@ -366,6 +484,7 @@ export default function MobileCompetitionsPage() {
           setRoundPlayers([]);
         }
 
+        // ✅ scores — one round at a time (avoids pagination + 1000-row issues)
         if (roundIds.length > 0 && playerIds.length > 0) {
           const allScores: ScoreRow[] = [];
 
@@ -379,7 +498,25 @@ export default function MobileCompetitionsPage() {
               .order("hole_number", { ascending: true });
 
             if (sErr) throw sErr;
-            allScores.push(...((sData ?? []) as ScoreRow[]));
+
+            const rows = (sData ?? []) as any[];
+
+            // Safety check: if you ever hit 1000 rows in ONE round, something is wrong.
+            if (rows.length >= 1000) {
+              throw new Error(
+                `Scores fetch for round ${String(r.id)} returned ${rows.length} rows (>= 1000). This suggests a query/limit issue.`
+              );
+            }
+
+            allScores.push(
+              ...rows.map((x) => ({
+                round_id: String(x.round_id),
+                player_id: String(x.player_id),
+                hole_number: Number(x.hole_number),
+                strokes: x.strokes === null || x.strokes === undefined ? null : Number(x.strokes),
+                pickup: x.pickup === true ? true : x.pickup === false ? false : (x.pickup ?? null),
+              }))
+            );
           }
 
           if (!alive) return;
@@ -388,6 +525,8 @@ export default function MobileCompetitionsPage() {
           setScores([]);
         }
 
+        // pars (both tees)
+        const courseIds = Array.from(new Set(rr.map((r) => r.course_id).filter(Boolean))) as string[];
         if (courseIds.length > 0) {
           const { data: pData, error: pErr } = await supabase
             .from("pars")
@@ -412,20 +551,67 @@ export default function MobileCompetitionsPage() {
           setPars([]);
         }
 
-        {
-          const { data: lData, error: lErr } = await supabase
-            .from("tour_h2z_legs")
-            .select("tour_id,leg_no,start_round_no,end_round_no")
-            .eq("tour_id", tourId)
-            .order("leg_no", { ascending: true });
+        // PAIRS groups
+        const { data: pgData, error: pgErr } = await supabase
+          .from("tour_groups")
+          .select("id,tour_id,scope,type,name,round_id,team_index,created_at")
+          .eq("tour_id", tourId)
+          .eq("scope", "tour")
+          .eq("type", "pair")
+          .order("created_at", { ascending: true });
+        if (pgErr) throw pgErr;
 
-          if (lErr) throw lErr;
+        const pGroups = (pgData ?? []) as TourGroupRow[];
+        if (!alive) return;
+        setPairGroups(pGroups);
+
+        const pGroupIds = pGroups.map((g) => g.id);
+        if (pGroupIds.length === 0) {
+          setPairMembers([]);
+        } else {
+          const { data: pmData, error: pmErr } = await supabase
+            .from("tour_group_members")
+            .select("group_id,player_id,position")
+            .in("group_id", pGroupIds)
+            .order("position", { ascending: true, nullsFirst: true });
+          if (pmErr) throw pmErr;
+
           if (!alive) return;
-          setH2zLegs((lData ?? []) as H2ZLegRow[]);
+          setPairMembers((pmData ?? []) as TourGroupMemberRow[]);
+        }
+
+        // TEAMS groups
+        const { data: tgData, error: tgErr } = await supabase
+          .from("tour_groups")
+          .select("id,tour_id,scope,type,name,round_id,team_index,created_at")
+          .eq("tour_id", tourId)
+          .eq("scope", "tour")
+          .eq("type", "team")
+          .order("team_index", { ascending: true, nullsFirst: true })
+          .order("created_at", { ascending: true });
+        if (tgErr) throw tgErr;
+
+        const tGroups = (tgData ?? []) as TourGroupRow[];
+        if (!alive) return;
+        setTeamGroups(tGroups);
+
+        const tGroupIds = tGroups.map((g) => g.id);
+        if (tGroupIds.length === 0) {
+          setTeamMembers([]);
+        } else {
+          const { data: tmData, error: tmErr } = await supabase
+            .from("tour_group_members")
+            .select("group_id,player_id,position")
+            .in("group_id", tGroupIds)
+            .order("position", { ascending: true, nullsFirst: true });
+          if (tmErr) throw tmErr;
+
+          if (!alive) return;
+          setTeamMembers((tmData ?? []) as TourGroupMemberRow[]);
         }
       } catch (e: any) {
         if (!alive) return;
-        setErrorMsg(e?.message ?? "Failed to load competitions.");
+        setErrorMsg(e?.message ?? "Failed to load leaderboards.");
       } finally {
         if (!alive) return;
         setLoading(false);
@@ -439,6 +625,38 @@ export default function MobileCompetitionsPage() {
     };
   }, [tourId]);
 
+  // -----------------------------
+  // Derived maps
+  // -----------------------------
+  const playerById = useMemo(() => {
+    const m = new Map<string, PlayerRow>();
+    for (const p of players) m.set(p.id, p);
+    return m;
+  }, [players]);
+
+  const rpByRoundPlayer = useMemo(() => {
+    const m = new Map<string, RoundPlayerRow>();
+    for (const rp of roundPlayers) m.set(`${rp.round_id}|${rp.player_id}`, rp);
+    return m;
+  }, [roundPlayers]);
+
+  const parsByCourseTeeHole = useMemo(() => {
+    const m = new Map<string, Map<Tee, Map<number, { par: number; si: number }>>>();
+    for (const p of pars) {
+      if (!m.has(p.course_id)) m.set(p.course_id, new Map());
+      const byTee = m.get(p.course_id)!;
+      if (!byTee.has(p.tee)) byTee.set(p.tee, new Map());
+      byTee.get(p.tee)!.set(p.hole_number, { par: p.par, si: p.stroke_index });
+    }
+    return m;
+  }, [pars]);
+
+  const scoreByRoundPlayerHole = useMemo(() => {
+    const m = new Map<string, ScoreRow>();
+    for (const s of scores) m.set(`${s.round_id}|${s.player_id}|${Number(s.hole_number)}`, s);
+    return m;
+  }, [scores]);
+
   const sortedRounds = useMemo(() => {
     const arr = [...rounds];
     arr.sort((a, b) => {
@@ -450,319 +668,542 @@ export default function MobileCompetitionsPage() {
     return arr;
   }, [rounds]);
 
-  const competitionPlayers = useMemo(() => {
-    if (tourId !== VIETNAM_PRO_AM_TOUR_ID) return players;
+  const finalRoundId = useMemo(() => {
+    return sortedRounds.length ? sortedRounds[sortedRounds.length - 1].id : "";
+  }, [sortedRounds]);
 
-    return players.filter((player) => !VIETNAM_PRO_AM_PROFESSIONAL_PLAYER_IDS.has(player.id));
-  }, [players, tourId]);
+  const sortedRoundIds = useMemo(() => sortedRounds.map((r) => r.id), [sortedRounds]);
 
-  const competitionPlayerIds = useMemo(
-    () => new Set(competitionPlayers.map((player) => player.id)),
-    [competitionPlayers]
-  );
+  const isSwingInSpringTour = tourId === SWING_IN_SPRING_TOUR_ID;
 
-  const ctx = useMemo(() => {
-    const roundsLite: TourRoundLite[] = sortedRounds.map((r) => ({
-  id: r.id,
-  tour_id: r.tour_id,
-  name: r.name,
-  round_no: r.round_no,
-  course_id: r.course_id,
-}));
-
-    const playersLite: PlayerLiteForTour[] = competitionPlayers.map((p) => ({
-      id: p.id,
-      name: p.name,
-      gender: p.gender ? normalizeTee(p.gender) : null,
-    }));
-
-    const rpLite: RoundPlayerLiteForTour[] = roundPlayers
-      .filter((rp) => competitionPlayerIds.has(rp.player_id))
-      .map((rp) => ({
-      round_id: rp.round_id,
-      player_id: rp.player_id,
-      playing: rp.playing === true,
-      playing_handicap: Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : null,
-    }));
-
-    const scoresLite: ScoreLiteForTour[] = scores
-      .filter((s) => competitionPlayerIds.has(s.player_id))
-      .map((s) => ({
-      round_id: s.round_id,
-      player_id: s.player_id,
-      hole_number: Number(s.hole_number),
-      strokes: s.strokes === null || s.strokes === undefined ? null : Number(s.strokes),
-      pickup: s.pickup === true,
-    }));
-
-    const parsLite: ParLiteForTour[] = pars.map((p) => ({
-      course_id: p.course_id,
-      hole_number: Number(p.hole_number),
-      tee: normalizeTee(p.tee),
-      par: Number(p.par),
-      stroke_index: Number(p.stroke_index),
-    }));
-
-    return buildTourCompetitionContext({
-      rounds: roundsLite,
-      players: playersLite,
-      roundPlayers: rpLite,
-      scores: scoresLite,
-      pars: parsLite,
-    });
-  }, [sortedRounds, competitionPlayers, competitionPlayerIds, roundPlayers, scores, pars]);
-
-  const compMatrix = useMemo(() => {
-    const out: Record<string, Record<FixedCompKey, MatrixCell>> = {};
-    for (const p of competitionPlayers) {
-      out[p.id] = {
-        napoleon: { value: null, rank: null },
-        bigGeorge: { value: null, rank: null },
-        grandCanyon: { value: null, rank: null },
-        wizard: { value: null, rank: null },
-        bagelMan: { value: null, rank: null },
-        eclectic: { value: null, rank: null },
-        schumacher: { value: null, rank: null },
-        closer: { value: null, rank: null },
-        hotStreak: { value: null, rank: null, detail: null },
-        coldStreak: { value: null, rank: null, detail: null },
-      };
+  // Pair/Team membership grouped (ordered)
+  const memberIdsByPair = useMemo(() => {
+    const m = new Map<string, string[]>();
+    const rows = [...pairMembers];
+    rows.sort((a, b) =>
+      a.group_id === b.group_id ? (a.position ?? 999) - (b.position ?? 999) : a.group_id.localeCompare(b.group_id)
+    );
+    for (const row of rows) {
+      if (!m.has(row.group_id)) m.set(row.group_id, []);
+      m.get(row.group_id)!.push(row.player_id);
     }
+    return m;
+  }, [pairMembers]);
 
-    for (const meta of fixedComps) {
-      const def = (competitionCatalog as CompetitionDefinition[]).find((c) => c.id === meta.competitionId);
-      if (!def) continue;
-
-      const result = runCompetition(def, ctx as unknown as CompetitionContext);
-      const rows = (result?.rows ?? []).filter((r: any) => !!r?.entryId);
-
-      const entries: Array<{ id: string; value: number }> = [];
-
-      for (const r of rows as any[]) {
-        const pid = String(r.entryId);
-        const v = Number(r.total);
-        if (!Number.isFinite(v)) continue;
-
-        entries.push({ id: pid, value: v });
-
-        if (out[pid]) {
-          out[pid][meta.key].value = v;
-
-          if (meta.detailFromStatsKey) {
-            const detail = String((r as any)?.stats?.[meta.detailFromStatsKey] ?? "").trim();
-            out[pid][meta.key].detail = detail || null;
-          }
-        }
-      }
-
-      const rankById = rankWithTies(entries, !!meta.lowerIsBetter);
-      for (const pid of Object.keys(out)) {
-        const rk = rankById.get(pid);
-        out[pid][meta.key].rank = typeof rk === "number" ? rk : null;
-      }
+  const memberIdsByTeam = useMemo(() => {
+    const m = new Map<string, string[]>();
+    const rows = [...teamMembers];
+    rows.sort((a, b) =>
+      a.group_id === b.group_id ? (a.position ?? 999) - (b.position ?? 999) : a.group_id.localeCompare(b.group_id)
+    );
+    for (const row of rows) {
+      if (!m.has(row.group_id)) m.set(row.group_id, []);
+      m.get(row.group_id)!.push(row.player_id);
     }
+    return m;
+  }, [teamMembers]);
 
-    return out;
-  }, [competitionPlayers, fixedComps, ctx]);
-
-  const h2zLegsNorm: H2ZLeg[] = useMemo(() => {
-    return (h2zLegs ?? [])
-      .map((l) => ({
-        leg_no: Number(l.leg_no),
-        start_round_no: Number(l.start_round_no),
-        end_round_no: Number(l.end_round_no),
-      }))
-      .filter((l) => Number.isFinite(l.leg_no) && Number.isFinite(l.start_round_no) && Number.isFinite(l.end_round_no))
-      .filter((l) => l.leg_no >= 1 && l.end_round_no >= l.start_round_no)
-      .sort((a, b) => a.leg_no - b.leg_no);
-  }, [h2zLegs]);
-
-  const h2zMatrix = useMemo(() => {
-    const playingSet = new Set<string>();
-    for (const rp of roundPlayers) {
-      if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
-    }
-    const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
-
-    const roundsInOrder = sortedRounds.map((r) => ({ roundId: r.id, round_no: r.round_no }));
-
-    const perPlayer: Record<string, Record<number, H2ZCell>> = {};
-    for (const p of players) perPlayer[p.id] = {};
-
-    for (const p of competitionPlayers) {
-      const res = computeH2ZForPlayer({
-        ctx: ctx as any,
-        legs: h2zLegsNorm,
-        roundsInOrder,
-        isPlayingInRound,
-        playerId: p.id,
-      });
-
-      for (const leg of h2zLegsNorm) {
-        const r = res[leg.leg_no];
-        perPlayer[p.id][leg.leg_no] = {
-          final: r ? r.finalScore : null,
-          rank: null,
-          best: r ? r.bestScore : null,
-          bestLen: r ? r.bestLen : null,
-        };
-      }
-    }
-
-    for (const leg of h2zLegsNorm) {
-      const entries = competitionPlayers.map((p) => ({
-        id: p.id,
-        value: Number(perPlayer[p.id]?.[leg.leg_no]?.final ?? 0),
-      }));
-
-      const rankById = rankWithTies(entries, false);
-      for (const p of competitionPlayers) {
-        const rk = rankById.get(p.id);
-        if (perPlayer[p.id]?.[leg.leg_no]) perPlayer[p.id][leg.leg_no].rank = typeof rk === "number" ? rk : null;
-      }
-    }
-
-    return perPlayer;
-  }, [competitionPlayers, sortedRounds, roundPlayers, ctx, h2zLegsNorm]);
-
-  const botbRoundNos = useMemo(() => {
-    if (!botb?.enabled) return [];
-    const nums = (botb.round_nos ?? []).map((n) => asInt(n, 0)).filter((n) => n > 0);
-    nums.sort((a, b) => a - b);
-    return Array.from(new Set(nums));
-  }, [botb]);
-
-  const botbDisplayName = useMemo(() => normalizeBotbName(botb?.custom_name), [botb]);
-
-  const botbRounds = useMemo(() => {
-    if (!botbRoundNos.length) return [];
-    return sortedRounds.filter((r) => r.round_no != null && botbRoundNos.includes(Number(r.round_no)));
-  }, [sortedRounds, botbRoundNos]);
-
-  const botbMatrix: Record<string, BotBCell> = useMemo(() => {
-    const out: Record<string, BotBCell> = {};
-    for (const p of competitionPlayers) out[p.id] = { total: null, rank: null };
-
-    if (!botb?.enabled || botbRounds.length === 0 || competitionPlayers.length === 0) return out;
-
-    const playingSet = new Set<string>();
-    for (const rp of roundPlayers) if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
-    const isPlayingInRound = (roundId: string, playerId: string) => playingSet.has(`${roundId}|${playerId}`);
-
-    const roundsCtx = (ctx as any)?.rounds;
-    const getRoundCtx = (roundId: string) => {
-      if (!Array.isArray(roundsCtx)) return null;
-      return roundsCtx.find((x: any) => String(x?.roundId) === String(roundId)) ?? null;
-    };
-
-    const entries: Array<{ id: string; value: number }> = [];
-
-    for (const p of competitionPlayers) {
-      let sum = 0;
-      let any = false;
-
-      for (const r of botbRounds) {
-        if (!isPlayingInRound(r.id, p.id)) continue;
-
-        const rc = getRoundCtx(r.id);
-        if (!rc || typeof rc.netPointsForHole !== "function") continue;
-
-        let roundTotal = 0;
-        for (let i = 0; i < 18; i++) {
-          const pts = Number(rc.netPointsForHole(p.id, i));
-          if (Number.isFinite(pts)) roundTotal += pts;
-        }
-
-        sum += roundTotal;
-        any = true;
-      }
-
-      if (any) {
-        out[p.id].total = sum;
-        entries.push({ id: p.id, value: sum });
-      } else {
-        out[p.id].total = null;
-      }
-    }
-
-    const rankById = rankWithTies(entries, false);
-    for (const p of competitionPlayers) {
-      const rk = rankById.get(p.id);
-      out[p.id].rank = typeof rk === "number" ? rk : null;
-    }
-
-    return out;
-  }, [botb, botbRounds, competitionPlayers, roundPlayers, ctx]);
-
-  const botbRoundsLabel = useMemo(() => {
-    if (!botb?.enabled) return "";
-    if (!botbRoundNos.length || botbRounds.length === 0) return "(no rounds selected)";
-    const parts = botbRounds.map((r) => {
-      const rn = r.round_no ?? "?";
-      const cname = r.course_id ? (coursesById[r.course_id] ?? "(course)") : "(course)";
-      return `R${rn} — ${cname}`;
-    });
-    return parts.join(" · ");
-  }, [botb, botbRoundNos, botbRounds, coursesById]);
-
-  const botbRoundsLabelDefinition = useMemo(() => {
-    if (!botb?.enabled) return "";
-    if (!botbRoundNos.length || botbRounds.length === 0) return "(no rounds selected)";
-    const parts = botbRounds.map((r) => {
-      const rn = r.round_no ?? "?";
-      const cname = r.course_id ? (coursesById[r.course_id] ?? "(course)") : "(course)";
-      return `Round ${rn} — ${cname}`;
-    });
-    return parts.join(" · ");
-  }, [botb, botbRoundNos, botbRounds, coursesById]);
-
-  const showBotbColumn = botb?.enabled === true && botbRoundNos.length > 0;
-
-  const definitions = useMemo(() => {
-    const base = [
-      { label: "Napoleon", text: "Average Stableford points on Par 3 holes" },
-      { label: "Big George", text: "Average Stableford points on Par 4 holes" },
-      { label: "Grand Canyon", text: "Average Stableford points on Par 5 holes" },
-      { label: "Wizard", text: "Percentage of holes where Stableford points are 4+" },
-      { label: "Bagel Man", text: "Percentage of holes where Stableford points are 0" },
-      { label: "Eclectic", text: "Total of each player’s best Stableford points per hole" },
-      { label: "Schumacher", text: "Average Stableford points on holes 1–3" },
-      { label: "Closer", text: "Average Stableford points on holes 16–18" },
-      { label: "Hot Streak", text: "Longest run in any round of consecutive holes where gross strokes is par or better" },
-      { label: "Cold Streak", text: "Longest run in any round of consecutive holes where gross strokes is bogey or worse" },
-      {
-        label: "H2Z",
-        text: "Cumulative Stableford score on Par 3 holes, but reset to zero whenever zero points scored on a hole",
-      },
-    ];
-
-    if (showBotbColumn) {
-      base.push({
-        label: botbDisplayName,
-        text: `Aggregate Stableford on ${botbRoundsLabelDefinition || "(selected rounds)"}.`,
-      });
-    }
-
-    return base;
-  }, [botbDisplayName, botbRoundsLabelDefinition, showBotbColumn]);
-
-  function toggleFixedDetail(playerId: string, key: FixedCompKey) {
-    setOpenDetail((prev) => {
-      if (prev?.kind === "fixed" && prev.playerId === playerId && prev.key === key) return null;
-      return { kind: "fixed", playerId, key };
-    });
+  function pairDisplayName(groupId: string) {
+    const ids = memberIdsByPair.get(groupId) ?? [];
+    if (!ids.length) return "—";
+    return ids.map((pid) => playerById.get(pid)?.name ?? pid).join(" / ");
   }
 
-  function toggleH2ZDetail(playerId: string, legNo: number) {
-    setOpenDetail((prev) => {
-      if (prev?.kind === "h2z" && prev.playerId === playerId && prev.legNo === legNo) return null;
-      return { kind: "h2z", playerId, legNo };
+  const teamLabelById = useMemo(() => {
+    const m = new Map<string, { title: string; members: string }>();
+
+    teamGroups.forEach((g, idx) => {
+      const ids = memberIdsByTeam.get(g.id) ?? [];
+      const members = ids.map((pid) => playerById.get(pid)?.name ?? pid).join(", ");
+
+      const nm = (g.name ?? "").trim();
+      const hasIdx = Number.isFinite(Number(g.team_index));
+      const title = nm ? nm : hasIdx ? `Team ${Number(g.team_index)}` : `Team ${idx + 1}`;
+
+      m.set(g.id, { title, members });
     });
+
+    return m;
+  }, [teamGroups, memberIdsByTeam, playerById]);
+
+  // ✅ Diagnostics computation kept (not rendered)
+  const diagnosticsRows = useMemo(() => {
+    const holes = [1, 2, 14];
+
+    return sortedRounds.map((r, idx) => {
+      const courseId = String(r.course_id ?? "");
+      const courseName = safeName(asSingle(r.courses)?.name, "(course)");
+      const isFinal = r.id === finalRoundId;
+      const lab = roundLabel(r, idx, isFinal);
+
+      const get = (tee: Tee, hole: number) => {
+        const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(hole);
+        if (!pr) return { par: "—", si: "—" };
+        return { par: String(pr.par), si: String(pr.si) };
+      };
+
+      const mVals = holes.map((h) => ({ hole: h, ...get("M", h) }));
+      const fVals = holes.map((h) => ({ hole: h, ...get("F", h) }));
+
+      return {
+        roundId: r.id,
+        lab,
+        courseId: courseId || "(null)",
+        courseName,
+        mVals,
+        fVals,
+      };
+    });
+  }, [sortedRounds, finalRoundId, parsByCourseTeeHole]);
+
+  const description = useMemo(() => {
+    if (kind === "individual") {
+      if (isSwingInSpringTour) {
+        return "Individual Stableford · Best 5 rounds (R3 and R7 required)";
+      }
+
+      if (individualRule.mode === "ALL") return "Individual Stableford · Total points across all rounds";
+      const r = individualRule;
+      return r.finalRequired
+        ? `Individual Stableford · Best ${r.n} rounds (Final required)`
+        : `Individual Stableford · Best ${r.n} rounds`;
+    }
+
+    if (kind === "pairs") {
+      if (isSwingInSpringTour) {
+        return "Pairs Better Ball · Best 5 rounds (R3 and R7 required) · R3 is 9-hole combined-front/back scoring";
+      }
+
+      if (pairRule.mode === "ALL") return "Pairs Better Ball · Total points across all rounds";
+      const r = pairRule;
+      return r.finalRequired ? `Pairs Better Ball · Best ${r.q} rounds (Final required)` : `Pairs Better Ball · Best ${r.q} rounds`;
+    }
+
+    return `Teams · Best ${teamRule.bestY} positive scores per hole, minus ${zeroStablefordDeduction} for each zero · All rounds`;
+  }, [kind, individualRule, pairRule, teamRule.bestY, isSwingInSpringTour, zeroStablefordDeduction]);
+
+  const individualRows = useMemo(() => {
+    const rows: Array<{
+      playerId: string;
+      name: string;
+      tourTotal: number;
+      perRound: Record<string, number>;
+      countedIds: Set<string>;
+    }> = [];
+
+    for (const p of players) {
+      const perRound: Record<string, number> = {};
+
+      for (const r of sortedRounds) {
+        const rp = rpByRoundPlayer.get(`${r.id}|${p.id}`);
+        if (!rp?.playing) {
+          perRound[r.id] = 0;
+          continue;
+        }
+
+        const courseId = r.course_id;
+        if (!courseId) {
+          perRound[r.id] = 0;
+          continue;
+        }
+
+        const tee: Tee = normalizeTee(p.gender);
+        const parsMap = parsByCourseTeeHole.get(courseId)?.get(tee);
+        if (!parsMap) {
+          perRound[r.id] = 0;
+          continue;
+        }
+
+        const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
+
+        let sum = 0;
+        for (let h = 1; h <= 18; h++) {
+          const pr = parsMap.get(h);
+          if (!pr) continue;
+
+          const sc = scoreByRoundPlayerHole.get(`${r.id}|${p.id}|${h}`);
+          if (!sc) continue;
+
+          const raw = normalizeRawScore(sc.strokes, sc.pickup);
+          sum += netStablefordPointsForHole({
+            rawScore: raw,
+            par: pr.par,
+            strokeIndex: pr.si,
+            playingHandicap: hcp,
+          });
+        }
+
+        perRound[r.id] = sum;
+      }
+
+      let tourTotal = 0;
+      let countedIds = new Set<string>();
+
+      if (isSwingInSpringTour) {
+        countedIds = pickBestRoundIdsWithRequiredRoundNos({
+          sortedRounds,
+          perRoundTotals: perRound,
+          n: SWING_IN_SPRING_BEST_N,
+          requiredRoundNos: SWING_IN_SPRING_REQUIRED_ROUND_NOS,
+        });
+        for (const rid of countedIds) tourTotal += Number(perRound[rid] ?? 0) || 0;
+      } else if (individualRule.mode === "BEST_N") {
+        countedIds = pickBestRoundIds({
+          sortedRoundIds,
+          perRoundTotals: perRound,
+          n: individualRule.n,
+          finalRoundId: finalRoundId || null,
+          finalRequired: individualRule.finalRequired,
+        });
+        for (const rid of countedIds) tourTotal += Number(perRound[rid] ?? 0) || 0;
+      } else {
+        for (const r of sortedRounds) tourTotal += Number(perRound[r.id] ?? 0) || 0;
+      }
+
+      rows.push({ playerId: p.id, name: p.name, tourTotal, perRound, countedIds });
+    }
+
+    const filteredRows =
+      tourId === VIETNAM_PRO_AM_TOUR_ID
+        ? rows.filter((row) => VIETNAM_PRO_AM_INDIVIDUAL_PLAYER_IDS.has(row.playerId))
+        : rows;
+
+    filteredRows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
+    return filteredRows;
+  }, [
+    players,
+    sortedRounds,
+    sortedRoundIds,
+    parsByCourseTeeHole,
+    rpByRoundPlayer,
+    scoreByRoundPlayerHole,
+    individualRule,
+    finalRoundId,
+    isSwingInSpringTour,
+    tourId,
+  ]);
+
+  const femaleIndividualRows = useMemo(() => {
+    return individualRows.filter((r) => normalizeTee(playerById.get(r.playerId)?.gender) === "F");
+  }, [individualRows, playerById]);
+
+  const maleIndividualRows = useMemo(() => {
+    return individualRows.filter((r) => normalizeTee(playerById.get(r.playerId)?.gender) !== "F");
+  }, [individualRows, playerById]);
+
+  const pairRows = useMemo(() => {
+    const rows: Array<{
+      groupId: string;
+      name: string;
+      tourTotal: number;
+      perRound: Record<string, number>;
+      countedIds: Set<string>;
+    }> = [];
+
+    function pairPlayerStablefordForHole(params: {
+      round: RoundRow;
+      playerId: string;
+      holeNumber: number;
+    }) {
+      const { round, playerId, holeNumber } = params;
+
+      const rp = rpByRoundPlayer.get(`${round.id}|${playerId}`);
+      if (!rp?.playing) return 0;
+
+      const courseId = round.course_id;
+      if (!courseId) return 0;
+
+      const sc = scoreByRoundPlayerHole.get(`${round.id}|${playerId}|${holeNumber}`);
+      if (!sc) return 0;
+
+      const pl = playerById.get(playerId);
+      const tee: Tee = normalizeTee(pl?.gender);
+
+      const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(holeNumber);
+      if (!pr) return 0;
+
+      const raw = normalizeRawScore(sc.strokes, sc.pickup);
+      const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
+
+      return netStablefordPointsForHole({
+        rawScore: raw,
+        par: pr.par,
+        strokeIndex: pr.si,
+        playingHandicap: hcp,
+      });
+    }
+
+    for (const g of pairGroups) {
+      const memberIds = memberIdsByPair.get(g.id) ?? [];
+      const displayName = pairDisplayName(g.id);
+
+      const perRound: Record<string, number> = {};
+
+      for (const r of sortedRounds) {
+        const courseId = r.course_id;
+        if (!courseId) {
+          perRound[r.id] = 0;
+          continue;
+        }
+
+        const roundNo = Number.isFinite(Number(r.round_no)) ? Number(r.round_no) : null;
+        const useSwingInSpringRound3PairsScoring =
+          isSwingInSpringTour && roundNo === SWING_IN_SPRING_PAIRS_NINE_HOLE_ROUND_NO;
+
+        let sum = 0;
+
+        if (useSwingInSpringRound3PairsScoring) {
+          for (let h = 1; h <= 9; h++) {
+            let best = 0;
+
+            for (const pid of memberIds) {
+              const frontPts = pairPlayerStablefordForHole({ round: r, playerId: pid, holeNumber: h });
+              const backPts = pairPlayerStablefordForHole({ round: r, playerId: pid, holeNumber: h + 9 });
+
+              if (frontPts > best) best = frontPts;
+              if (backPts > best) best = backPts;
+            }
+
+            sum += best;
+          }
+
+          perRound[r.id] = sum;
+          continue;
+        }
+
+        for (let h = 1; h <= 18; h++) {
+          let best = 0;
+
+          for (const pid of memberIds) {
+            const pts = pairPlayerStablefordForHole({ round: r, playerId: pid, holeNumber: h });
+            if (pts > best) best = pts;
+          }
+
+          sum += best;
+        }
+
+        perRound[r.id] = sum;
+      }
+
+      let tourTotal = 0;
+      let countedIds = new Set<string>();
+
+      if (isSwingInSpringTour) {
+        countedIds = pickBestRoundIdsWithRequiredRoundNos({
+          sortedRounds,
+          perRoundTotals: perRound,
+          n: SWING_IN_SPRING_BEST_N,
+          requiredRoundNos: SWING_IN_SPRING_REQUIRED_ROUND_NOS,
+        });
+        for (const rid of countedIds) tourTotal += Number(perRound[rid] ?? 0) || 0;
+      } else if (pairRule.mode === "BEST_Q") {
+        countedIds = pickBestRoundIds({
+          sortedRoundIds,
+          perRoundTotals: perRound,
+          n: pairRule.q,
+          finalRoundId: finalRoundId || null,
+          finalRequired: pairRule.finalRequired,
+        });
+        for (const rid of countedIds) tourTotal += Number(perRound[rid] ?? 0) || 0;
+      } else {
+        for (const r of sortedRounds) tourTotal += Number(perRound[r.id] ?? 0) || 0;
+      }
+
+      rows.push({ groupId: g.id, name: displayName, tourTotal, perRound, countedIds });
+    }
+
+    rows.sort((a, b) => b.tourTotal - a.tourTotal || a.name.localeCompare(b.name));
+    return rows;
+  }, [
+    pairGroups,
+    memberIdsByPair,
+    sortedRounds,
+    sortedRoundIds,
+    finalRoundId,
+    pairRule,
+    rpByRoundPlayer,
+    playerById,
+    parsByCourseTeeHole,
+    scoreByRoundPlayerHole,
+    isSwingInSpringTour,
+  ]);
+
+  const teamRows = useMemo(() => {
+    const rows: Array<{
+      groupId: string;
+      title: string;
+      members: string;
+      tourTotal: number;
+      perRound: Record<string, number>;
+    }> = [];
+
+    const Y = clampInt(teamRule.bestY, 1, 99);
+
+    for (const g of teamGroups) {
+      const memberIds = memberIdsByTeam.get(g.id) ?? [];
+      const lab = teamLabelById.get(g.id);
+      const title = lab?.title ?? "Team";
+      const membersLine = lab?.members ?? "";
+
+      const perRound: Record<string, number> = {};
+      let tourTotal = 0;
+
+      for (const r of sortedRounds) {
+        const courseId = r.course_id;
+        if (!courseId) {
+          perRound[r.id] = 0;
+          continue;
+        }
+
+        let roundSum = 0;
+
+        for (let h = 1; h <= 18; h++) {
+          const positives: number[] = [];
+          let zeroCount = 0;
+
+          for (const pid of memberIds) {
+            const rp = rpByRoundPlayer.get(`${r.id}|${pid}`);
+            if (!rp?.playing) continue;
+
+            const sc = scoreByRoundPlayerHole.get(`${r.id}|${pid}|${h}`);
+            if (!sc) continue;
+
+            const pl = playerById.get(pid);
+            const tee: Tee = normalizeTee(pl?.gender);
+
+            const pr = parsByCourseTeeHole.get(courseId)?.get(tee)?.get(h);
+            if (!pr) continue;
+
+            const raw = normalizeRawScore(sc.strokes, sc.pickup);
+            const hcp = Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : 0;
+
+            const pts = netStablefordPointsForHole({
+              rawScore: raw,
+              par: pr.par,
+              strokeIndex: pr.si,
+              playingHandicap: hcp,
+            });
+
+            if (pts === 0) zeroCount += 1;
+            if (pts > 0) positives.push(pts);
+          }
+
+          positives.sort((a, b) => b - a);
+          const selected = positives.slice(0, Math.min(Y, positives.length));
+
+          let holeSum = 0;
+          for (const pts of selected) holeSum += pts;
+          holeSum -= zeroCount * zeroStablefordDeduction;
+
+          roundSum += holeSum;
+        }
+
+        perRound[r.id] = roundSum;
+        tourTotal += roundSum;
+      }
+
+      rows.push({ groupId: g.id, title, members: membersLine, tourTotal, perRound });
+    }
+
+    rows.sort((a, b) => b.tourTotal - a.tourTotal || a.title.localeCompare(b.title));
+    return rows;
+  }, [
+    teamGroups,
+    teamRule.bestY,
+    teamLabelById,
+    memberIdsByTeam,
+    sortedRounds,
+    rpByRoundPlayer,
+    scoreByRoundPlayerHole,
+    playerById,
+    parsByCourseTeeHole,
+    zeroStablefordDeduction,
+  ]);
+
+  function TapCell({
+    href,
+    counted,
+    children,
+    ariaLabel,
+  }: {
+    href: string;
+    counted: boolean;
+    children: React.ReactNode;
+    ariaLabel: string;
+  }) {
+    const start = useRef<{ x: number; y: number } | null>(null);
+
+    const base = "block w-full min-w-[44px] rounded-md px-2 py-1 text-right select-none touch-manipulation";
+    const cls = counted
+      ? `${base} border-2 border-blue-500 hover:bg-gray-50 active:bg-gray-100`
+      : `${base} border border-transparent hover:bg-gray-50 active:bg-gray-100`;
+
+    return (
+      <span
+        role="link"
+        tabIndex={0}
+        className={cls}
+        aria-label={ariaLabel}
+        onTouchStart={(e) => {
+          const t = e.touches?.[0];
+          if (!t) return;
+          start.current = { x: t.clientX, y: t.clientY };
+        }}
+        onTouchEnd={(e) => {
+          const t = e.changedTouches?.[0];
+          const s = start.current;
+          start.current = null;
+          if (!t || !s) return;
+
+          const dx = Math.abs(t.clientX - s.x);
+          const dy = Math.abs(t.clientY - s.y);
+
+          if (dx <= 10 && dy <= 10) router.push(href);
+        }}
+        onClick={() => router.push(href)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") router.push(href);
+        }}
+      >
+        {children}
+      </span>
+    );
+  }
+
+  function IndividualRow({
+    row,
+  }: {
+    row: { playerId: string; name: string; tourTotal: number; perRound: Record<string, number>; countedIds: Set<string> };
+  }) {
+    return (
+      <tr key={row.playerId} className="border-b last:border-b-0">
+        {/* z lowered so bottom nav sits above this sticky column */}
+        <td className="sticky left-0 z-[1] bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">{row.name}</td>
+
+        <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
+          <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">{row.tourTotal}</span>
+        </td>
+
+        {sortedRounds.map((r) => {
+          const val = row.perRound[r.id] ?? 0;
+          const counted = isSwingInSpringTour || individualRule.mode === "BEST_N" ? row.countedIds.has(r.id) : false;
+          const href = `/m/tours/${tourId}/rounds/${r.id}/results/${row.playerId}`;
+
+          return (
+            <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
+              <TapCell href={href} counted={counted} ariaLabel="Open player round detail">
+                {val}
+              </TapCell>
+            </td>
+          );
+        })}
+      </tr>
+    );
   }
 
   if (!tourId || !isLikelyUuid(tourId)) {
     return (
-      <div className="min-h-dvh bg-white text-gray-900 pb-24">
+      <div className="min-h-dvh bg-white text-gray-900">
         <div className="mx-auto max-w-md px-4 py-6">
           <div className="rounded-2xl border p-4 text-sm">
             Missing or invalid tour id in route.
@@ -778,29 +1219,65 @@ export default function MobileCompetitionsPage() {
     );
   }
 
-  const thBase = "border-b border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700";
-  const tdBase = "px-3 py-2 text-right text-base text-gray-900 align-top";
-
-  const boxBase = "inline-flex min-w-[92px] justify-end rounded-md px-2 py-1";
-  const medalClass = (rank: number | null) =>
-    rank === 1
-      ? "border border-yellow-500 bg-yellow-300 text-gray-900"
-      : rank === 2
-      ? "border border-gray-400 bg-gray-200 text-gray-900"
-      : rank === 3
-      ? "border border-amber-700 bg-amber-400 text-gray-900"
-      : "bg-transparent";
-
-  const medalHover = (rank: number | null) =>
-    rank === 1 || rank === 2 || rank === 3 ? "hover:brightness-95" : "hover:bg-gray-50";
-
-  const press = "active:bg-gray-100";
+  const colCount = 2 + sortedRounds.length;
 
   return (
     <div className="min-h-dvh bg-white text-gray-900 pb-24">
-      <div className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto w-full max-w-md px-4 py-3">
-          <div className="text-sm font-semibold text-gray-900">Competitions</div>
+      {/* Header block: Title row (with divider) then buttons row (with divider) */}
+      <div className="sticky top-0 z-50 isolate bg-white/95 backdrop-blur border-b">
+        {/* Title directly under the first/top line */}
+        <div className="border-b">
+          <div className="mx-auto w-full max-w-md px-4 py-3">
+            <div className="text-sm font-semibold text-gray-900">Leaderboard</div>
+          </div>
+        </div>
+
+        {/* Buttons come AFTER a second horizontal line */}
+        <div>
+          <div className="mx-auto w-full max-w-md px-4 py-3">
+            <div className={`grid gap-2 ${tourId === VIETNAM_PRO_AM_TOUR_ID ? "grid-cols-2" : "grid-cols-3"}`}>
+              <button
+                type="button"
+                onClick={() => setKind("individual")}
+                className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
+                  kind === "individual"
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
+                }`}
+              >
+                {tourId === VIETNAM_PRO_AM_TOUR_ID ? "Professionals" : "Individual"}
+              </button>
+              {tourId !== VIETNAM_PRO_AM_TOUR_ID && (
+              <button
+                type="button"
+                onClick={() => setKind("pairs")}
+                className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
+                  kind === "pairs"
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
+                }`}
+              >
+                Pairs
+              </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setKind("teams")}
+                className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
+                  kind === "teams"
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
+                }`}
+              >
+                Teams
+              </button>
+            </div>
+
+            <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">{description}</div>
+
+            {/* ✅ Diagnostics UI intentionally removed.
+                Code + state kept (showDiagnostics, diagnosticsRows) for future use. */}
+          </div>
         </div>
       </div>
 
@@ -808,220 +1285,209 @@ export default function MobileCompetitionsPage() {
         {loading ? (
           <div className="space-y-3">
             <div className="h-5 w-40 rounded bg-gray-100" />
+            <div className="h-4 w-64 rounded bg-gray-100" />
             <div className="h-64 rounded-2xl border bg-white" />
           </div>
         ) : errorMsg ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
-        ) : competitionPlayers.length === 0 ? (
+        ) : players.length === 0 ? (
           <div className="rounded-2xl border p-4 text-sm text-gray-700">No players found for this tour.</div>
         ) : sortedRounds.length === 0 ? (
           <div className="rounded-2xl border p-4 text-sm text-gray-700">No rounds found for this tour.</div>
         ) : (
           <>
-            <div className="rounded-2xl border border-gray-200 bg-white shadow-sm max-h-[70vh] overflow-auto">
-              <table className="min-w-full border-collapse table-fixed">
+            <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
+              <table className="min-w-full border-collapse">
                 <thead>
                   <tr className="bg-gray-50">
-                    <th
-                      className={`sticky left-0 top-0 z-50 bg-gray-50 border-r border-gray-200 ${thBase} text-left`}
-                      style={{ width: 140, minWidth: 140 }}
-                    >
-                      Player
+                    {/* z lowered (but still above normal cells) so bottom nav can sit above */}
+                    <th className="sticky left-0 z-[2] bg-gray-50 border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-700">
+                      Name
                     </th>
 
-                    {fixedComps.map((c) => (
-                      <th key={c.key} className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>
-                        {c.label}
-                      </th>
-                    ))}
+                    <th className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700">
+                      <span className="inline-flex items-center rounded-md bg-yellow-100 px-2 py-1 text-[11px] font-extrabold text-yellow-900">
+                        TOUR
+                      </span>
+                    </th>
 
-                    {h2zLegsNorm.map((leg) => (
-                      <th key={`h2z-${leg.leg_no}`} className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>
-                        {h2zHeading(leg)}
-                      </th>
-                    ))}
-
-                    {showBotbColumn ? (
-                      <th className={`sticky top-0 z-40 bg-gray-50 ${thBase} text-right`}>{botbDisplayName}</th>
-                    ) : null}
+                    {sortedRounds.map((r, idx) => {
+                      const isFinal = r.id === finalRoundId;
+                      return (
+                        <th
+                          key={r.id}
+                          className="border-b border-gray-200 px-3 py-2 text-right text-xs font-semibold text-gray-700"
+                          title={r.name ?? ""}
+                        >
+                          {roundLabel(r, idx, isFinal)}
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
 
                 <tbody>
-                  {competitionPlayers.map((p) => {
-                    const row = compMatrix[p.id] ?? ({} as any);
-                    const botbCell = botbMatrix[p.id];
-
-                    return (
-                      <tr key={p.id} className="border-b last:border-b-0">
-                        <td
-                          className="sticky left-0 z-30 bg-white border-r border-gray-200 px-3 py-2 text-base font-semibold text-gray-900 whitespace-nowrap"
-                          style={{ width: 140, minWidth: 140 }}
-                        >
-                          {p.name}
+                  {kind === "teams" ? (
+                    teamRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={colCount} className="px-4 py-6 text-sm text-gray-700">
+                          No teams found for this tour (tour_groups scope=tour type=team).
                         </td>
+                      </tr>
+                    ) : (
+                      teamRows.map((row) => (
+                        <tr key={row.groupId} className="border-b last:border-b-0">
+                          <td className="sticky left-0 z-[1] bg-white px-3 py-2 whitespace-nowrap align-top">
+                            <div className="text-sm font-semibold text-gray-900">{row.title}</div>
+                          </td>
 
-                        {fixedComps.map((c) => {
-                          const cell = row?.[c.key] as MatrixCell | undefined;
-                          const value = cell?.value ?? null;
-                          const rank = cell?.rank ?? null;
+                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900 align-top">
+                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">{row.tourTotal}</span>
+                          </td>
 
-                          const tappable = c.tappable === true;
-                          const isOpen =
-                            openDetail?.kind === "fixed" && openDetail.playerId === p.id && openDetail.key === c.key;
-                          const detail = (cell?.detail ?? "").trim();
+                          {sortedRounds.map((r) => {
+                            const val = row.perRound[r.id] ?? 0;
+                            const href = `/m/tours/${tourId}/leaderboards/teams/${r.id}/${row.groupId}`;
 
-                          const show =
-                            value === null ? (
-                              <span className="text-gray-400">—</span>
-                            ) : (
-                              <>
-                                {c.format(value)} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
-                              </>
-                            );
-
-                          if (c.key === "eclectic") {
                             return (
-                              <td key={c.key} className={tdBase}>
-                                {value === null ? (
-                                  <span className="text-gray-400">—</span>
-                                ) : (
-                                  <Link
-                                    href={`/m/tours/${tourId}/competitions/eclectic/${p.id}`}
-                                    className={`${boxBase} ${medalClass(rank)} ${medalHover(rank)} ${press}`}
-                                    aria-label="Open Eclectic breakdown"
-                                  >
-                                    {show}
-                                  </Link>
-                                )}
+                              <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900 align-top">
+                                <TapCell href={href} counted={false} ariaLabel="Open team round detail">
+                                  {val}
+                                </TapCell>
                               </td>
                             );
-                          }
-
-                          return (
-                            <td key={c.key} className={tdBase}>
-                              <div className="inline-flex flex-col items-end gap-1">
-                                {value === null ? (
-                                  <span className="text-gray-400">—</span>
-                                ) : tappable ? (
-                                  <button
-                                    type="button"
-                                    className={`${boxBase} ${medalClass(rank)} ${medalHover(rank)} ${press}`}
-                                    onClick={() => toggleFixedDetail(p.id, c.key)}
-                                    aria-label={`${c.label} detail`}
-                                  >
-                                    {show}
-                                  </button>
-                                ) : (
-                                  <span className={`${boxBase} ${medalClass(rank)}`}>{show}</span>
-                                )}
-
-                                {tappable && isOpen ? (
-                                  <div className="max-w-[160px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-xs text-gray-700 shadow-sm text-left">
-                                    {detail ? detail : <span className="text-gray-400">No streak found</span>}
-                                  </div>
-                                ) : null}
-                              </div>
-                            </td>
-                          );
-                        })}
-
-                        {h2zLegsNorm.map((leg) => {
-                          const cell = h2zMatrix?.[p.id]?.[leg.leg_no];
-                          const final = cell?.final ?? null;
-                          const rank = cell?.rank ?? null;
-
-                          const isOpen =
-                            openDetail?.kind === "h2z" && openDetail.playerId === p.id && openDetail.legNo === leg.leg_no;
-
-                          const best = cell?.best ?? null;
-                          const bestLen = cell?.bestLen ?? null;
-
-                          const show =
-                            final === null ? (
-                              <span className="text-gray-400">—</span>
-                            ) : (
-                              <>
-                                {final} <span className="text-gray-500">&nbsp;({rank ?? 0})</span>
-                              </>
-                            );
-
-                          return (
-                            <td key={`h2z-${leg.leg_no}`} className={tdBase}>
-                              <div className="inline-flex flex-col items-end gap-1">
-                                {final === null ? (
-                                  <span className="text-gray-400">—</span>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    className={`${boxBase} ${medalClass(rank)} ${medalHover(rank)} ${press}`}
-                                    onClick={() => toggleH2ZDetail(p.id, leg.leg_no)}
-                                    aria-label={`H2Z detail leg ${leg.leg_no}`}
-                                  >
-                                    {show}
-                                  </button>
-                                )}
-
-                                {final !== null && isOpen ? (
-                                  <div className="max-w-[180px] whitespace-normal break-words rounded-lg border bg-gray-50 px-2 py-1 text-xs text-gray-700 shadow-sm text-left">
-                                    <div>
-                                      Peak: <span className="font-semibold">{best ?? 0}</span>{" "}
-                                      <span className="text-gray-500">({bestLen ?? 0})</span>
-                                    </div>
-                                  </div>
-                                ) : null}
-                              </div>
-                            </td>
-                          );
-                        })}
-
-                        {showBotbColumn ? (
-                          <td className={tdBase}>
-                            {botbCell?.total == null ? (
-                              <span className="text-gray-400">—</span>
-                            ) : (
-                              <Link
-                                href={`/m/tours/${tourId}/competitions/botb`}
-                                className={`${boxBase} ${medalClass(botbCell.rank)} ${medalHover(botbCell.rank)} ${press}`}
-                                aria-label={`Open ${botbDisplayName} table`}
-                              >
-                                {botbCell.total} <span className="text-gray-500">&nbsp;({botbCell.rank ?? 0})</span>
-                              </Link>
-                            )}
-                          </td>
-                        ) : null}
+                          })}
+                        </tr>
+                      ))
+                    )
+                  ) : kind === "pairs" ? (
+                    pairRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={colCount} className="px-4 py-6 text-sm text-gray-700">
+                          No pairs found for this tour (tour_groups scope=tour type=pair).
+                        </td>
                       </tr>
-                    );
-                  })}
+                    ) : (
+                      pairRows.map((row) => (
+                        <tr key={row.groupId} className="border-b last:border-b-0">
+                          <td className="sticky left-0 z-[1] bg-white px-3 py-2 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                            {row.name}
+                          </td>
+
+                          <td className="px-3 py-2 text-right text-sm font-extrabold text-gray-900">
+                            <span className="inline-flex min-w-[44px] justify-end rounded-md bg-yellow-100 px-2 py-1">{row.tourTotal}</span>
+                          </td>
+
+                          {sortedRounds.map((r) => {
+                            const val = row.perRound[r.id] ?? 0;
+                            const counted = isSwingInSpringTour || pairRule.mode === "BEST_Q" ? row.countedIds.has(r.id) : false;
+                            const href = `/m/tours/${tourId}/leaderboards/pairs/${row.groupId}/${r.id}`;
+
+                            return (
+                              <td key={r.id} className="px-3 py-2 text-right text-sm text-gray-900">
+                                <TapCell href={href} counted={counted} ariaLabel="Open pair round detail">
+                                  {val}
+                                </TapCell>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))
+                    )
+                  ) : !separateGender ? (
+                    individualRows.map((row) => <IndividualRow key={row.playerId} row={row} />)
+                  ) : (
+                    <>
+                      {femaleIndividualRows.length > 0 ? (
+                        <tr className="bg-gray-50">
+                          <td colSpan={colCount} className="px-3 py-2 text-xs font-semibold text-gray-700">
+                            Girls
+                          </td>
+                        </tr>
+                      ) : null}
+
+                      {femaleIndividualRows.map((row) => (
+                        <IndividualRow key={row.playerId} row={row} />
+                      ))}
+
+                      {femaleIndividualRows.length > 0 && maleIndividualRows.length > 0 ? (
+                        <tr>
+                          <td colSpan={colCount} className="p-0">
+                            <div className="h-[2px] bg-gray-200" />
+                          </td>
+                        </tr>
+                      ) : null}
+
+                      {maleIndividualRows.length > 0 ? (
+                        <tr className="bg-gray-50">
+                          <td colSpan={colCount} className="px-3 py-2 text-xs font-semibold text-gray-700">
+                            Boys
+                          </td>
+                        </tr>
+                      ) : null}
+
+                      {maleIndividualRows.map((row) => (
+                        <IndividualRow key={row.playerId} row={row} />
+                      ))}
+                    </>
+                  )}
                 </tbody>
               </table>
-
-              <div className="border-t bg-gray-50 px-3 py-2 text-sm text-gray-600">
-                <div>Tap Hot/Cold cells for the round+hole range.</div>
-                <div>Tap Eclectic to see the breakdown.</div>
-                <div>Tap H2Z to see peak score and (holes count).</div>
-                {showBotbColumn ? (
-                 <div>
-  {botbDisplayName} = aggregate Stableford on {botbRoundsLabel || "(selected rounds)"}. Tap a{" "}
-  {botbDisplayName} score to show detailed scoreboard.
-</div>
-                ) : null}
-              </div>
             </div>
 
-            <div className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <div className="border-b bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-700">Definitions</div>
-              <div className="px-4 py-3">
-                <ul className="space-y-2 text-sm text-gray-800">
-                  {definitions.map((d) => (
-                    <li key={d.label} className="leading-snug">
-                      <span className="font-semibold text-gray-900">{d.label}</span>{" "}
-                      <span className="text-gray-600">—</span> <span className="text-gray-800">{d.text}</span>
-                    </li>
-                  ))}
-                </ul>
+            {(kind === "individual" && (isSwingInSpringTour || individualRule.mode === "BEST_N")) ||
+            (kind === "pairs" && (isSwingInSpringTour || pairRule.mode === "BEST_Q")) ? (
+              <div className="mt-3 text-xs text-gray-600">
+                Rounds outlined in <span className="font-semibold">blue</span> indicate which rounds count toward the Tour total.
               </div>
+            ) : null}
+
+            <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm">
+              <div className="font-semibold text-gray-900">Rounds</div>
+              <div className="mt-1 text-gray-600">
+                {sortedRounds.map((r, idx) => {
+                  const isFinal = r.id === finalRoundId;
+                  const lab = roundLabel(r, idx, isFinal);
+
+                  const bestIso = pickBestRoundDateISO(r);
+                  const dt = formatDateAuMelbourne(bestIso);
+
+                  const courseName = safeName(asSingle(r.courses)?.name, "(course)");
+                  return (
+                    <div key={r.id} className="flex items-center justify-between gap-3 py-1">
+                      <div className="min-w-0">
+                        <span className="font-semibold">{lab}</span>
+                        <span className="text-gray-700">{` · ${courseName}`}</span>
+                      </div>
+                      <div className="text-xs text-gray-500 whitespace-nowrap">{dt || ""}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {kind === "individual" ? (
+                <div className="mt-4 border-t pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-gray-900">Separate Boys and Girls leaderboards?</div>
+                    <button
+                      type="button"
+                      onClick={() => setSeparateGender((v) => !v)}
+                      className={`rounded-xl px-3 py-2 text-sm font-semibold border ${
+                        separateGender
+                          ? "bg-gray-900 text-white border-gray-900"
+                          : "bg-white text-gray-900 border-gray-300 hover:bg-gray-50 active:bg-gray-100"
+                      }`}
+                      aria-label="Toggle separate boys and girls leaderboards"
+                    >
+                      {separateGender ? "Yes" : "No"}
+                    </button>
+                  </div>
+                  <div className="mt-1 text-xs text-gray-600">If Yes: Girls shown first, then Boys.</div>
+                </div>
+              ) : null}
             </div>
+
+            <div aria-hidden="true" className="h-28" />
           </>
         )}
       </main>
