@@ -79,6 +79,19 @@ type BotBSettingsRow = {
   custom_name: string | null;
 };
 
+const VIETNAM_PRO_AM_TOUR_ID = "73a62983-3c35-48dc-9650-7d65ff169951";
+
+const VIETNAM_PRO_AM_PROFESSIONAL_PLAYER_IDS = new Set([
+  "37fef651-edf2-402c-8123-0b8b5ef266e0", // L Deagan
+  "da41f041-c0ac-49ba-b70a-30c0da49d880", // N Dastey
+  "9163c822-5198-449c-9979-470739fc16cf", // J Hooper
+  "8f651648-38bb-475e-a5f4-fad5337ea0b6", // R Lynch
+  "0d698224-50de-4ad5-82a3-e018a3d3d094", // G Beckett
+  "3b697230-9b3d-4872-a2c3-19235f17eac8", // S Montgomerie
+  "9048d4ca-8c6e-4ce6-a640-9c6f2537b33a", // M Griffin
+  "333ef3b0-067c-45bc-b82c-16dac6ff82cf", // A Hall
+]);
+
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
@@ -437,6 +450,17 @@ export default function MobileCompetitionsPage() {
     return arr;
   }, [rounds]);
 
+  const competitionPlayers = useMemo(() => {
+    if (tourId !== VIETNAM_PRO_AM_TOUR_ID) return players;
+
+    return players.filter((player) => !VIETNAM_PRO_AM_PROFESSIONAL_PLAYER_IDS.has(player.id));
+  }, [players, tourId]);
+
+  const competitionPlayerIds = useMemo(
+    () => new Set(competitionPlayers.map((player) => player.id)),
+    [competitionPlayers]
+  );
+
   const ctx = useMemo(() => {
     const roundsLite: TourRoundLite[] = sortedRounds.map((r) => ({
   id: r.id,
@@ -446,20 +470,24 @@ export default function MobileCompetitionsPage() {
   course_id: r.course_id,
 }));
 
-    const playersLite: PlayerLiteForTour[] = players.map((p) => ({
+    const playersLite: PlayerLiteForTour[] = competitionPlayers.map((p) => ({
       id: p.id,
       name: p.name,
       gender: p.gender ? normalizeTee(p.gender) : null,
     }));
 
-    const rpLite: RoundPlayerLiteForTour[] = roundPlayers.map((rp) => ({
+    const rpLite: RoundPlayerLiteForTour[] = roundPlayers
+      .filter((rp) => competitionPlayerIds.has(rp.player_id))
+      .map((rp) => ({
       round_id: rp.round_id,
       player_id: rp.player_id,
       playing: rp.playing === true,
       playing_handicap: Number.isFinite(Number(rp.playing_handicap)) ? Number(rp.playing_handicap) : null,
     }));
 
-    const scoresLite: ScoreLiteForTour[] = scores.map((s) => ({
+    const scoresLite: ScoreLiteForTour[] = scores
+      .filter((s) => competitionPlayerIds.has(s.player_id))
+      .map((s) => ({
       round_id: s.round_id,
       player_id: s.player_id,
       hole_number: Number(s.hole_number),
@@ -482,11 +510,11 @@ export default function MobileCompetitionsPage() {
       scores: scoresLite,
       pars: parsLite,
     });
-  }, [sortedRounds, players, roundPlayers, scores, pars]);
+  }, [sortedRounds, competitionPlayers, competitionPlayerIds, roundPlayers, scores, pars]);
 
   const compMatrix = useMemo(() => {
     const out: Record<string, Record<FixedCompKey, MatrixCell>> = {};
-    for (const p of players) {
+    for (const p of competitionPlayers) {
       out[p.id] = {
         napoleon: { value: null, rank: null },
         bigGeorge: { value: null, rank: null },
@@ -535,7 +563,7 @@ export default function MobileCompetitionsPage() {
     }
 
     return out;
-  }, [players, fixedComps, ctx]);
+  }, [competitionPlayers, fixedComps, ctx]);
 
   const h2zLegsNorm: H2ZLeg[] = useMemo(() => {
     return (h2zLegs ?? [])
@@ -561,7 +589,7 @@ export default function MobileCompetitionsPage() {
     const perPlayer: Record<string, Record<number, H2ZCell>> = {};
     for (const p of players) perPlayer[p.id] = {};
 
-    for (const p of players) {
+    for (const p of competitionPlayers) {
       const res = computeH2ZForPlayer({
         ctx: ctx as any,
         legs: h2zLegsNorm,
@@ -582,20 +610,20 @@ export default function MobileCompetitionsPage() {
     }
 
     for (const leg of h2zLegsNorm) {
-      const entries = players.map((p) => ({
+      const entries = competitionPlayers.map((p) => ({
         id: p.id,
         value: Number(perPlayer[p.id]?.[leg.leg_no]?.final ?? 0),
       }));
 
       const rankById = rankWithTies(entries, false);
-      for (const p of players) {
+      for (const p of competitionPlayers) {
         const rk = rankById.get(p.id);
         if (perPlayer[p.id]?.[leg.leg_no]) perPlayer[p.id][leg.leg_no].rank = typeof rk === "number" ? rk : null;
       }
     }
 
     return perPlayer;
-  }, [players, sortedRounds, roundPlayers, ctx, h2zLegsNorm]);
+  }, [competitionPlayers, sortedRounds, roundPlayers, ctx, h2zLegsNorm]);
 
   const botbRoundNos = useMemo(() => {
     if (!botb?.enabled) return [];
@@ -613,9 +641,9 @@ export default function MobileCompetitionsPage() {
 
   const botbMatrix: Record<string, BotBCell> = useMemo(() => {
     const out: Record<string, BotBCell> = {};
-    for (const p of players) out[p.id] = { total: null, rank: null };
+    for (const p of competitionPlayers) out[p.id] = { total: null, rank: null };
 
-    if (!botb?.enabled || botbRounds.length === 0 || players.length === 0) return out;
+    if (!botb?.enabled || botbRounds.length === 0 || competitionPlayers.length === 0) return out;
 
     const playingSet = new Set<string>();
     for (const rp of roundPlayers) if (rp.playing === true) playingSet.add(`${rp.round_id}|${rp.player_id}`);
@@ -629,7 +657,7 @@ export default function MobileCompetitionsPage() {
 
     const entries: Array<{ id: string; value: number }> = [];
 
-    for (const p of players) {
+    for (const p of competitionPlayers) {
       let sum = 0;
       let any = false;
 
@@ -658,13 +686,13 @@ export default function MobileCompetitionsPage() {
     }
 
     const rankById = rankWithTies(entries, false);
-    for (const p of players) {
+    for (const p of competitionPlayers) {
       const rk = rankById.get(p.id);
       out[p.id].rank = typeof rk === "number" ? rk : null;
     }
 
     return out;
-  }, [botb, botbRounds, players, roundPlayers, ctx]);
+  }, [botb, botbRounds, competitionPlayers, roundPlayers, ctx]);
 
   const botbRoundsLabel = useMemo(() => {
     if (!botb?.enabled) return "";
@@ -784,7 +812,7 @@ export default function MobileCompetitionsPage() {
           </div>
         ) : errorMsg ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{errorMsg}</div>
-        ) : players.length === 0 ? (
+        ) : competitionPlayers.length === 0 ? (
           <div className="rounded-2xl border p-4 text-sm text-gray-700">No players found for this tour.</div>
         ) : sortedRounds.length === 0 ? (
           <div className="rounded-2xl border p-4 text-sm text-gray-700">No rounds found for this tour.</div>
@@ -820,7 +848,7 @@ export default function MobileCompetitionsPage() {
                 </thead>
 
                 <tbody>
-                  {players.map((p) => {
+                  {competitionPlayers.map((p) => {
                     const row = compMatrix[p.id] ?? ({} as any);
                     const botbCell = botbMatrix[p.id];
 

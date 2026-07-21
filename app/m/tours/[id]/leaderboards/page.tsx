@@ -1235,7 +1235,7 @@ export default function MobileLeaderboardsPage() {
         {/* Buttons come AFTER a second horizontal line */}
         <div>
           <div className="mx-auto w-full max-w-md px-4 py-3">
-            <div className="grid grid-cols-3 gap-2">
+            <div className={`grid gap-2 ${tourId === VIETNAM_PRO_AM_TOUR_ID ? "grid-cols-2" : "grid-cols-3"}`>
               <button
                 type="button"
                 onClick={() => setKind("individual")}
@@ -1247,6 +1247,7 @@ export default function MobileLeaderboardsPage() {
               >
                 Individual
               </button>
+              {tourId !== VIETNAM_PRO_AM_TOUR_ID && (
               <button
                 type="button"
                 onClick={() => setKind("pairs")}
@@ -1258,6 +1259,7 @@ export default function MobileLeaderboardsPage() {
               >
                 Pairs
               </button>
+              )}
               <button
                 type="button"
                 onClick={() => setKind("teams")}
