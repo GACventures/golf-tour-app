@@ -391,7 +391,7 @@ export default function MobileTourMoreRehandicappingPage() {
     return roundsSorted.slice(idx).map((r) => r.id);
   }, [manSelectedRoundId, roundsSorted]);
 
-  async function applyManualForward(playerId: string) {
+  async function applyAllManualForward() {
     setManError("");
     setManMsg("");
 
@@ -401,7 +401,7 @@ export default function MobileTourMoreRehandicappingPage() {
     }
 
     if (!manSelectedRoundId || !isLikelyUuid(manSelectedRoundId)) {
-      setManError("Select a starting round before applying a manual handicap.");
+      setManError("Select a starting round before applying manual handicaps.");
       return;
     }
 
@@ -410,15 +410,24 @@ export default function MobileTourMoreRehandicappingPage() {
       return;
     }
 
-    const raw = String(manInputs[playerId] ?? "").trim();
-    if (!raw) {
-      setManError("Enter a playing handicap before pressing Apply forward.");
+    const enteredHandicaps = players
+      .map((player) => {
+        const raw = String(manInputs[player.id] ?? "").trim();
+        return {
+          player,
+          raw,
+        };
+      })
+      .filter((entry) => entry.raw !== "");
+
+    if (enteredHandicaps.length === 0) {
+      setManError("Enter at least one playing handicap before pressing Apply forward.");
       return;
     }
 
-    const nextPH = Number(raw);
-    if (!Number.isFinite(nextPH)) {
-      setManError("Enter a valid number for the playing handicap.");
+    const invalidEntry = enteredHandicaps.find((entry) => !Number.isFinite(Number(entry.raw)));
+    if (invalidEntry) {
+      setManError(`Enter a valid number for ${invalidEntry.player.name}.`);
       return;
     }
 
@@ -428,33 +437,36 @@ export default function MobileTourMoreRehandicappingPage() {
       const manualModeSaved = await saveManualMode(true);
       if (!manualModeSaved) return;
 
-      const ph = Math.max(0, Math.floor(nextPH));
+      const payload = enteredHandicaps.flatMap(({ player, raw }) => {
+        const ph = Math.max(0, Math.floor(Number(raw)));
 
-      const payload = manTargetRoundIds.map((rid) => {
-        const existing = rpByRoundPlayer[rid]?.[playerId];
-        const tee = existing?.tee
-          ? normalizeTee(existing.tee)
-          : normalizeTee(players.find((p) => p.id === playerId)?.gender ?? "M");
-        const playing = existing ? existing.playing === true : true;
+        return manTargetRoundIds.map((rid) => {
+          const existing = rpByRoundPlayer[rid]?.[player.id];
+          const tee = existing?.tee ? normalizeTee(existing.tee) : normalizeTee(player.gender ?? "M");
+          const playing = existing ? existing.playing === true : true;
 
-        return {
-          round_id: rid,
-          player_id: playerId,
-          playing,
-          tee,
-          playing_handicap: ph,
-          base_playing_handicap: null,
-          manual_handicap: true,
-        };
+          return {
+            round_id: rid,
+            player_id: player.id,
+            playing,
+            tee,
+            playing_handicap: ph,
+            base_playing_handicap: null,
+            manual_handicap: true,
+          };
+        });
       });
 
       const { error } = await supabase.from("round_players").upsert(payload, { onConflict: "round_id,player_id" });
       if (error) throw error;
 
-      setManMsg("Saved. Applied forward from the selected round (inclusive).");
+      const savedCount = enteredHandicaps.length;
+      setManMsg(
+        `Saved ${savedCount} ${savedCount === 1 ? "player" : "players"}. Applied forward from the selected round (inclusive).`,
+      );
       await loadAll();
     } catch (e: any) {
-      setManError(e?.message ?? "Failed to apply manual handicap forward.");
+      setManError(e?.message ?? "Failed to apply manual handicaps forward.");
     } finally {
       setManSaving(false);
     }
@@ -852,7 +864,7 @@ export default function MobileTourMoreRehandicappingPage() {
 
                                               <button
                                                 type="button"
-                                                onClick={() => applyManualForward(p.id)}
+                                                onClick={applyAllManualForward}
                                                 disabled={manSaving}
                                                 className={`h-10 flex-1 rounded-xl px-4 text-sm font-semibold border shadow-sm ${
                                                   manSaving
